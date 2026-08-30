@@ -1,6 +1,16 @@
 # Hafıza OS
 
-Claude Code'a **süreklilik** veren bir klasör yapısı.
+![lisans](https://img.shields.io/badge/lisans-MIT-black)
+![platform](https://img.shields.io/badge/platform-Linux%20%C2%B7%20macOS-black)
+![bağımlılık](https://img.shields.io/badge/ba%C4%9F%C4%B1ml%C4%B1l%C4%B1k-git%20%C2%B7%20jq%20%C2%B7%20bash-black)
+![dil](https://img.shields.io/badge/dil-T%C3%BCrk%C3%A7e-black)
+
+**Claude Code'a süreklilik veren bir klasör yapısı.**
+
+Yapay zekâya bir asistan gibi davranıyorsun ama o her sabah kapıdan girip
+"merhaba, siz kimsiniz?" diyor. Dün anlattığın her şey, verdiğin kararlar,
+"bir daha böyle yapma" dediğin hata — hepsi silinmiş. Bu depo o sorunu
+markdown dosyaları ve üç hook ile çözüyor.
 
 Her yeni oturumda kendini baştan anlatmak yerine, ajan oturum açılışında dünü
 okur: ne konuşuldu, ne karar verildi, ne yarım kaldı. Kapanışta da yazmadan
@@ -22,6 +32,36 @@ Sihir yok. Birkaç markdown dosyası, üç hook ve bir anayasa.
   ve her işin bir **makbuz** bırakma zorunluluğu.
 - **Sırrı dışarıda tutar.** Sertleştirilmiş `.gitignore` + commit'e sır
   girmesini engelleyen bir `pre-commit` hook'u.
+
+---
+
+## Neden çalışıyor — beş kavram
+
+Kurulumdan önce beş şeyi bilmek, sonradan neyi neden değiştireceğini de öğretir.
+
+**1. Model neden unutuyor?** Modeller *durumsuz* çalışır: modelin kendisinde
+hiçbir şey saklanmaz. Sen mesaj yazdığında, o ana kadarki konuşmanın tamamı
+modele her seferinde baştan gönderilir. Model konuşmayı hatırlamıyor — her
+mesajda konuşmanın tümünü yeniden okuyor. Oturum kapanınca o metin gider;
+model senin için yeniden doğar, bomboş.
+
+**2. Bağlam (context) nedir?** Modele her seferinde gönderilen o metin yığını.
+Sınırlı bir alan — **bir masanın üstü** gibi. Masada ne varsa model bilir;
+masada olmayan şey onun için dünyada yoktur. Bu sistemin tamamı tek bir soruya
+verilmiş cevaptır: *her oturum başında masaya ne koyacağız?*
+
+**3. Hook (kanca) nedir?** Claude Code'a "şu olay olduğunda şu script'i
+çalıştır" diyebilirsin: oturum açılınca, mesaj gönderilince, oturum kapanınca.
+Kritik nokta şu: **hook'u yapay zekâ çalıştırmıyor, program çalıştırıyor.**
+Unutması mümkün değil. Hafızayı iyi niyete değil mekanizmaya bağlayan şey bu.
+
+**4. Semantik hafıza ne demek?** Tek satırlık gerçekleri saklayan ve kelimeyle
+değil **anlamla** arayan bir katman (bkz. Mem0). "Kullanıcı nasıl cevap sever?"
+diye sorduğunda, içinde "cevap" kelimesi geçmese bile *"Kısa ve net yazılardan
+hoşlanır"* kaydını bulur. Dosya gibi yüklenmez; ajan ihtiyaç duyunca sorar.
+
+**5. Neden düz dosyalar?** Sen okuyabilirsin, sen düzeltebilirsin, git ile
+geçmişi tutulur, hiçbir şirkete bağımlı değil. Arayüz gelir geçer; dosyalar kalır.
 
 ---
 
@@ -59,6 +99,24 @@ dosyalarına dokunmaz).
    mülakattan çıkan ise işletme talimatı.
 3. `zihin/ruh.md` içinde varsayılan modunu seç (iş modu / sohbet modu) ve
    `komuta/bu-hafta.md`'ye ilk maddeni koy.
+
+---
+
+## Çalıştığını kanıtla — amnezi testi
+
+Sistemi kurmak bir şey ifade etmez; **kanıtlaması** eder. En dürüst test şu:
+
+1. Bir oturum boyunca gerçek bir iş yap. Bir karar ver, bir dosya değiştir.
+2. Oturumu kapat. Ajana kapanış notunu yazdır (madde 4) — ya da yazdırma,
+   hook'un seni yakalayıp yakalamadığını gör.
+3. **Bilgisayarı kapat, yeniden aç.** Claude Code'u bu klasörde başlat.
+4. Tek bir soru sor: **"Dün ne yapmıştık?"**
+
+Kurulumdan önce alacağın cevap: *"Önceki konuşmalara erişimim yok."*
+Kurulumdan sonra: dünkü kararlar, yarım kalan iş, sıradaki adım.
+
+Aradaki fark bir model güncellemesi değil, daha pahalı bir abonelik de değil —
+birkaç markdown dosyası ve üç script.
 
 ---
 
@@ -101,11 +159,17 @@ devreye girerler. Oturum sayaçları `.claude/durum/` içinde tutulur ve git'e g
 Sistem üç katmanda hatırlar. İkisi zorunlu değil ama neyin nerede durduğunu
 bilmek işin yarısı:
 
-| Katman | Ne tutar | Nerede |
-|---|---|---|
-| **Dosyalar** (zorunlu) | Düşünce, karar, gerekçe, süren iş | bu klasör |
-| **Mem0** (isteğe bağlı) | Tek satırlık kalıcı gerçekler | bulutta |
-| **Obsidian** (isteğe bağlı) | Aynı dosyaları okuma/gezme arayüzü | yerelde |
+| Katman | İnsandaki karşılığı | Ne tutar | Nerede |
+|---|---|---|---|
+| **Dosyalar** (zorunlu) | Epizodik — *"dün akşam ne yaptım?"* | Süreklilik, kararlar, süren işler | bu klasör |
+| **Günlük → arşiv** (zorunlu) | Prosedürel — *"bisiklet sürmeyi bilmek"* | Damıtılmış dersler, kapanmış işler | `günlük/`, `arşiv/` |
+| **Mem0** (isteğe bağlı) | Semantik — *"annemin doğum günü 3 Mayıs"* | Tek satırlık çıplak gerçekler | bulutta |
+| **Obsidian** (isteğe bağlı) | — (arayüz, hafıza değil) | Aynı dosyaları gezme/okuma | yerelde |
+
+Neden ayrı katmanlar? Her birinin **değişme hızı** ve **kullanılma biçimi**
+farklı. Süreklilik her oturumda yüklenir → kısa kalmalı. Arşiv büyür ama
+yalnızca gerektiğinde açılır. Semantik katman hiç yüklenmez → aranır.
+Hepsini tek dosyaya yığarsan ya şişer ya da ajan okumaz.
 
 > **Dosyalar düşünür, Mem0 hatırlar, Obsidian gösterir.**
 
@@ -155,6 +219,29 @@ Kurmasan da hiçbir şey eksilmez.
 
 `.gitignore` içinde `.obsidian/workspace.json` gibi satırlar bu yüzden var:
 Obsidian'ın pencere düzeni kişiseldir, hafızanın içeriği değildir — git'e girmez.
+
+---
+
+## Kaçınılan tuzaklar
+
+Bu yapı boş bir sayfadan çıkmadı; benzer bir sistemi bir yıl kullanıp
+"sıfırdan kursam neyi farklı yapardım" diye soran birinin listesinden çıktı.
+Şunlar bilerek böyle:
+
+- **Bulut senkronu yok, git var.** Böyle bir klasörü iCloud/Drive üzerinde
+  tutmak `X 2.md` tarzı çakışma kopyaları üretiyor — yüzlercesi. Yedek git ile
+  alınır.
+- **Klasör adlarında emoji ve numara yok.** Obsidian'da hoş duruyor,
+  terminalde ve script'te baş ağrısı oluyor.
+- **Kişisel veri ile sistem ayrı.** `zihin/çekirdek.md` gibi dosyalar bir kez
+  git geçmişine girdiğinde kolay kolay çıkmaz. Bu depo **şablondur** — kişisel
+  katman senin kendi (tercihen private) kopyanda yaşar.
+- **İlk gün 6 klasör, 15 değil.** Kullanılmayan klasör, yapı değil gürültüdür.
+  İhtiyaç doğunca eklersin.
+- **Otomasyon ilk hafta yok.** Önce elle yaz, neyin tekrarlandığını gör,
+  sonra script'e dök. Ters sırada yaparsan yanlış şeyi otomatikleştirirsin.
+- **Ajan brief'i kısa.** `komuta/ajan-briefingi.md` şiştiği an okunmaz hâle
+  gelir; o yüzden dosyanın kendi içinde "şişme" uyarısı var.
 
 ---
 
