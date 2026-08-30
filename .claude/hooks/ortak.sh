@@ -17,3 +17,8 @@ oturum_kimligi() {
     echo bilinmeyen
   fi
 }
+
+# Dosyanın değişme zamanı (epoch). GNU ve BSD/macOS farkını kapatır.
+dosya_zamani() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
+}

@@ -13,7 +13,7 @@ BAS=$(cat "$SDIR/baslangic" 2>/dev/null || echo 0)
 case "$BAS" in ''|*[!0-9]*) BAS=0 ;; esac
 
 if [ "$N" -gt 5 ] && [ -f "$SON_OTURUM" ]; then
-  MTIME=$(stat -c %Y "$SON_OTURUM" 2>/dev/null || echo 0)
+  MTIME=$(dosya_zamani "$SON_OTURUM")
   if [ "$MTIME" -lt "$BAS" ]; then
     mkdir -p "$DURUM"
     {

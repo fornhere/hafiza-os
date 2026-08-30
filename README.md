@@ -222,6 +222,42 @@ Obsidian'ın pencere düzeni kişiseldir, hafızanın içeriği değildir — gi
 
 ---
 
+## Sorun giderme
+
+**Hook'ların çalıştığını elle doğrula.** Hook'lar stdin'den JSON okur, yani
+Claude Code olmadan da test edilirler:
+
+```bash
+printf '{"session_id":"test"}' | bash .claude/hooks/oturum-basla.sh
+```
+
+Geçerli bir JSON basmalı; içinde `## HAFIZA — Son Oturum` ve aktif iş
+başlıkların görünür. Boş çıktı veya hata varsa `jq` kurulu değildir.
+
+Kapanış kontrolünü denemek için: aynı `session_id` ile `mesaj-say.sh`'ı altı kez
+çalıştır, `son-oturum.md`'ye dokunma, sonra `oturum-bitir.sh`'ı çalıştır.
+`.claude/durum/IHMAL-ISARETI` dosyası oluşmalı — bir sonraki açılışta uyarıya
+dönüşüp silinir.
+
+**Bilinen davranışlar:**
+
+| Durum | Ne olur |
+|---|---|
+| `jq` kurulu değil | `kur.sh` durur, ayarlara dokunmaz, kurulum komutunu yazar |
+| `settings.json` bozuk JSON | `kur.sh` durur, dosyayı **değiştirmez** |
+| `kur.sh` ikinci kez çalıştırılır | Çift kayıt olmaz; eski kayıtlar temizlenip yeniden yazılır |
+| `--kaldir` | Yalnızca bu üç hook çıkarılır; kendi ayarların (tema, başka hook'lar) korunur |
+| Ayar dosyası kurulumdan önce yoktu | `--kaldir` geriye boş dosya bırakmaz, siler |
+
+Her kurulum öncesi `settings.json` bir zaman damgalı yedeğe kopyalanır
+(`settings.json.yedek-<tarih>`); bir şey ters giderse geri dönebilirsin.
+
+**Platform:** Linux'ta test edildi. macOS'ta çalışacak şekilde yazıldı
+(GNU/BSD `stat` farkı hook'ta ele alınıyor) ama macOS'ta gerçek bir oturumla
+denenmedi. Windows için WSL gerekir.
+
+---
+
 ## Kaçınılan tuzaklar
 
 Bu yapı boş bir sayfadan çıkmadı; benzer bir sistemi bir yıl kullanıp

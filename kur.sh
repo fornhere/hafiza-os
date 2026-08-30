@@ -28,7 +28,11 @@ if [ ${#eksik[@]} -gt 0 ]; then
 fi
 
 mkdir -p "$HOME/.claude"
-[ -f "$AYAR" ] || echo '{}' > "$AYAR"
+AYAR_BIZDEN=0
+if [ ! -f "$AYAR" ]; then
+  echo '{}' > "$AYAR"
+  AYAR_BIZDEN=1
+fi
 if ! jq -e . "$AYAR" >/dev/null 2>&1; then
   kirmizi "✖ $AYAR geçerli JSON değil. Önce onu düzelt."
   exit 1
@@ -57,6 +61,12 @@ temizle() {
 
 if [ "${1:-}" = "--kaldir" ]; then
   temizle
+  # Ayar dosyası bizden önce yoktu ve geriye boş bir kabuk kaldıysa, onu da
+  # götür — kurulum öncesi hâl "boş dosya" değil, "dosya yok"tu.
+  if [ "$(tr -d '[:space:]' < "$AYAR")" = "{}" ] && [ -f "$HAFIZA/.claude/durum/AYAR-BIZDEN" ]; then
+    rm -f "$AYAR" "$HAFIZA/.claude/durum/AYAR-BIZDEN"
+    gri "Boş ayar dosyası kaldırıldı (kurulumdan önce yoktu)."
+  fi
   yesil "✔ Hook bağlantıları ayarlardan çıkarıldı. Dosyalarına dokunulmadı."
   echo "  Geri almak için: $HAFIZA/kur.sh"
   exit 0
@@ -83,6 +93,7 @@ jq --arg h "$HAFIZA" '
 ' "$AYAR" > "$AYAR.tmp" && mv "$AYAR.tmp" "$AYAR"
 
 yesil "✔ Hook'lar bağlandı ($AYAR)"
+[ "$AYAR_BIZDEN" = 1 ] && : > "$HAFIZA/.claude/durum/AYAR-BIZDEN"
 
 # --- CLAUDE.md sembolik linki ---------------------------------------------
 if [ ! -e "$HAFIZA/CLAUDE.md" ]; then
@@ -90,14 +101,18 @@ if [ ! -e "$HAFIZA/CLAUDE.md" ]; then
 fi
 
 # --- şablon tarihleri ------------------------------------------------------
+# Yalnızca içerik klasörleri taranır. README.md ve agents.md dışarıda:
+# ikisi de yer tutucuyu *anlatıyor*, kullanmıyor — tarih basılırsa
+# kendi belgelerini bozar.
 DEGISTI=0
 while IFS= read -r -d '' f; do
-  if grep -q '<TARİH>' "$f"; then
+  if grep -q '<TARİH>\|<YYYY-AA-GG>' "$f"; then
     sed -i.bak "s/<TARİH>/$BUGUN/g; s/<YYYY-AA-GG>/$BUGUN/g" "$f" && rm -f "$f.bak"
     DEGISTI=1
   fi
-done < <(find "$HAFIZA" -name '*.md' -not -path '*/.git/*' -print0)
-sed -i.bak "s/<YYYY-AA-GG>/$BUGUN/g" "$HAFIZA/zihin/son-oturum.md" && rm -f "$HAFIZA/zihin/son-oturum.md.bak"
+done < <(find "$HAFIZA/zihin" "$HAFIZA/komuta" "$HAFIZA/projeler" \
+              "$HAFIZA/günlük" "$HAFIZA/arşiv" "$HAFIZA/gelen-kutusu" \
+              -name '*.md' -print0 2>/dev/null)
 [ "$DEGISTI" = 1 ] && gri "Şablondaki tarih alanları $BUGUN yapıldı."
 
 # --- git -------------------------------------------------------------------
