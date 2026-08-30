@@ -96,14 +96,65 @@ devreye girerler. Oturum sayaçları `.claude/durum/` içinde tutulur ve git'e g
 
 ---
 
-## Mem0 (isteğe bağlı)
+## Üç katman
 
-Anayasa madde 6, üçüncü bir katmanı tarif eder: tek satırlık kalıcı gerçekler
-için [Mem0](https://mem0.ai). Kurmadıysan o maddeyi sil, sistemin geri kalanı
-Mem0'sız çalışır.
+Sistem üç katmanda hatırlar. İkisi zorunlu değil ama neyin nerede durduğunu
+bilmek işin yarısı:
 
-Kurduysan tek kural şu: **kimlik geçer, haber geçemez.** Bir kayıt altı ay
-sonra da hem doğru hem işe yarar olacaksa girer. "Bugün şunu yaptım" girmez.
+| Katman | Ne tutar | Nerede |
+|---|---|---|
+| **Dosyalar** (zorunlu) | Düşünce, karar, gerekçe, süren iş | bu klasör |
+| **Mem0** (isteğe bağlı) | Tek satırlık kalıcı gerçekler | bulutta |
+| **Obsidian** (isteğe bağlı) | Aynı dosyaları okuma/gezme arayüzü | yerelde |
+
+> **Dosyalar düşünür, Mem0 hatırlar, Obsidian gösterir.**
+
+### Mem0 — kalıcı gerçekler katmanı *(isteğe bağlı)*
+
+Anayasa madde 6 bunu tarif eder. Kurmadıysan o maddeyi sil; sistemin geri
+kalanı Mem0'sız sorunsuz çalışır.
+
+Ne işe yarar: `zihin/` dosyaları bir oturumun *hikâyesini* tutar, Mem0 ise
+oturumdan bağımsız **tek cümlelik gerçekleri**. "Kısa kurgu sever",
+"dosya adlarını Türkçe yazar" gibi. Bunlar altı ay sonra da doğrudur.
+
+Tek kural: **kimlik geçer, haber geçemez.** Bir kayıt altı ay sonra da hem
+doğru hem işe yarar olacaksa girer. "Bugün şunu yaptım" girmez — o
+`zihin/son-oturum.md`'nin işi.
+
+Kurulumu (API anahtarını [mem0.ai](https://mem0.ai) üzerinden alırsın):
+
+```bash
+claude mcp add mem0 --env MEM0_API_KEY=<anahtarın> -- npx -y @mem0/mcp-server
+```
+
+Anahtarı bu klasöre **yazma** — anayasa madde 6'nın kırmızı çizgisi budur.
+`komuta/anahtarlar.md` sadece anahtarın nerede durduğunu söyler, değerini asla.
+
+İki tuzak, ikisi de yaşanarak öğrenildi:
+
+- Mem0 `"Memory added successfully"` dediği hâlde kaydı **sessizce düşürebilir.**
+  Yazdıktan sonra depo okunup kaydın orada olduğu görülmeli. (Madde 6, "yazdıktan
+  sonra doğrula" — okuma script'i orada.)
+- Mem0 yazdığın cümleyi **İngilizceye çevirip yeniden yazar.** Kaydı ararken
+  birebir cümleyi değil kavramı ara.
+
+### Obsidian — okuma arayüzü *(isteğe bağlı)*
+
+Bu klasör düz markdown olduğu için [Obsidian](https://obsidian.md) ile
+**kasa (vault) olarak açılabilir.** Obsidian'ı aç → *Open folder as vault* →
+bu klasörü seç. Dosya biçimi değişmez, hiçbir şey taşınmaz.
+
+Ne kazandırır: dosyalar arası `[[bağlantı]]`lar tıklanabilir olur, grafik
+görünümü hangi notun neye bağlandığını gösterir, arama tüm hafızayı tarar,
+telefondan okuyabilirsin.
+
+**Ne kazandırmaz — ve bu önemli:** ajan Obsidian'ı kullanmaz. O düz dosyaları
+okur. Obsidian **senin** için bir pencere; sistemin çalışması ona bağlı değil.
+Kurmasan da hiçbir şey eksilmez.
+
+`.gitignore` içinde `.obsidian/workspace.json` gibi satırlar bu yüzden var:
+Obsidian'ın pencere düzeni kişiseldir, hafızanın içeriği değildir — git'e girmez.
 
 ---
 
