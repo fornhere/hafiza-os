@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Commit'e sır girmesini engeller. Anayasa: mekanizma > iyi niyet.
+# Kendi tarayıcın varsa (sir-tara) ona devreder; yoksa temel bir tarama yapar.
+set -uo pipefail
+
+if command -v sir-tara >/dev/null 2>&1; then
+  exec sir-tara --staged
+fi
+
+DOSYALAR=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$DOSYALAR" ] && exit 0
+
+DESENLER='(AKIA[0-9A-Z]{16})|(sk-[A-Za-z0-9]{20,})|(ghp_[A-Za-z0-9]{30,})|(github_pat_[A-Za-z0-9_]{30,})|(xox[baprs]-[A-Za-z0-9-]{10,})|(AIza[0-9A-Za-z_-]{30,})|(-----BEGIN [A-Z ]*PRIVATE KEY-----)|((api[_-]?key|secret|password|token)[\"'"'"' ]*[:=][\"'"'"' ]*[A-Za-z0-9_\-]{16,})'
+
+BULUNAN=$(git diff --cached -U0 -- $DOSYALAR | grep -nEI "^\+" | grep -EI "$DESENLER" || true)
+
+if [ -n "$BULUNAN" ]; then
+  echo "✖ Commit durduruldu — sır gibi görünen içerik var:" >&2
+  echo "$BULUNAN" | head -10 >&2
+  echo >&2
+  echo "Gerçekten sır değilse: git commit --no-verify" >&2
+  exit 1
+fi
+exit 0

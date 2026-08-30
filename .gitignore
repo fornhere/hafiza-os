@@ -1,0 +1,28 @@
+# Obsidian'ın kişisel/geçici dosyaları — içerik değil, pencere düzeni
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
+.trash/
+
+# Oturum durumu — sayaç, başlangıç saati, ihmal işareti (kalıcı değil)
+.claude/durum/
+
+# --- Sır dosyaları — asla takip edilmez ---
+# Anahtarlar bu deponun dışında yaşar (bkz. komuta/anahtarlar.md).
+# Yine de bir kopya buraya düşerse git görmesin.
+.env
+.env.*
+!.env.example
+*.env
+keys.env
+secrets.json
+credentials.json
+client_secret*.json
+token.json
+token.pickle
+service-account*.json
+*.pem
+*.key
+!*.public.key
+.aws/
+.npmrc
