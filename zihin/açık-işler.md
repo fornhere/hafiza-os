@@ -19,4 +19,13 @@ bağlama enjekte edilir — bu yüzden başlık kısa ve anlaşılır olmalı.
 
 ## Kapanan İşler
 
-<!-- Biten işler buraya iner: ne yapıldı, hangi kararlar alındı, makbuz ne. -->
+Bir iş kapandığında bloğu **tam hâliyle** `arşiv/<tarih>-<ad>.md` dosyasına
+taşınır; buraya tek satırlık bir iz kalır. Silinmez — taşınır.
+
+Gerekçe: bu dosya her oturum açılışında okunur. Kapanan işler burada birikirse
+şişer ve bedeli **her oturum** yeniden ödenir. Arşivdeki dosya ise sadece
+gerektiğinde açılır.
+
+| Kapandı | İş | Dosya |
+|---|---|---|
+| <!-- TARİH --> | | |
