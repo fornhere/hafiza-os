@@ -34,6 +34,10 @@ Sihir yok. Birkaç markdown dosyası, beş hook ve bir anayasa.
   ve her işin bir **makbuz** bırakma zorunluluğu.
 - **Sırrı dışarıda tutar.** Sertleştirilmiş `.gitignore` + commit'e sır
   girmesini engelleyen bir `pre-commit` hook'u.
+- **Kalıcı gerçekleri kimliklendirir.** *(isteğe bağlı)* Mem0 kurduysan
+  `araclar/hafiza.py`, her kalıcı gerçeği kaynağına ve içerik hash'ine
+  bağlayan bir kapı kurar: aday kuyruğu, çelişki kontrolü, okuyarak doğrulanan
+  senkron, bütçeli bağlam paketi ve erişim regresyonu.
 
 ---
 
@@ -142,6 +146,9 @@ birkaç markdown dosyası ve beş script.
   ajanın davranışını nasıl değiştiriyor. O satır yoksa madde süstür.
 - **`zihin/son-oturum.md`** — dün ne oldu. Hook bunu okur.
 
+`araclar/` klasörü Mem0 katmanının kapısıdır ve isteğe bağlıdır; Mem0
+kurmadıysan silebilirsin.
+
 ---
 
 ## Hook'lar
@@ -168,7 +175,7 @@ bilmek işin yarısı:
 |---|---|---|---|
 | **Dosyalar** (zorunlu) | Epizodik — *"dün akşam ne yaptım?"* | Süreklilik, kararlar, süren işler | bu klasör |
 | **Günlük → arşiv** (zorunlu) | Prosedürel — *"bisiklet sürmeyi bilmek"* | Damıtılmış dersler, kapanmış işler | `günlük/`, `arşiv/` |
-| **Mem0** (isteğe bağlı) | Semantik — *"annemin doğum günü 3 Mayıs"* | Tek satırlık çıplak gerçekler | bulutta |
+| **Mem0** (isteğe bağlı) | Semantik — *"annemin doğum günü 3 Mayıs"* | Tek satırlık çıplak gerçekler | bulutta, indeks |
 | **Obsidian** (isteğe bağlı) | — (arayüz, hafıza değil) | Aynı dosyaları gezme/okuma | yerelde |
 
 Neden ayrı katmanlar? Her birinin **değişme hızı** ve **kullanılma biçimi**
@@ -177,6 +184,10 @@ yalnızca gerektiğinde açılır. Semantik katman hiç yüklenmez → aranır.
 Hepsini tek dosyaya yığarsan ya şişer ya da ajan okumaz.
 
 > **Dosyalar düşünür, Mem0 hatırlar, Obsidian gösterir.**
+
+Mem0 katmanını kurarsan bir kural daha eklenir: **dosyalar kanoniktir, Mem0
+indekstir.** İkisi çelişirse dosyalar kazanır — Mem0 buradan yeniden
+üretilebilir, tersi doğru değildir.
 
 ### Mem0 — kalıcı gerçekler katmanı *(isteğe bağlı)*
 
@@ -203,10 +214,50 @@ Anahtarı bu klasöre **yazma** — anayasa madde 6'nın kırmızı çizgisi bud
 İki tuzak, ikisi de yaşanarak öğrenildi:
 
 - Mem0 `"Memory added successfully"` dediği hâlde kaydı **sessizce düşürebilir.**
-  Yazdıktan sonra depo okunup kaydın orada olduğu görülmeli. (Madde 6, "yazdıktan
-  sonra doğrula" — okuma script'i orada.)
+  Yazdıktan sonra depo okunup kaydın orada olduğu görülmeli.
 - Mem0 yazdığın cümleyi **İngilizceye çevirip yeniden yazar.** Kaydı ararken
   birebir cümleyi değil kavramı ara.
+
+#### Kapı: dosyalar kanonik, Mem0 indeks
+
+Mem0'ı doğrudan kullanmak yerine `araclar/hafiza.py` üzerinden kullanman
+önerilir. Sebep: Mem0'un güncel çıkarım yolu **eklemelidir** — düzeltmek için
+`add` çağırırsan eski ve yeni gerçek yan yana yaşar ve ikisi de geri çağrılır.
+
+Kapı bunu şöyle çözer. Her kalıcı gerçek `zihin/hafıza-kataloğu.jsonl` içinde
+tek satırlık bir kayıt olur; kaydın kendi kimliği, kaynak dosyası, içerik
+hash'i, geçerlilik aralığı ve karşılık geldiği `mem0_id` alanı vardır. Düzeltme
+yeni kayıt eklemez, mevcut `mem0_id`'yi **günceller**.
+
+```bash
+export HAFIZA_MEM0_USER_ID=kullanici-adin
+
+python3 araclar/hafiza.py --vault . validate      # şema + kaynak + hash, ağa çıkmaz
+python3 araclar/hafiza.py --vault . sync          # farkı göster (dry-run)
+python3 araclar/hafiza.py --vault . sync --apply  # uygula + okuyarak doğrula
+python3 araclar/hafiza.py --vault . audit         # drift / yetim / tekrar
+python3 araclar/hafiza.py --vault . context "…"   # bütçeli, kaynaklı bağlam
+python3 araclar/hafiza.py --vault . eval          # erişim regresyonu
+```
+
+Getirdikleri:
+
+| Sorun | Kapının cevabı |
+|---|---|
+| Aynı gerçeğin iki sürümü birlikte dönüyor | `mem0_id` eşlemesi; `add` değil `update` |
+| Kaydın nereden geldiği belli değil | `source_path` + `source_anchor` + `source_hash` |
+| Ajanın çıkarımı sessizce kalıcı oluyor | Aday kuyruğu; `reviewed_by` olmadan terfi yok |
+| Çelişen gerçek eskisini siliyor | `superseded` + `supersedes`; tarihçe korunur |
+| Eskimiş bilgi hâlâ geri çağrılıyor | `status` ve `valid_to`; `context` yalnız `active` verir |
+| "Hafıza çalışıyor" ölçülemiyor | `araclar/hafıza-testleri.örnek.json` biçiminde regresyon |
+
+Kendi test setini `araclar/hafıza-testleri.json` olarak yaz: her vaka bir soru,
+beklenen `memory_id`'ler ve **yasaklı** `memory_id`'ler içerir. Yasaklı liste,
+geçici bir durumun kalıcı gerçek gibi geri çağrılmasını yakalar.
+
+Şema ve politikanın tamamı `zihin/hafıza-sistemi.md` içinde. Araç yalnız
+standart kütüphane kullanır ve `python3 -m unittest test_hafiza.py` ile
+`araclar/` içinde test edilir.
 
 ### Obsidian — okuma arayüzü *(isteğe bağlı)*
 

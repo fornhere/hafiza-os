@@ -1,0 +1,38 @@
+[
+  {
+    "id": "ornek-dil-1",
+    "query": "Kullanıcı ile hangi dilde konuşmalıyım?",
+    "scope": "user",
+    "expected_memory_ids": ["ornek-pref-language"],
+    "forbidden_memory_ids": ["ornek-gecici-proje-durumu"],
+    "top_k": 5,
+    "threshold": 0.1
+  },
+  {
+    "id": "ornek-dil-2",
+    "query": "Yanıtlar hangi dilde yazılmalı?",
+    "scope": "user",
+    "expected_memory_ids": ["ornek-pref-language"],
+    "forbidden_memory_ids": ["ornek-gecici-proje-durumu"],
+    "top_k": 5,
+    "threshold": 0.1
+  },
+  {
+    "id": "ornek-dosya-adi-1",
+    "query": "Yeni dosyaya nasıl ad vermeliyim?",
+    "scope": "user",
+    "expected_memory_ids": ["ornek-pref-file-names"],
+    "forbidden_memory_ids": ["ornek-gecici-proje-durumu"],
+    "top_k": 5,
+    "threshold": 0.1
+  },
+  {
+    "id": "ornek-karantina-1",
+    "query": "Şu an hangi iş yarım kaldı?",
+    "scope": "user",
+    "expected_memory_ids": [],
+    "forbidden_memory_ids": ["ornek-gecici-proje-durumu"],
+    "top_k": 5,
+    "threshold": 0.1
+  }
+]
