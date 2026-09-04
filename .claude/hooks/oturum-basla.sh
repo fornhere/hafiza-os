@@ -1,31 +1,34 @@
 #!/usr/bin/env bash
-# SessionStart — dünü ve açık işleri bağlama enjekte eder, sayacı sıfırlar,
-# önceki oturum ihmal edilmişse uyarı basar.
+# SessionStart — dünü ve açık işleri bağlama enjekte eder. Yeni oturumda
+# sayacı kurar; resume sırasında mevcut sayacı sıfırlamaz.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/ortak.sh"
 
-SID=$(oturum_kimligi)
+INPUT=$(cat 2>/dev/null || echo '{}')
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "bilinmeyen"' 2>/dev/null || echo bilinmeyen)
+KAYNAK=$(printf '%s' "$INPUT" | jq -r '.source // "startup"' 2>/dev/null || echo startup)
 SDIR="$DURUM/$SID"
 mkdir -p "$SDIR"
-date +%s                > "$SDIR/baslangic"
-date '+%Y-%m-%d %H:%M'  > "$SDIR/baslangic-okunur"
-echo 0                  > "$SDIR/sayac"
+if [ ! -f "$SDIR/baslangic" ]; then
+  date +%s               > "$SDIR/baslangic"
+  date '+%Y-%m-%d %H:%M' > "$SDIR/baslangic-okunur"
+  echo 0                 > "$SDIR/sayac"
+fi
+printf '%s\n' "$KAYNAK" > "$SDIR/son-kaynak"
 
 # 7 günden eski oturum durumlarını temizle
 find "$DURUM" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null
 
 OUT=""
 
-if [ -f "$IHMAL" ]; then
+if [ -f "$EKSIK_OTURUMLAR" ] && grep -q '^- \[ \]' "$EKSIK_OTURUMLAR"; then
   OUT+="================================================================"$'\n'
-  OUT+="  ⚠  ÖNCEKİ OTURUM HAFIZA GÜNCELLENMEDEN KAPANDI"$'\n'
+  OUT+="  ⚠  HAFIZA MAKBUZU EKSİK OTURUMLAR VAR"$'\n'
   OUT+="================================================================"$'\n'
-  OUT+="$(cat "$IHMAL")"$'\n'
+  OUT+="$(grep '^- \[ \]' "$EKSIK_OTURUMLAR" | tail -10)"$'\n'
   OUT+="Anayasa madde 4: yazılmayan oturum yaşanmamış sayılır."$'\n'
-  OUT+="Bu oturumun ilk işi, o boşluğu kullanıcıya hatırlatmak ve"$'\n'
-  OUT+="hatırlanabildiği kadarını son-oturum.md'ye geçirmektir."$'\n'
+  OUT+="Eksikleri transcript yolundan geri doldur; tamamlanan kutuyu [x] yap."$'\n'
   OUT+="================================================================"$'\n\n'
-  rm -f "$IHMAL"
 fi
 
 OUT+="## HAFIZA — Son Oturum (zihin/son-oturum.md)"$'\n\n'
@@ -45,5 +48,7 @@ else
 fi
 
 OUT+="Açılış okuma sırasının tamamı için: $HAFIZA/agents.md"$'\n'
+OUT+="Oturum kimliği: $SID. 6. mesajdan sonra Stop hook'unun istediği"$'\n'
+OUT+="makbuz etiketini zihin/son-oturum.md notunda aynen kullan."$'\n'
 
 printf '%s' "$OUT" | jq -Rs '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:.}}'

@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# SessionEnd — 5'ten fazla mesaj yazıldıysa ve son-oturum.md bu oturumda
-# hiç değişmediyse, ihmal işaretini bırakır.
+# SessionEnd — 5'ten fazla mesajlı oturumun kendine ait makbuzu yoksa
+# kalıcı eksik-oturum checklist'ine transcript yoluyla birlikte kaydeder.
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/ortak.sh"
 
-SID=$(oturum_kimligi)
+INPUT=$(cat 2>/dev/null || echo '{}')
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "bilinmeyen"' 2>/dev/null || echo bilinmeyen)
+TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // "bilinmiyor"' 2>/dev/null || echo bilinmiyor)
+CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // "bilinmiyor"' 2>/dev/null || echo bilinmiyor)
 SDIR="$DURUM/$SID"
 
-N=$(cat "$SDIR/sayac" 2>/dev/null || echo 0)
-case "$N" in ''|*[!0-9]*) N=0 ;; esac
-BAS=$(cat "$SDIR/baslangic" 2>/dev/null || echo 0)
-case "$BAS" in ''|*[!0-9]*) BAS=0 ;; esac
+N=$(sayi_oku "$SDIR/sayac")
+ETIKET=$(makbuz_etiketi "$SID" "$N")
 
-if [ "$N" -gt 5 ] && [ -f "$SON_OTURUM" ]; then
-  MTIME=$(dosya_zamani "$SON_OTURUM")
-  if [ "$MTIME" -lt "$BAS" ]; then
-    mkdir -p "$DURUM"
-    {
-      echo "Kapanış tarihi : $(date '+%Y-%m-%d %H:%M')"
-      echo "Başlangıç      : $(cat "$SDIR/baslangic-okunur" 2>/dev/null || echo bilinmiyor)"
-      echo "Mesaj sayısı   : $N"
-      echo "Durum          : son-oturum.md bu oturum boyunca hiç değişmedi."
-    } > "$IHMAL"
+if [ "$N" -gt 5 ] && { ! makbuz_var_mi "$ETIKET" || ! makbuz_baglantili_mi "$ETIKET"; }; then
+  mkdir -p "$(dirname "$EKSIK_OTURUMLAR")"
+  if [ ! -f "$EKSIK_OTURUMLAR" ]; then
+    printf '# Eksik Oturum Makbuzları\n\nTamamlanan satırı `[x]` yap. [[Ana Sayfa]]\n\n' > "$EKSIK_OTURUMLAR"
+  fi
+  KIMLIK="<!-- eksik-session:$SID mesaj:$N -->"
+  if ! grep -Fq "$KIMLIK" "$EKSIK_OTURUMLAR"; then
+    printf -- '- [ ] %s · %s mesaj · `%s` · transcript: `%s` %s\n' \
+      "$(date '+%Y-%m-%d %H:%M')" "$N" "$CWD" "$TRANSCRIPT" "$KIMLIK" >> "$EKSIK_OTURUMLAR"
   fi
 fi
 

@@ -10,13 +10,13 @@
 Yapay zekâya bir asistan gibi davranıyorsun ama o her sabah kapıdan girip
 "merhaba, siz kimsiniz?" diyor. Dün anlattığın her şey, verdiğin kararlar,
 "bir daha böyle yapma" dediğin hata — hepsi silinmiş. Bu depo o sorunu
-markdown dosyaları ve üç hook ile çözüyor.
+markdown dosyaları ve beş hook ile çözüyor.
 
 Her yeni oturumda kendini baştan anlatmak yerine, ajan oturum açılışında dünü
 okur: ne konuşuldu, ne karar verildi, ne yarım kaldı. Kapanışta da yazmadan
 gitmesin diye bir mekanizma var — iyi niyete değil, hook'a bağlı.
 
-Sihir yok. Birkaç markdown dosyası, üç hook ve bir anayasa.
+Sihir yok. Birkaç markdown dosyası, beş hook ve bir anayasa.
 
 ---
 
@@ -24,9 +24,11 @@ Sihir yok. Birkaç markdown dosyası, üç hook ve bir anayasa.
 
 - **Açılışta hatırlar.** `SessionStart` hook'u son oturum notunu ve aktif iş
   başlıklarını ajanın bağlamına enjekte eder. Sen bir şey yazmadan önce bilir.
-- **Kapanışı zorlar.** 5 mesajı geçen bir oturum, hafızaya hiç dokunmadan
-  kapanırsa bir "ihmal işareti" bırakılır; bir sonraki açılışta ajan bunu
-  yüzüne söyler ve önce o boşluğu doldurur.
+- **Kapanışı zorlar.** 5 mesajı geçen bir oturum, kimlikli ve `[[bağlantılı]]`
+  bir makbuz yazmadan kapanamaz. `Stop`/`PreCompact` kontrolü önce yazmayı
+  ister; son güvenlik ağı eksik oturumu transcript yolu ile listeye alır.
+- **Grafiği bağlı tutar.** Bağlantı denetimi, Obsidian'da gelen veya giden
+  bağlantısı olmayan kalıcı notları kapanışta yakalar.
 - **Kural koyar.** `agents.md` bir anayasadır: neyi sormadan yapar, neyi
   asla onaysız yapmaz (para, dışarı çıkan mesaj, silme, gizli bilgi),
   ve her işin bir **makbuz** bırakma zorunluluğu.
@@ -76,8 +78,9 @@ cd ~/Hafıza
 `kur.sh` şunları yapar:
 
 - `jq` ve `git` var mı bakar,
-- `~/.claude/settings.json` dosyasını **yedekler**, sonra üç hook'u bağlar
+- `~/.claude/settings.json` dosyasını **yedekler**, sonra beş hook'u bağlar
   (eski/çift kayıtları temizleyerek — tekrar çalıştırmak güvenlidir),
+- global `~/.claude/CLAUDE.md` içine işaretli başlangıç talimatını ekler,
 - `CLAUDE.md → agents.md` linkini kurar,
 - şablondaki `<TARİH>` alanlarını bugüne çevirir,
 - git deposunu ve sır kapanını hazırlar.
@@ -92,8 +95,8 @@ dosyalarına dokunmaz).
 
 ## Kurduktan sonraki ilk üç şey
 
-1. Claude Code'u bu klasörde aç. Açılışta **"Hafıza okunuyor..."** görüyorsan
-   hook'lar devrede.
+1. Claude Code'u bu klasörde aç. `/hooks` ile beş hook'u, `/context` ile
+   global Hafıza OS talimatını gördüğünü doğrula.
 2. Ajana şunu söyle: **"`zihin/çekirdek.md` boş, bana mülakat yap."**
    Çekirdeği kendin doldurma. Kendi yazdığın tanıtım yazısı olur;
    mülakattan çıkan ise işletme talimatı.
@@ -116,7 +119,7 @@ Kurulumdan önce alacağın cevap: *"Önceki konuşmalara erişimim yok."*
 Kurulumdan sonra: dünkü kararlar, yarım kalan iş, sıradaki adım.
 
 Aradaki fark bir model güncellemesi değil, daha pahalı bir abonelik de değil —
-birkaç markdown dosyası ve üç script.
+birkaç markdown dosyası ve beş script.
 
 ---
 
@@ -145,9 +148,11 @@ birkaç markdown dosyası ve üç script.
 
 | Script | Ne zaman | Ne yapar |
 |---|---|---|
-| `oturum-basla.sh` | oturum açılışında | Son oturum notunu ve aktif iş başlıklarını bağlama enjekte eder; sayacı sıfırlar; ihmal işareti varsa uyarır. |
+| `oturum-basla.sh` | oturum açılışında | Son oturum notunu ve aktif iş başlıklarını bağlama enjekte eder; resume sayacını korur; eksik makbuzları hatırlatır. |
 | `mesaj-say.sh` | her kullanıcı mesajında | Mesaj sayacını bir artırır. |
-| `oturum-bitir.sh` | oturum kapanışında | 5'ten fazla mesaj yazıldıysa ve `son-oturum.md` hiç değişmediyse ihmal işaretini bırakır. |
+| `hafiza-kontrol.sh` | `Stop` ve `PreCompact` öncesinde | Uzun oturumda kimlikli, bağlantılı makbuz yoksa kapanışı durdurur. |
+| `baglanti-denetle.sh` | kontrolün içinde veya elle | Bağlantısız Markdown notlarını listeler. |
+| `oturum-bitir.sh` | oturum kapanışında | Eksik makbuzu transcript yolu ile kalıcı kontrol listesine yazar. |
 
 Hook'lar kullanıcı ayarlarına bağlanır, yani **hangi klasörde çalışırsan çalış**
 devreye girerler. Oturum sayaçları `.claude/durum/` içinde tutulur ve git'e girmez.
@@ -234,10 +239,11 @@ printf '{"session_id":"test"}' | bash .claude/hooks/oturum-basla.sh
 Geçerli bir JSON basmalı; içinde `## HAFIZA — Son Oturum` ve aktif iş
 başlıkların görünür. Boş çıktı veya hata varsa `jq` kurulu değildir.
 
-Kapanış kontrolünü denemek için: aynı `session_id` ile `mesaj-say.sh`'ı altı kez
-çalıştır, `son-oturum.md`'ye dokunma, sonra `oturum-bitir.sh`'ı çalıştır.
-`.claude/durum/IHMAL-ISARETI` dosyası oluşmalı — bir sonraki açılışta uyarıya
-dönüşüp silinir.
+Kapanış kontrolünü denemek için: aynı `session_id` ile `mesaj-say.sh`'ı altı
+kez çalıştır, `son-oturum.md`'ye dokunma, sonra aynı JSON'u
+`hafiza-kontrol.sh`'a ver. `"decision":"block"` dönmeli. Dosyanın en üstüne
+`<!-- hafiza-session:test mesaj:6 -->` işaretli ve `[[Ana Sayfa]]` bağlantılı
+bir bölüm ekleyince aynı kontrol sessizce geçmelidir.
 
 **Bilinen davranışlar:**
 
@@ -246,7 +252,7 @@ dönüşüp silinir.
 | `jq` kurulu değil | `kur.sh` durur, ayarlara dokunmaz, kurulum komutunu yazar |
 | `settings.json` bozuk JSON | `kur.sh` durur, dosyayı **değiştirmez** |
 | `kur.sh` ikinci kez çalıştırılır | Çift kayıt olmaz; eski kayıtlar temizlenip yeniden yazılır |
-| `--kaldir` | Yalnızca bu üç hook çıkarılır; kendi ayarların (tema, başka hook'lar) korunur |
+| `--kaldir` | Hafıza OS hook'ları ve işaretli global talimat bloğu çıkarılır; diğer ayarların korunur |
 | Ayar dosyası kurulumdan önce yoktu | `--kaldir` geriye boş dosya bırakmaz, siler |
 
 Her kurulum öncesi `settings.json` bir zaman damgalı yedeğe kopyalanır

@@ -68,6 +68,7 @@ Not şu biçimdedir:
 
 ```
 ## YYYY-AA-GG — tek satır başlık
+<!-- hafiza-session:OTURUM_KIMLIGI mesaj:MESAJ_SAYISI -->
 
 **Kararlar:**
 -
@@ -80,11 +81,18 @@ Not şu biçimdedir:
 
 **Sonraya devredilenler:**
 -
+
+**Bağlantılar:**
+- [[Ana Sayfa]]
 ```
 
 **Yazılmayan oturum yaşanmamış sayılır.**
 
 Kapanış notu yazmak izin gerektirmez; anayasanın kendisidir.
+Aynı oturum kapanışı yeniden denerse yeni başlık açılmaz; kendi
+`hafiza-session` işaretli bölümünü günceller. Oturum kimliği ve mesaj sayısı
+hook çıktısından alınır. Böylece eşzamanlı oturumlar birbirinin makbuzunu
+yanlışlıkla sahiplenemez.
 
 ---
 
@@ -194,9 +202,11 @@ Kapanış protokolü iyi niyete değil mekanizmaya bağlıdır:
 
 | Script | Ne zaman | Ne yapar |
 |---|---|---|
-| `oturum-basla.sh` | oturum açılışında | Son oturum notunu ve aktif iş başlıklarını bağlama enjekte eder; sayacı sıfırlar; ihmal işareti varsa uyarı basıp işareti siler. |
+| `oturum-basla.sh` | oturum açılışında | Son oturum notunu ve aktif iş başlıklarını bağlama enjekte eder; yeni oturum sayacını açar, resume'da mevcut sayacı korur; eksik makbuzları hatırlatır. |
 | `mesaj-say.sh` | her kullanıcı mesajında | Mesaj sayacını bir artırır. |
-| `oturum-bitir.sh` | oturum kapanışında | 5'ten fazla mesaj yazıldıysa ve `son-oturum.md` bu oturumda hiç değişmediyse ihmal işaretini bırakır. |
+| `hafiza-kontrol.sh` | `Stop` ve `PreCompact` öncesinde | 5 mesajı geçen oturumda kimlikli, bağlantılı makbuz yoksa kapanışı durdurur; iki zorlamadan sonra işi kilitlememek için açık bırakır. |
+| `baglanti-denetle.sh` | kapanış kontrolünün içinde veya elle | Gelen ve giden `[[wikilink]]` bulunmayan Markdown notlarını listeler. |
+| `oturum-bitir.sh` | oturum kapanışında | Zorlamadan yine kaçan uzun oturumu transcript yolu ile kalıcı eksik-makbuz listesine yazar. |
 
 Oturum sayaçları `.claude/durum/` içinde tutulur; geçicidir, deftere girmez.
 Script'ler kullanıcı ayarlarına (`~/.claude/settings.json`) bağlıdır,
@@ -204,7 +214,16 @@ böylece hangi klasörde çalışılırsa çalışılsın devreye girerler.
 
 ---
 
-## 8. Klasörler
+## 8. Obsidian Bağlantı Sözleşmesi
+
+Her kalıcı Markdown notu en az bir `[[wikilink]]` ile hafıza ağına bağlanır.
+Yeni not hem ilgili nota dışarı bağlantı verir hem de `[[Ana Sayfa]]` veya bir
+proje merkezi tarafından geri bağlanır. Gelen ve giden bağlantısı olmayan not
+tamamlanmış sayılmaz; `baglanti-denetle.sh` bunu kapanışta yakalar.
+
+---
+
+## 9. Klasörler
 
 | Klasör | Ne için |
 |---|---|
