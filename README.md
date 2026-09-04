@@ -20,6 +20,46 @@ Sihir yok. Birkaç markdown dosyası, beş hook ve bir anayasa.
 
 ---
 
+## Videodan sonraki güncellemeler
+
+Videoyu izleyip buraya geldiysen: depo o günden beri değişti. **Videoda
+anlatılan her şey hâlâ aynı şekilde çalışıyor** — aşağıdakiler üzerine
+eklendi, hiçbiri mevcut kurulumu bozmuyor.
+
+<details>
+<summary><b>2026-09-04 — Hafıza kapısı: dosyalar kanonik, Mem0 indeks</b></summary>
+
+<br>
+
+Videoda Mem0'a doğrudan yazıyorduk. Kullandıkça çıkan sorun şuydu: Mem0'un
+çıkarım yolu **eklemeli** — bir gerçeği düzeltmek için yeniden yazdığında eski
+kayıt silinmiyor, ikisi yan yana yaşıyor ve ikisi de geri çağrılıyor.
+
+Çözüm yeni bir hafıza servisi değil, araya bir **kapı** koymak oldu:
+
+- **`araclar/hafiza.py`** — kalıcı gerçekleri kimliklendiren tek giriş noktası.
+  Her kayıt kaynağına, içerik hash'ine ve karşılık geldiği `mem0_id`'ye bağlı.
+  Düzeltme yeni kayıt eklemez, mevcudu günceller.
+- **Aday kuyruğu** — ajanlar kalıcı hafızaya doğrudan yazmaz, öneri bırakır.
+  `reviewed_by` alanı olmadan hiçbir öneri kalıcı gerçeğe dönüşmez.
+- **Çelişki artık silmiyor** — eski gerçek `superseded` olur, yenisi ona
+  `supersedes` ile bağlanır. Tarihçe kalır, erişime yalnız güncel olan çıkar.
+- **Erişim bütçeli** — ajana bütün hafıza değil, göreve özel küçük ve kaynaklı
+  bir paket verilir.
+- **Ölçüm var** — kendi sorularınla bir regresyon seti yazıp hafızanın gerçekten
+  doğru hatırlayıp hatırlamadığını sınayabilirsin. Örnek biçim:
+  `araclar/hafıza-testleri.örnek.json`.
+
+Anayasa madde 6 bu kapıya göre yeniden yazıldı; okuma sırasına
+`zihin/hafıza-sistemi.md` eklendi.
+
+**Mem0 kullanmıyorsan hiçbir şey değişmedi.** `araclar/` ve madde 6 isteğe
+bağlıdır, silebilirsin. Ayrıntı: [Mem0 bölümü](#mem0--kalıcı-gerçekler-katmanı-isteğe-bağlı).
+
+</details>
+
+---
+
 ## Ne yapar
 
 - **Açılışta hatırlar.** `SessionStart` hook'u son oturum notunu ve aktif iş
