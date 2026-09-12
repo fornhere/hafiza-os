@@ -22,9 +22,11 @@ Sihir yok. Birkaç markdown dosyası, beş hook ve bir anayasa.
 
 ## Videodan sonraki güncellemeler
 
-Videoyu izleyip buraya geldiysen: depo o günden beri değişti. **Videoda
-anlatılan her şey hâlâ aynı şekilde çalışıyor** — aşağıdakiler üzerine
-eklendi, hiçbiri mevcut kurulumu bozmuyor.
+Videoyu izleyip buraya geldiysen: depo o günden beri değişti. Mem0'a doğrudan
+yazma yerine aday ve inceleme kapısı geldi. Bu kapıyı kurmak, onu çalıştıracak
+inceleyiciyi ve zamanlayıcıyı kurmak anlamına gelmez; bunlar bağlanmazsa yeni
+bilgiler Mem0'a otomatik gitmez. Mevcut kurulum betiğinin hook kapsamı Claude
+Code'dur. Ortak anayasa dosyası Codex/Gemini için çalışma zamanı hook'u kurmaz.
 
 <details>
 <summary><b>2026-09-04 — Hafıza kapısı: dosyalar kanonik, Mem0 indeks</b></summary>
@@ -64,9 +66,10 @@ bağlıdır, silebilirsin. Ayrıntı: [Mem0 bölümü](#mem0--kalıcı-gerçekle
 
 - **Açılışta hatırlar.** `SessionStart` hook'u son oturum notunu ve aktif iş
   başlıklarını ajanın bağlamına enjekte eder. Sen bir şey yazmadan önce bilir.
-- **Kapanışı zorlar.** 5 mesajı geçen bir oturum, kimlikli ve `[[bağlantılı]]`
-  bir makbuz yazmadan kapanamaz. `Stop`/`PreCompact` kontrolü önce yazmayı
-  ister; son güvenlik ağı eksik oturumu transcript yolu ile listeye alır.
+- **Kapanışta kayıt ister.** 5 mesajı geçen oturumda kimlikli ve `[[bağlantılı]]`
+  makbuz yoksa `Stop`/`PreCompact` kontrolü yazmayı ister. İki denemeden sonra
+  oturumu kilitlemez; son güvenlik ağı eksik oturumu transcript yolu ile
+  listeye alır. Bu liste ayrıca işlenmezse eksik kayıt kendiliğinden tamamlanmaz.
 - **Grafiği bağlı tutar.** Bağlantı denetimi, Obsidian'da gelen veya giden
   bağlantısı olmayan kalıcı notları kapanışta yakalar.
 - **Kural koyar.** `agents.md` bir anayasadır: neyi sormadan yapar, neyi
@@ -99,7 +102,10 @@ verilmiş cevaptır: *her oturum başında masaya ne koyacağız?*
 **3. Hook (kanca) nedir?** Claude Code'a "şu olay olduğunda şu script'i
 çalıştır" diyebilirsin: oturum açılınca, mesaj gönderilince, oturum kapanınca.
 Kritik nokta şu: **hook'u yapay zekâ çalıştırmıyor, program çalıştırıyor.**
-Unutması mümkün değil. Hafızayı iyi niyete değil mekanizmaya bağlayan şey bu.
+Hook etkin ve doğru uygulamaya bağlıysa kontrol program tarafından tetiklenir.
+Devre dışı hook, hatalı yol, kapanan süreç veya yazılmayan makbuz yine eksik
+kayıt bırakabilir. Kurulumu yeni oturum açıp gerçek bir kayıt ve geri çağırma
+denemesiyle doğrulamak gerekir.
 
 **4. Semantik hafıza ne demek?** Tek satırlık gerçekleri saklayan ve kelimeyle
 değil **anlamla** arayan bir katman (bkz. Mem0). "Kullanıcı nasıl cevap sever?"

@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import fcntl
+import functools
 import json
 import os
 import re
@@ -50,6 +52,25 @@ REQUIRED_FIELDS = {
 VALID_KINDS = {"semantic", "episodic", "procedural", "working"}
 VALID_STATUSES = {"active", "quarantined", "superseded", "deleted"}
 VALID_SENSITIVITIES = {"normal", "private", "secret"}
+
+
+def serialized(function):
+    """All local writers share one process lock, including sync/readback."""
+    @functools.wraps(function)
+    def wrapped(vault, *args, **kwargs):
+        directory = vault / "günlük" / "hafıza-makbuzları"
+        directory.mkdir(parents=True, exist_ok=True)
+        with (directory / ".writer.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return function(vault, *args, **kwargs)
+    return wrapped
+
+
+def source_file(vault: Path, relative: str) -> Path:
+    path = (vault / relative).resolve()
+    if not path.is_relative_to(vault.resolve()) or not path.is_file():
+        raise ValueError("kaynak kasa içinde mevcut bir dosya olmalı")
+    return path
 
 
 def resolve_user_id(explicit: str | None = None) -> str:
@@ -106,6 +127,7 @@ def contains_secret(text: str) -> bool:
     return any(pattern.search(text) for pattern in SECRET_PATTERNS)
 
 
+@serialized
 def add_candidate(
     vault: Path,
     *,
@@ -118,9 +140,19 @@ def add_candidate(
     confidence: str,
     sensitivity: str,
     proposed_by: str,
+    evidence: str | None = None,
 ) -> dict[str, Any]:
     if contains_secret(statement):
         raise ValueError("aday gizli bilgi içeriyor")
+    if sensitivity != "normal":
+        raise ValueError("aday kuyruğu yalnız normal duyarlılık kabul eder")
+    if kind not in VALID_KINDS or not statement.strip() or not subject_key.strip():
+        raise ValueError("geçersiz aday alanları")
+    if evidence is not None:
+        if not 10 <= len(evidence) <= 1500 or contains_secret(evidence):
+            raise ValueError("geçersiz veya gizli kaynak kanıtı")
+        if evidence not in source_file(vault, source_path).read_text(encoding="utf-8"):
+            raise ValueError("kanıt kaynak dosyada bulunamadı")
     normalized = " ".join(statement.casefold().split())
     for existing in load_jsonl(vault / CANDIDATE_PATH):
         if " ".join(str(existing.get("statement", "")).casefold().split()) == normalized:
@@ -141,6 +173,9 @@ def add_candidate(
         "created_at": now,
         "schema_version": 1,
     }
+    if evidence is not None:
+        candidate["evidence"] = evidence
+        candidate["evidence_hash"] = statement_hash(evidence)
     _append_jsonl(vault / CANDIDATE_PATH, candidate)
     _append_jsonl(
         vault / EVENT_PATH,
@@ -171,6 +206,7 @@ def assess_candidate(
     return {"result": "eligible"}
 
 
+@serialized
 def promote_candidate(
     vault: Path,
     candidate_id: str,
@@ -194,11 +230,22 @@ def promote_candidate(
     ):
         raise ValueError("aday daha önce terfi ettirilmiş")
     records = load_catalog(vault)
+    if any(r["memory_id"] == memory_id for r in records):
+        raise ValueError("memory_id zaten var")
+    source = source_file(vault, candidate["source_path"])
+    if candidate.get("evidence") is not None:
+        evidence = candidate["evidence"]
+        if statement_hash(evidence) != candidate.get("evidence_hash") or evidence not in source.read_text(encoding="utf-8"):
+            raise ValueError("kaynak kanıtı değişmiş veya kayıp")
+    if candidate.get("sensitivity") != "normal" or contains_secret(candidate["statement"]):
+        raise ValueError("özel veya gizli aday terfi edemez")
     assessment = assess_candidate(candidate, records)
     if assessment["result"] != "eligible" and not (
         assessment["result"] == "conflict" and supersedes
     ):
         raise ValueError(f"aday terfi edemez: {assessment['result']}")
+    if supersedes and (assessment.get("conflicts_with") != supersedes):
+        raise ValueError("supersedes çelişen etkin kayıtla eşleşmeli")
     observed = str(candidate.get("created_at", ""))[:10] or dt.date.today().isoformat()
     record = {
         "memory_id": memory_id,
@@ -222,7 +269,14 @@ def promote_candidate(
     }
     if not apply:
         return {"result": "planned", "record": record}
-    _append_jsonl(vault / CATALOG_PATH, record)
+    for old in records:
+        if old["memory_id"] == supersedes:
+            old["status"] = "superseded"
+            old["valid_to"] = observed
+    errors = validate_catalog(vault, records + [record])
+    if errors:
+        raise ValueError("terfi geçersiz: " + "; ".join(errors))
+    _write_jsonl(vault / CATALOG_PATH, records + [record])
     _append_jsonl(
         vault / EVENT_PATH,
         {
@@ -267,6 +321,7 @@ def memory_metadata(vault: Path, record: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+@serialized
 def sync_existing(
     vault: Path,
     records: list[dict[str, Any]],
@@ -274,6 +329,8 @@ def sync_existing(
     *,
     apply: bool = False,
 ) -> dict[str, Any]:
+    if apply and (vault / CATALOG_PATH).exists() and load_catalog(vault) != records:
+        raise ValueError("katalog eşzamanlı değişmiş; yeniden yükleyip senkronu tekrarla")
     errors = validate_catalog(vault, records)
     if errors:
         raise ValueError("katalog geçersiz: " + "; ".join(errors))
@@ -290,12 +347,24 @@ def sync_existing(
     }
     catalog_changed = False
     for record in records:
-        if record["sensitivity"] == "secret" or contains_secret(record["statement"]):
+        if record["sensitivity"] != "normal" or contains_secret(record["statement"]):
             raise ValueError(f"{record['memory_id']}: gizli bilgi senkronlanamaz")
-        if record["status"] in {"deleted", "superseded"}:
+        if record["status"] in {"deleted", "superseded"} and not record.get("mem0_id"):
             receipt["skipped"] += 1
             continue
         memory_id = record.get("mem0_id")
+        if not memory_id:
+            matches = [item for item in remote.values() if
+                       (item.get("metadata") or {}).get("memory_id") == record["memory_id"]
+                       and (item.get("metadata") or {}).get("source") == "obsidian"
+                       and (item.get("metadata") or {}).get("vault_path") == vault.name]
+            if len(matches) > 1:
+                raise ValueError("aynı memory_id için birden çok uzak kayıt var")
+            if matches:
+                memory_id = matches[0]["id"]
+                if apply:
+                    record["mem0_id"] = memory_id
+                    _write_jsonl(vault / CATALOG_PATH, records)
         current = remote.get(memory_id)
         if not memory_id:
             if record["status"] != "active":
@@ -308,6 +377,9 @@ def sync_existing(
                 memory_id = created["id"]
                 remote[memory_id] = created
                 catalog_changed = True
+                # Persist every add before the next network operation. A retry can
+                # also recover a crash between remote add and this write by metadata.
+                _write_jsonl(vault / CATALOG_PATH, records)
             continue
         if current is None:
             receipt["missing_remote"] += 1
@@ -539,8 +611,8 @@ def validate_catalog(vault: Path, records: list[dict[str, Any]]) -> list[str]:
         statement = str(record["statement"])
         if record["source_hash"] != statement_hash(statement):
             errors.append(f"{memory_id}: source_hash uyuşmuyor")
-        source = vault / str(record["source_path"])
-        if not source.is_file():
+        source = (vault / str(record["source_path"])).resolve()
+        if not source.is_relative_to(vault.resolve()) or not source.is_file():
             errors.append(f"{memory_id}: kaynak yok: {record['source_path']}")
     return errors
 
@@ -692,6 +764,7 @@ def _build_parser() -> argparse.ArgumentParser:
     candidate.add_argument("--confidence", default="explicit-user")
     candidate.add_argument("--sensitivity", default="normal", choices=sorted(VALID_SENSITIVITIES))
     candidate.add_argument("--proposed-by", required=True)
+    candidate.add_argument("--evidence", help="Kaynak dosyada aynen bulunan kısa kullanıcı beyanı")
 
     assess = sub.add_parser("candidate-assess")
     assess.add_argument("candidate_id")
@@ -744,6 +817,7 @@ def main(argv: list[str] | None = None) -> int:
             confidence=args.confidence,
             sensitivity=args.sensitivity,
             proposed_by=args.proposed_by,
+            evidence=args.evidence,
         )
         _json_print(result)
         return 0
