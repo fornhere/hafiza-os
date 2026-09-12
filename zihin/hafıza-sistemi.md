@@ -26,6 +26,10 @@ aday önerir. Kaynağı, altı-ay testini, sırrı, tekrarı ve `subject_key`
 çelişkisini kontrol eden tek merci ana ajandır. Aday ancak `reviewed_by` alanı
 bulunan açık bir terfi işlemiyle kataloğa geçer. Otomatik terfi kapalıdır.
 
+İsteğe bağlı Codex düzenli incelemesi ayrıca etkinleştirildiğinde bu inceleme
+rolü `codex-consolidator` olur; kaynak ve açık inceleme kapısı korunur.
+Kurulum adımları: `CODEX.md`; işleyiş: [[komuta/hafıza-konsolidasyonu]].
+
 Kuyruk ve `günlük/hafıza-olayları.jsonl` eklemelidir; geçmiş satırlar silinmez.
 Mem0 silme işlemi ayrıca açık onay ve `forget --apply` gerektirir.
 

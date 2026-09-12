@@ -22,22 +22,24 @@ Sihir yok. Birkaç markdown dosyası, beş hook ve bir anayasa.
 
 ## Videodan sonraki güncellemeler
 
-Videoyu izleyip buraya geldiysen: depo o günden beri değişti. Mem0'a doğrudan
-yazma yerine aday ve inceleme kapısı geldi. Bu kapıyı kurmak, onu çalıştıracak
-inceleyiciyi ve zamanlayıcıyı kurmak anlamına gelmez; bunlar bağlanmazsa yeni
-bilgiler Mem0'a otomatik gitmez. Mevcut kurulum betiğinin hook kapsamı Claude
-Code'dur. Ortak anayasa dosyası Codex/Gemini için çalışma zamanı hook'u kurmaz.
+Hafıza OS, videodaki dosya temelli yapının üzerine yeni araçlar ekleyerek
+gelişiyor. 12 Eylül paketi; isteğe bağlı Codex bağlantısı, kaynaklı aday
+incelemesi, sürümlü iş ve ders defterleri ve görünür sağlık raporunu getiriyor.
+
+- [12 Eylül güncelleme notları](GUNCELLEMELER.md)
+- [Codex ve konsolidasyon kurulumu](CODEX.md)
+
+Mevcut Claude Code kurulumunu kullanmaya devam edebilirsin. Yeni Codex
+bağlantısı ve saatlik inceleme isteğe bağlı olarak ayrıca etkinleştirilir.
 
 <details>
 <summary><b>2026-09-04 — Hafıza kapısı: dosyalar kanonik, Mem0 indeks</b></summary>
 
 <br>
 
-Videoda Mem0'a doğrudan yazıyorduk. Kullandıkça çıkan sorun şuydu: Mem0'un
-çıkarım yolu **eklemeli** — bir gerçeği düzeltmek için yeniden yazdığında eski
-kayıt silinmiyor, ikisi yan yana yaşıyor ve ikisi de geri çağrılıyor.
-
-Çözüm yeni bir hafıza servisi değil, araya bir **kapı** koymak oldu:
+Bu güncellemede Mem0 kayıtlarına kaynak, kimlik ve inceleme katmanı eklendi.
+Obsidian kanonik kaynak, Mem0 ise onaylanmış bilgilerin erişim indeksi olarak
+konumlandırıldı. **Hafıza kapısı** şu parçaları bir araya getiriyor:
 
 - **`araclar/hafiza.py`** — kalıcı gerçekleri kimliklendiren tek giriş noktası.
   Her kayıt kaynağına, içerik hash'ine ve karşılık geldiği `mem0_id`'ye bağlı.

@@ -6,6 +6,9 @@
 
 # Oturum durumu — sayaç, başlangıç saati, ihmal işareti (kalıcı değil)
 .claude/durum/
+gelen-kutusu/codex-oturumları/.state/
+gelen-kutusu/codex-oturumları/.lock
+günlük/hafıza-makbuzları/
 
 # --- Sır dosyaları — asla takip edilmez ---
 # Anahtarlar bu deponun dışında yaşar (bkz. komuta/anahtarlar.md).

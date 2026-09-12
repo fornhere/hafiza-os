@@ -151,6 +151,11 @@ ana ajandır. Terfi `reviewed_by` alanı olmadan reddedilir — otomatik terfi
 kapalıdır. Tek ajanla çalışıyorsan bile bu kural, bir çıkarımın kendi kendini
 kalıcı gerçeğe dönüştürmesini engeller.
 
+İsteğe bağlı [Codex konsolidasyonu](CODEX.md) açıkça etkinleştirildiğinde ana
+inceleme rolünü `codex-consolidator` yürütür. Kaynak kanıtı, kalıcılık ve
+tekrar incelemesi yine zorunludur; çelişkili aday otomatik terfi etmez.
+Görev ajanı doğrudan kalıcı yazıcıya dönüşmez.
+
 ### Araç
 
 Bütün hafıza işlemleri `araclar/hafiza.py` üzerinden yapılır. Mem0 MCP
