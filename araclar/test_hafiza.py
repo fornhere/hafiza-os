@@ -49,9 +49,9 @@ class HafizaDogrulamaTesti(unittest.TestCase):
             vault = Path(tmp)
             (vault / "zihin").mkdir()
             (vault / "zihin" / "kaynak.md").write_text("# Kaynak\n", encoding="utf-8")
-            statement = "Kullanıcı Türkçe iletişimi tercih eder."
+            statement = "Forn Türkçe iletişimi tercih eder."
             record = {
-                "memory_id": "ornek-pref-language",
+                "memory_id": "forn-pref-language",
                 "kind": "semantic",
                 "scope": "user",
                 "subject_key": "communication.language",
@@ -67,7 +67,7 @@ class HafizaDogrulamaTesti(unittest.TestCase):
                 "sensitivity": "normal",
                 "mem0_id": "11111111-1111-1111-1111-111111111111",
                 "supersedes": None,
-                "reviewed_by": "kullanici",
+                "reviewed_by": "forn",
                 "schema_version": 1,
             }
             (vault / "zihin" / "hafıza-kataloğu.jsonl").write_text(
@@ -101,7 +101,7 @@ class HafizaDogrulamaTesti(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
             kwargs = {
-                "statement": "Kullanıcı dosya adlarında Türkçe kullanır.",
+                "statement": "Forn dosya adlarında Türkçe kullanır.",
                 "kind": "semantic",
                 "scope": "user",
                 "subject_key": "files.naming-language",
@@ -126,9 +126,9 @@ class HafizaDogrulamaTesti(unittest.TestCase):
             vault = Path(tmp)
             (vault / "zihin").mkdir()
             (vault / "zihin" / "kaynak.md").write_text("# Kaynak\n", encoding="utf-8")
-            statement = "Kullanıcı Türkçe iletişimi tercih eder."
+            statement = "Forn Türkçe iletişimi tercih eder."
             record = {
-                "memory_id": "ornek-pref-language",
+                "memory_id": "forn-pref-language",
                 "kind": "semantic",
                 "scope": "user",
                 "subject_key": "communication.language",
@@ -144,7 +144,7 @@ class HafizaDogrulamaTesti(unittest.TestCase):
                 "sensitivity": "normal",
                 "mem0_id": "11111111-1111-1111-1111-111111111111",
                 "supersedes": None,
-                "reviewed_by": "kullanici",
+                "reviewed_by": "forn",
                 "schema_version": 1,
             }
             client = FakeMem0([
@@ -167,9 +167,9 @@ class HafizaDogrulamaTesti(unittest.TestCase):
             vault = Path(tmp)
             (vault / "zihin").mkdir()
             (vault / "zihin" / "kaynak.md").write_text("# Kaynak\n", encoding="utf-8")
-            statement = "Kullanıcı açıklayıcı dosya adlarını tercih eder."
+            statement = "Forn açıklayıcı dosya adlarını tercih eder."
             record = {
-                "memory_id": "ornek-pref-file-names",
+                "memory_id": "forn-pref-file-names",
                 "kind": "semantic",
                 "scope": "user",
                 "subject_key": "files.naming-style",
@@ -185,7 +185,7 @@ class HafizaDogrulamaTesti(unittest.TestCase):
                 "sensitivity": "normal",
                 "mem0_id": None,
                 "supersedes": None,
-                "reviewed_by": "kullanici",
+                "reviewed_by": "forn",
                 "schema_version": 1,
             }
             (vault / hafiza.CATALOG_PATH).write_text(
@@ -202,7 +202,7 @@ class HafizaDogrulamaTesti(unittest.TestCase):
 
     def test_unutma_onaysiz_silmez(self):
         record = {
-            "memory_id": "ornek-pref-language",
+            "memory_id": "forn-pref-language",
             "mem0_id": "11111111-1111-1111-1111-111111111111",
         }
         client = FakeMem0([{"id": record["mem0_id"], "memory": "x", "metadata": {}}])
@@ -216,9 +216,9 @@ class HafizaDogrulamaTesti(unittest.TestCase):
         client = FakeMem0([], search_results=[
             {
                 "id": "a",
-                "memory": "Kullanıcı Türkçe iletişimi tercih eder.",
+                "memory": "Forn Türkçe iletişimi tercih eder.",
                 "metadata": {
-                    "memory_id": "ornek-pref-language",
+                    "memory_id": "forn-pref-language",
                     "status": "active",
                     "scope": "user",
                     "source_path": "zihin/çekirdek.md",
@@ -243,7 +243,7 @@ class HafizaDogrulamaTesti(unittest.TestCase):
             char_budget=300,
         )
 
-        self.assertIn("ornek-pref-language", package["text"])
+        self.assertIn("forn-pref-language", package["text"])
         self.assertNotIn("Geçici proje", package["text"])
         self.assertLessEqual(len(package["text"]), 300)
         self.assertEqual(1, package["included"])
@@ -252,16 +252,16 @@ class HafizaDogrulamaTesti(unittest.TestCase):
         client = FakeMem0([], search_results=[
             {
                 "id": "a",
-                "memory": "Kullanıcı Türkçe iletişimi tercih eder.",
-                "metadata": {"memory_id": "ornek-pref-language", "status": "active"},
+                "memory": "Forn Türkçe iletişimi tercih eder.",
+                "metadata": {"memory_id": "forn-pref-language", "status": "active", "scope": "user"},
                 "score": 0.91,
             }
         ])
         cases = [{
             "id": "dil-1",
-            "query": "Kullanıcı ile hangi dilde konuşmalıyım?",
+            "query": "Forn ile hangi dilde konuşmalıyım?",
             "scope": "user",
-            "expected_memory_ids": ["ornek-pref-language"],
+            "expected_memory_ids": ["forn-pref-language"],
             "forbidden_memory_ids": [],
             "top_k": 3,
         }]
@@ -275,28 +275,28 @@ class HafizaDogrulamaTesti(unittest.TestCase):
 
     def test_konsolidasyon_ayni_konudaki_farkli_ifadeyi_celiski_sayar(self):
         existing = [{
-            "memory_id": "ornek-pref-language",
+            "memory_id": "forn-pref-language",
             "subject_key": "communication.language",
-            "statement": "Kullanıcı Türkçe iletişimi tercih eder.",
+            "statement": "Forn Türkçe iletişimi tercih eder.",
             "status": "active",
         }]
         candidate = {
             "candidate_id": "c1",
             "subject_key": "communication.language",
-            "statement": "Kullanıcı İngilizce iletişimi tercih eder.",
+            "statement": "Forn İngilizce iletişimi tercih eder.",
         }
 
         assessment = hafiza.assess_candidate(candidate, existing)
 
         self.assertEqual("conflict", assessment["result"])
-        self.assertEqual("ornek-pref-language", assessment["conflicts_with"])
+        self.assertEqual("forn-pref-language", assessment["conflicts_with"])
 
     def test_terfi_inceleyen_olmadan_katalog_yazmaz(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
             hafiza.add_candidate(
                 vault,
-                statement="Kullanıcı kısa ve net cevapları tercih eder.",
+                statement="Forn kısa ve net cevapları tercih eder.",
                 kind="semantic",
                 scope="user",
                 subject_key="communication.conciseness",
@@ -312,7 +312,7 @@ class HafizaDogrulamaTesti(unittest.TestCase):
                 hafiza.promote_candidate(
                     vault,
                     candidate["candidate_id"],
-                    memory_id="ornek-pref-conciseness",
+                    memory_id="forn-pref-conciseness",
                     reviewed_by=None,
                     apply=True,
                 )
@@ -324,9 +324,9 @@ class HafizaDogrulamaTesti(unittest.TestCase):
             vault = Path(tmp)
             (vault / "zihin").mkdir()
             (vault / "zihin" / "kaynak.md").write_text("# Kaynak\n", encoding="utf-8")
-            statement = "Kullanıcı Türkçe iletişimi tercih eder."
+            statement = "Forn Türkçe iletişimi tercih eder."
             record = {
-                "memory_id": "ornek-pref-language",
+                "memory_id": "forn-pref-language",
                 "kind": "semantic",
                 "scope": "user",
                 "subject_key": "communication.language",
@@ -342,7 +342,7 @@ class HafizaDogrulamaTesti(unittest.TestCase):
                 "sensitivity": "normal",
                 "mem0_id": "11111111-1111-1111-1111-111111111111",
                 "supersedes": None,
-                "reviewed_by": "kullanici",
+                "reviewed_by": "forn",
                 "schema_version": 1,
             }
             client = FakeMem0([

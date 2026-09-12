@@ -458,6 +458,50 @@ def audit(vault: Path, records: list[dict[str, Any]], client: Any) -> dict[str, 
     }
 
 
+def retrievable(metadata: dict[str, Any], scope: str | None = None) -> bool:
+    if metadata.get("status") != "active" or metadata.get("sensitivity", "normal") != "normal":
+        return False
+    if scope is not None and metadata.get("scope") not in {"user", scope}:
+        return False
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    # ISO dates sort chronologically; reject malformed validity dates.
+    for field in ("valid_from", "valid_to"):
+        value = metadata.get(field)
+        if value:
+            try:
+                date = dt.date.fromisoformat(str(value)[:10]).isoformat()
+            except ValueError:
+                return False
+            if field == "valid_from" and date > today:
+                return False
+            if field == "valid_to" and date <= today:
+                return False
+    return True
+
+
+def context_from_results(results, *, query, scope, limit=5, char_budget=1200):
+    lines = []
+    selected_ids = []
+    for item in results:
+        metadata = item.get("metadata") or {}
+        if not retrievable(metadata, scope):
+            continue
+        memory_id = metadata.get("memory_id") or item.get("id", "unknown")
+        source = metadata.get("source_path", "kaynak-yok")
+        block = metadata.get("block_id", "")
+        suffix = f"#{block}" if block else ""
+        line = (f"- [{memory_id}] {item.get('memory', '')} "
+                f"(kaynak: {source}{suffix}; tarih: {metadata.get('observed_at', 'bilinmiyor')}; "
+                f"güven: {metadata.get('confidence', 'bilinmiyor')})")
+        if len("\n".join(lines + [line])) > char_budget:
+            continue
+        lines.append(line); selected_ids.append(str(memory_id))
+        if len(lines) >= limit:
+            break
+    return dict(query=query, scope=scope, included=len(lines), memory_ids=selected_ids,
+                char_budget=char_budget, text="\n".join(lines))
+
+
 def build_context_package(
     client: Any,
     *,
@@ -474,39 +518,7 @@ def build_context_package(
         top_k=max(limit * 3, limit),
         threshold=threshold,
     )
-    lines: list[str] = []
-    selected_ids: list[str] = []
-    for item in results:
-        metadata = item.get("metadata") or {}
-        if metadata.get("status") != "active":
-            continue
-        item_scope = metadata.get("scope")
-        if item_scope not in {"user", scope}:
-            continue
-        memory_id = metadata.get("memory_id") or item.get("id", "unknown")
-        source = metadata.get("source_path", "kaynak-yok")
-        block = metadata.get("block_id", "")
-        suffix = f"#{block}" if block else ""
-        line = (
-            f"- [{memory_id}] {item.get('memory', '')} "
-            f"(kaynak: {source}{suffix}; tarih: {metadata.get('observed_at', 'bilinmiyor')}; "
-            f"güven: {metadata.get('confidence', 'bilinmiyor')})"
-        )
-        candidate_text = "\n".join(lines + [line])
-        if len(candidate_text) > char_budget:
-            continue
-        lines.append(line)
-        selected_ids.append(str(memory_id))
-        if len(lines) >= limit:
-            break
-    return {
-        "query": query,
-        "scope": scope,
-        "included": len(lines),
-        "memory_ids": selected_ids,
-        "char_budget": char_budget,
-        "text": "\n".join(lines),
-    }
+    return context_from_results(results, query=query, scope=scope, limit=limit, char_budget=char_budget)
 
 
 def evaluate_retrieval(
@@ -531,11 +543,14 @@ def evaluate_retrieval(
         found = [
             str((item.get("metadata") or {}).get("memory_id"))
             for item in results
-            if (item.get("metadata") or {}).get("status") == "active"
+            if retrievable(item.get("metadata") or {}, case.get("scope", "user"))
         ]
         expected = set(case.get("expected_memory_ids", []))
         forbidden = set(case.get("forbidden_memory_ids", []))
         passed = expected.issubset(found) and forbidden.isdisjoint(found)
+        package = context_from_results(results, query=case["query"], scope=case.get("scope", "user"),
+            limit=int(case.get("top_k", 5)), char_budget=int(case.get("char_budget", 1200)))
+        context_ids = set(package["memory_ids"])
         details.append(
             {
                 "id": case["id"],
@@ -543,6 +558,8 @@ def evaluate_retrieval(
                 "found": found,
                 "missing": sorted(expected - set(found)),
                 "forbidden_found": sorted(forbidden.intersection(found)),
+                "context_passed": expected.issubset(context_ids) and forbidden.isdisjoint(context_ids),
+                "context_missing": sorted(expected - context_ids),
             }
         )
     passed_count = sum(1 for item in details if item["passed"])
@@ -552,13 +569,16 @@ def evaluate_retrieval(
         "passed": passed_count,
         "failed": total - passed_count,
         "accuracy": passed_count / total if total else 0.0,
+        "context_passed": sum(1 for item in details if item["context_passed"]),
+        "context_accuracy": sum(1 for item in details if item["context_passed"]) / total if total else 0.0,
         "mean_latency_ms": sum(latencies) / len(latencies) if latencies else 0.0,
         "details": details,
     }
 
 
 def evaluation_passes(report: dict[str, Any], *, minimum_accuracy: float = 0.9) -> bool:
-    return float(report.get("accuracy", 0.0)) >= minimum_accuracy
+    accuracy = float(report.get("accuracy", 0.0))
+    return accuracy >= minimum_accuracy and float(report.get("context_accuracy", accuracy)) >= minimum_accuracy
 
 
 def forget_remote(
@@ -666,7 +686,7 @@ class Mem0HttpClient:
                 "filters": filters,
                 "top_k": top_k,
                 "threshold": threshold,
-                "rerank": False,
+                "rerank": True,
             },
         )
         return result.get("results", result) if isinstance(result, dict) else result
