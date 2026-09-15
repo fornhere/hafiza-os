@@ -72,7 +72,7 @@ def clean_user(text):
 
 def sessions(vault, root, since, quiet_minutes=20):
     """Only paths/counts/hashes escape: never copy raw conversations into memory."""
-    seen = {e.get('source_hash') for e in h.load_jsonl(vault / h.EVENT_PATH)
+    seen = {(e.get('session_id'), e.get('source_hash')) for e in h.load_jsonl(vault / h.EVENT_PATH)
             if e.get('event_type') == 'session.inspected'}
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     grouped = {}
@@ -80,26 +80,28 @@ def sessions(vault, root, since, quiet_minutes=20):
         for path in (root / directory).rglob('*.jsonl'):
             if path.stat().st_mtime < since.timestamp() or now - path.stat().st_mtime < quiet_minutes * 60:
                 continue
-            meta = {}; users = {}
+            meta = None; users = {}
             for raw in path.read_text(encoding='utf-8').splitlines():
                 try:
                     item = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
                 p = item.get('payload', {})
-                if item.get('type') == 'session_meta':
+                # The first metadata record owns this rollout. Later records may
+                # belong to history copied from a parent into a subagent.
+                if item.get('type') == 'session_meta' and meta is None:
                     meta = p
                 if item.get('type') == 'response_item' and p.get('type') == 'message' and p.get('role') == 'user':
                     text = clean_user('\n'.join(c.get('text', '') for c in p.get('content', []) if isinstance(c, dict)))
                     if text:
                         identity = p.get('id') or str(item.get('timestamp')) + text
                         users[identity] = text
-            if meta.get('source') not in ('cli', 'vscode') or not meta.get('id'):
+            if not meta or meta.get('source') not in ('cli', 'vscode') or not meta.get('id'):
                 continue
             if len(users) <= 5:
                 continue
             digest = h.statement_hash(json.dumps(users, ensure_ascii=False, sort_keys=True))
-            if digest in seen:
+            if (meta['id'], digest) in seen:
                 continue
             row = {'session_id': meta['id'], 'path': str(path), 'user_count': len(users),
                    'source_hash': digest, 'last_modified': path.stat().st_mtime}

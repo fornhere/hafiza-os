@@ -117,4 +117,36 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([], k.sessions(self.vault, root, since, 0))
 
 
+
+    def test_rollout_owner_survives_inherited_metadata(self):
+        root = self.vault / 'codex'; (root / 'sessions').mkdir(parents=True)
+        messages = [dict(type='response_item', timestamp=str(i), payload=dict(
+            type='message', role='user', content=[dict(text='Gerçek istek')])) for i in range(6)]
+        parent = dict(type='session_meta', payload=dict(id='parent', source='vscode'))
+        child = dict(type='session_meta', payload=dict(id='child', source={
+            'subagent': {'thread_spawn': {'parent_thread_id': 'parent'}}}))
+        for name, items in [('parent', [parent] + messages),
+                            ('child', [child, parent] + messages)]:
+            path = root / 'sessions' / (name + '.jsonl')
+            path.write_text('\n'.join(json.dumps(x) for x in items))
+        since = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+        rows = k.sessions(self.vault, root, since, 0)
+        self.assertEqual(['parent'], [r['session_id'] for r in rows])
+        self.assertEqual('parent.jsonl', Path(rows[0]['path']).name)
+
+    def test_checkpoint_is_scoped_to_session_identity(self):
+        root = self.vault / 'codex'; (root / 'sessions').mkdir(parents=True)
+        messages = [dict(type='response_item', timestamp=str(i), payload=dict(
+            type='message', role='user', content=[dict(text='Aynı gerçek istek')])) for i in range(6)]
+        for ident in ('first', 'second'):
+            items = [dict(type='session_meta', payload=dict(id=ident, source='vscode'))] + messages
+            (root / 'sessions' / (ident + '.jsonl')).write_text(
+                '\n'.join(json.dumps(x) for x in items))
+        since = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+        rows = k.sessions(self.vault, root, since, 0)
+        self.assertEqual(2, len(rows))
+        inspected = next(r for r in rows if r['session_id'] == 'first')
+        k.checkpoint(self.vault, dict(inspected, reason='Bu oturum incelendi; kalıcı aday yok.'))
+        self.assertEqual(['second'], [r['session_id'] for r in k.sessions(self.vault, root, since, 0)])
+
 if __name__ == '__main__': unittest.main()
