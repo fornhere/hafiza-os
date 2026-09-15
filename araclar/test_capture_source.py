@@ -1,0 +1,96 @@
+import datetime as dt
+import json
+from pathlib import Path
+import tempfile
+import unittest
+import capture_source as c
+import konsolidasyon as k
+import codex_hafiza as hook
+
+class Capture(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.v=Path(self.tmp.name);self.root=self.v/'codex';(self.root/'sessions').mkdir(parents=True)
+        self.p=self.root/'sessions/a.jsonl'
+        self.rows=[dict(type='session_meta',payload=dict(id='s',source='vscode'))]
+        self.rows += [dict(type='response_item',timestamp=str(i),payload=dict(type='message',role='user',content=[dict(text='Gerçek istek '+str(i))])) for i in range(6)]
+    def save(self): self.p.write_text('\n'.join(map(json.dumps,self.rows)))
+    def event(self,typ,turn='t6'): self.rows.append(dict(type='event_msg',payload=dict(type=typ,turn_id=turn)))
+    def test_wrapper(self):
+        self.assertEqual('kapak yap',c.clean_user('<in-app-browser-context source="ambient">OBS</in-app-browser-context>\n## My request:\nkapak yap'))
+        self.assertEqual('',c.clean_user('<in-app-browser-context>OBS</in-app-browser-context>'))
+    def test_late_result_noise_and_gate(self):
+        self.event('task_started');self.save();before=c.snapshot(self.p)
+        with self.assertRaises(ValueError): c.validate_source(self.v,'s',before)
+        self.event('task_complete');self.save();after=c.snapshot(self.p)
+        self.assertNotEqual(before['source_hash'],after['source_hash'])
+        self.event('token_count');self.save();self.assertEqual(after['source_hash'],c.snapshot(self.p)['source_hash'])
+        c.validate_source(self.v,'s',after)
+    def test_earlier_unresolved_does_not_block_later_complete(self):
+        self.event('task_started','old');self.event('task_started');self.event('task_complete');self.save()
+        self.assertEqual('completed',c.snapshot(self.p)['activity_state'])
+    def test_checkpoint_receipt_and_changed_source(self):
+        self.event('task_complete');self.save();snap=c.snapshot(self.p)
+        data=dict(snap,outcome='recorded',reason='Anlamlı sonuç kaynakta kontrol edildi.')
+        with self.assertRaises(ValueError): k.checkpoint(self.v,data)
+        hook.record(self.v,'s','recovery-v2-'+snap['source_hash'],'Anlamlı iş sonucu ve kontrol edilen kalan işler.',[],snap)
+        k.checkpoint(self.v,data)
+        self.assertEqual([],k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0))
+        self.event('task_started','new');self.event('task_complete','new');self.save()
+        with self.assertRaises(ValueError): k.checkpoint(self.v,data)
+    def test_threshold_and_policy(self):
+        with self.assertRaises(ValueError): hook.record(self.v,'s','t','Eşik aşılmadan kayıt yapılmamalıdır.')
+        self.assertFalse(c.apply_prompt_policy(self.v,'s','"hafızaya kaydetme" komutu nasıl çalışır?'))
+        self.assertTrue(c.apply_prompt_policy(self.v,'s','Kanka, bu oturumu kaydetme.'))
+        self.event('task_complete');self.save()
+        with self.assertRaises(ValueError): c.validate_source(self.v,'s',c.snapshot(self.p))
+    def test_legacy_and_malformed_diagnostics(self):
+        self.event('task_complete');self.save()
+        rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0)
+        self.assertEqual(1,len(rows))
+        self.p.write_text(self.p.read_text()+'\n{broken')
+        diagnostics=[];rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,diagnostics)
+        self.assertEqual('unknown',rows[0]['activity_state']);self.assertTrue(diagnostics)
+
+    def test_user_after_terminal_without_start_is_active(self):
+        self.event('task_complete');self.rows.append(dict(type='response_item',timestamp='later',payload=dict(type='message',role='user',content=[dict(text='Yeni gerçek istek')])));self.save()
+        self.assertEqual('active',c.snapshot(self.p)['activity_state'])
+    def test_legacy_terminal_final_edit_changes_hash(self):
+        self.event('task_complete');self.rows[-1]['payload']['last_agent_message']='İlk gerçek sonuç';self.save();before=c.snapshot(self.p)
+        self.rows[-1]['payload']['last_agent_message']='Düzeltilmiş gerçek sonuç';self.save()
+        self.assertNotEqual(before['source_hash'],c.snapshot(self.p)['source_hash'])
+    def test_empty_receipt_and_wrong_recovery_key_rejected(self):
+        self.event('task_complete');self.save();snap=c.snapshot(self.p)
+        with self.assertRaises(ValueError): hook.record(self.v,'s','recovery-wrong','Anlamlı gerçek iş sonucu kaydı.',[],snap)
+        path,_=hook.paths(self.v,'s','recovery-v2-'+snap['source_hash']);path.parent.mkdir(parents=True);path.write_text('')
+        with self.assertRaises(ValueError): k.checkpoint(self.v,dict(snap,outcome='recorded',reason='Gerçek makbuz kontrolü gereklidir.'))
+    def test_malformed_utf8_reported(self):
+        self.save();self.p.write_bytes(self.p.read_bytes()+b'\xff')
+        errors=[];self.assertEqual([],k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,errors));self.assertTrue(errors)
+
+    def test_empty_started_session_is_not_parser_failure(self):
+        self.rows=self.rows[:1];self.event('task_started');self.save()
+        errors=[];rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,errors)
+        self.assertEqual([],rows);self.assertEqual([],errors)
+    def test_actionable_rows_precede_old_active_rows(self):
+        from unittest.mock import patch
+        for i in range(12): (self.root/'sessions'/f'{i}.jsonl').write_text('{}')
+        def fake(path):
+            i=int(path.stem)
+            return dict(session_id=str(i),source_hash=str(i),user_count=6,
+                        activity_state='completed' if i==11 else 'active',last_modified=i)
+        with patch.object(k,'snapshot',side_effect=fake):
+            rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0)
+        self.assertEqual('11',rows[0]['session_id']);self.assertEqual(10,len(rows))
+    def test_ambiguity_survives_third_identical_copy(self):
+        from unittest.mock import patch
+        for i in range(3): (self.root/'sessions'/f'{i}.jsonl').write_text('{}')
+        calls=iter(['A','B','B'])
+        def fake(path):
+            return dict(session_id='s',source_hash=next(calls),user_count=6,
+                        activity_state='completed',last_modified=1)
+        with patch.object(k,'snapshot',side_effect=fake):
+            rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0)
+        self.assertEqual('ambiguous',rows[0]['activity_state'])
+
+if __name__=='__main__':unittest.main()

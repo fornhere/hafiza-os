@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "araclar/capture_source.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/codex_hafiza.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/ders_baglam.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/gorev_baglam.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/hafiza.py",
+      "mode": "reviewed-variant",
+      "reason": "Private default identity versus configurable public default only.",
+      "local_sha256": "7f7069f4204810e49b71ba32697fe6bc8b91ea4b63896490f8f4229f30a406f0",
+      "public_sha256": "81df9ce76c66b6e2b87d18df0a4f7273844def6906730093f1aa596c1d417a30"
+    },
+    {
+      "path": "araclar/hafiza_git.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/hafiza_saglik.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/is_ve_ders.py",
+      "mode": "reviewed-variant",
+      "reason": "Public empty-vault guard and generic archive path versus installed vault archive.",
+      "local_sha256": "552a26dbfc02e33e8f2ae1473611bacf8f6e2c74e7d05afe55e773e87c855a86",
+      "public_sha256": "0fbdd97a5b77d32d29e6b9f33256841bf2978925bb6c5c6fca2d53f187ed03a7"
+    },
+    {
+      "path": "araclar/konsolidasyon.py",
+      "mode": "reviewed-variant",
+      "reason": "Private historic exclusion, identity prefix and import start date versus generic defaults.",
+      "local_sha256": "9fc77974c04e34e771f95b8e2af8c046b8344a81b7524e221cbbce4f8960e4fb",
+      "public_sha256": "84e8c3c41248a7a3e5c84714509407fd9aaf0338097d7833de9cd5ccf10e7bad"
+    },
+    {
+      "path": "araclar/kullanim_kontrol.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/yayinla.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/fayda_olc.py",
+      "mode": "shared"
+    }
+  ]
+}

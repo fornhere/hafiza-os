@@ -798,6 +798,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     context = sub.add_parser("context")
     context.add_argument("query")
+    context.add_argument("--remote", action="store_true", help="İsteğe bağlı Mem0 sıralaması; hata halinde yerel erişim")
     context.add_argument("--scope", default="user")
     context.add_argument("--limit", type=int, default=5)
     context.add_argument("--char-budget", type=int, default=1200)
@@ -862,12 +863,35 @@ def main(argv: list[str] | None = None) -> int:
         _json_print(result)
         return 0
 
+    if args.command == "context":
+        from gorev_baglam import hydrate_remote, tokens
+        errors = validate_catalog(vault, records)
+        valid = [row for row in records if retrievable(row, args.scope) and not validate_catalog(vault, [row])]
+        words = tokens(args.query)
+        ranked = sorted(valid, key=lambda row: len(words & tokens(row['statement'])), reverse=True)
+        results = [{'memory':row['statement'], 'metadata':row} for row in ranked if words & tokens(row['statement'])]
+        mode = 'local'; fallback = None
+        if args.remote:
+            try:
+                client = Mem0HttpClient(load_api_key(), user_id=resolve_user_id(args.user_id))
+                remote = client.search_memories(args.query, filters={'user_id':client.user_id}, top_k=max(args.limit*3,args.limit), threshold=args.threshold)
+                remote_results = hydrate_remote(vault, remote, args.scope)
+                seen = {item['metadata']['memory_id'] for item in remote_results}
+                results = remote_results + [item for item in results if item['metadata']['memory_id'] not in seen]
+                mode = 'remote+local'
+            except (Exception,) as exc:
+                fallback = type(exc).__name__
+        result = context_from_results(results, query=args.query, scope=args.scope, limit=args.limit, char_budget=args.char_budget)
+        result.update(mode=mode, fallback_reason=fallback, catalog_errors=errors)
+        _json_print(result)
+        return 1 if errors else 0
+
     client = Mem0HttpClient(load_api_key(), user_id=resolve_user_id(args.user_id))
     if args.command == "audit":
         result = audit(vault, records, client)
         result["receipt"] = str(write_receipt(vault, "audit", result).relative_to(vault))
         _json_print(result)
-        return 1 if result["catalog_errors"] or result["missing_remote"] or result["drifted"] else 0
+        return 1 if any(result[k] for k in ("catalog_errors", "missing_remote", "drifted", "orphan_remote_ids", "duplicate_remote_groups")) else 0
 
     if args.command == "sync":
         result = sync_existing(vault, records, client, apply=args.apply)
@@ -875,20 +899,6 @@ def main(argv: list[str] | None = None) -> int:
         _json_print(result)
         expected = sum(1 for record in records if record.get("mem0_id") or (args.apply and record["status"] == "active"))
         return 0 if result["verified"] == expected else 1
-
-    if args.command == "context":
-        _json_print(
-            build_context_package(
-                client,
-                query=args.query,
-                scope=args.scope,
-                limit=args.limit,
-                char_budget=args.char_budget,
-                user_id=client.user_id,
-                threshold=args.threshold,
-            )
-        )
-        return 0
 
     if args.command == "eval":
         path = args.file if args.file.is_absolute() else vault / args.file

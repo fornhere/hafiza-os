@@ -1,3 +1,20 @@
+# 15 Eylül 2026 — Kaynak sürümü, görev bağlamı ve doğrulama
+
+- Tamamlanan oturumların mesajları ve son sonuçları sürümlenir; kayıt ve
+  inceleme işareti aynı kaynak görüntüsüne bağlanır. İlk beş mesaj kapısı korunur.
+- Yerel görev paketleri ilgili proje, kaynaklı açık iş, onaylı varlık ve
+  uygulanabilir yöntemi bir araya getirir. Mem0 isteğe bağlı sıralama katmanıdır.
+- Sağlık durumu tarama ve uzak denetim yaşını izler; eksik, eski ve başarısız
+  denetim ayrı görünür. Sessiz arka plan akışı sürer.
+- Araç girdisi, gözlenen çağrı ve kullanıcı kabulü ayrı doğrulanır.
+- Yayın aracı yerel/şablon eşleşmesini, commit içeriğini ve testleri kontrol
+  ederek GitHub uzak commit'ini doğrular. CI aynı commit testlerini çalıştırır.
+- Gerçek görev deneyleri için eksik ölçümleri ve başarısız işleri koruyan
+  karşılaştırma aracı eklendi; henüz ölçülmüş verim artışı iddiası yoktur.
+
+Geçiş: [CODEX.md](CODEX.md), [kullanım kontrolü](KULLANIM-DOGRULAMA.md),
+[yayınlama](YAYINLAMA.md), [fayda ölçümü](FAYDA-OLCUMU.md).
+
 # 15 Eylül 2026 — Oturum kimliği ve konsolidasyon
 
 - Oturum taramasında dosyanın ilk kimlik kaydı esas alınır; alt ajanların

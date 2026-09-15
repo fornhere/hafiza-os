@@ -21,20 +21,11 @@ def now():
 
 
 def opening_brief(vault):
-    parts = []
-    for relative in ('komuta/bu-hafta.md', 'zihin/açık-işler.md'):
-        if relative == 'zihin/açık-işler.md' and (vault / 'zihin/is-durumu.jsonl').exists():
-            from is_ve_ders import brief
-            tasks = brief(vault)
-            parts.append('## Güncel, teyitli açık işler\n' + ('\n'.join(
-                f"- {t['title']}: {t['next_step']} (kaynak: {t['source_path']}; teyit: {t['last_verified']})"
-                for t in tasks) or 'Güncel teyitli açık iş yok; eski işi kendiliğinden açma.'))
-            continue
-        path = vault / relative
-        if path.exists():
-            parts.append(f'## {relative}\n' + path.read_text()[:3600])
-        else:
-            parts.append(f'{relative} bulunamadı; iş veya öncelik uydurma.')
+    from is_ve_ders import brief
+    tasks = brief(vault)
+    parts = ['## Güncel, teyitli açık işler\n' + ('\n'.join(
+        f"- {t['title']}: {t['next_step']} (kaynak: {t['source_path']}; teyit: {t['last_verified']})"
+        for t in tasks) or 'Güncel teyitli açık iş yok; eski işi kendiliğinden açma.')]
     return ('AÇILIŞ HATIRLATMASI: Selamlaşma veya gündem sorusunda en fazla 2–3 ilgili '
             'açık işi, durumunu ve sonraki adımını kullanıcıya kısa Türkçe ile söyle. '
             'Net bir görev varsa önce onu yap; ilgisiz yapılacaklarla bölme. '
@@ -76,7 +67,9 @@ def pending(vault, data, event):
     return note, waiting
 
 
-def record(vault, session, turn, summary, semantic_candidates=None):
+def record(vault, session, turn, summary, semantic_candidates=None, source_snapshot=None):
+    from capture_source import record_gate
+    record_gate(vault, session, turn, source_snapshot)
     if not isinstance(summary, str) or not 20 <= len(summary.strip()) <= 6000:
         raise ValueError('Özet 20–6000 karakter olmalı')
     if contains_secret(summary) or '<!-- codex-receipt:' in summary:
@@ -97,6 +90,7 @@ def record(vault, session, turn, summary, semantic_candidates=None):
     text = (f'# Codex görev makbuzu — {now()}\n\n'
             f'<!-- codex-receipt:{marker} -->\n\n'
             'Durum: görev özeti; kanonik hafızaya terfi edilmedi.\n\n'
+            + (f'<!-- capture-source:{source_snapshot["source_hash"]} -->\n\n' if source_snapshot else '')
             + summary.strip() + '\n\n[[gelen-kutusu/codex-oturumları/README]] · [[Ana Sayfa]]\n')
     if note.exists():
         # Aynı çağrı tekrarlandığında geçmiş kaydı değiştirme.
@@ -130,6 +124,8 @@ def hook(vault, data):
     if event == 'UserPromptSubmit':
         # Stop devam istemi gerçek kullanıcı mesajı değildir.
         from konsolidasyon import clean_user
+        from capture_source import apply_prompt_policy
+        apply_prompt_policy(vault, session, str(data.get('prompt', '')))
         if CONTINUATION in str(data.get('prompt', '')) or not clean_user(str(data.get('prompt', ''))):
             return {}
         turn = data.get('turn_id')
@@ -140,8 +136,8 @@ def hook(vault, data):
             state['count'] += 1
             state.pop('requested_turn', None)
             atomic(state_path, json.dumps(state))
-        from ders_baglam import context as lesson_context
-        lesson_text = lesson_context(vault, str(data.get('prompt', '')))
+        from gorev_baglam import build_task_package
+        lesson_text = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'))['text']
         parts = ([opening_brief(vault)] if state['count'] == 1 else [])
         if lesson_text: parts.append(lesson_text)
         if parts:
@@ -153,13 +149,15 @@ def hook(vault, data):
         missing = len(list(queue.glob('*.pending.json')))
         latest = sorted(queue.glob('*.md'), key=lambda p: p.stat().st_mtime, reverse=True)
         recent = '\n'.join(str(p) for p in latest if p.name != 'README.md')[:1800]
+        from hafiza_saglik import notice
+        health_notice = notice(vault)
         context = (f'Hafıza kasası: {vault}. Önce {vault}/agents.md ve '
             f'{vault}/zihin/son-oturum.md oku. Yeni Codex görev makbuzları: {recent or "yok"}. '
             f'Eksik makbuz sayısı: {missing}. Makbuzlar gelen kutusundadır, kanonik gerçek değildir. '
             f'Bu oturumda sayılan kullanıcı mesajı: {state["count"]}. '
             'Hafıza kaydı arka plan konsolidasyonunda yapılır; cevap sonunda makbuz '
             'isteme ve sohbeti kayıt bildirimiyle bölme. Basit kısa sorular hafızaya girmez. '
-            'Kataloğa ve Mem0’a doğrudan yazma.\n\n' + opening_brief(vault))
+            'Kataloğa ve Mem0’a doğrudan yazma.\n\n' + health_notice + '\n\n' + opening_brief(vault))
         return {'hookSpecificOutput': {'hookEventName': event, 'additionalContext': context}}
     # Stop is the end of an assistant turn, not the end of a session.
     # Transcript consolidation handles receipts asynchronously. Never interrupt
@@ -183,7 +181,7 @@ def main():
             data = json.loads(args.input_json.read_text())
             if 'semantic_candidates' not in data:
                 raise ValueError('semantic_candidates gerekli; kalıcı bilgi yoksa [] kullan')
-            result = record(args.vault, data['session_id'], data['turn_id'], data['summary'], data['semantic_candidates'])
+            result = record(args.vault, data['session_id'], data['turn_id'], data['summary'], data['semantic_candidates'], data.get('source_snapshot'))
         else:
             result = hook(args.vault, json.load(sys.stdin))
     print(json.dumps(result, ensure_ascii=False))

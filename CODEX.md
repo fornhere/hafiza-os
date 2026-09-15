@@ -102,3 +102,24 @@ bütçeli bağlama alır; ilgisiz görevleri bölmez. `implementation_status: ap
 yöntemin uygulandığını belirtir; gerçek sonuç testi olmadan `verified` yapma.
 `status` çıktısındaki `lesson_backlog`, uygulanmamış veya sonuç testi bekleyen
 dersleri gösterir. Varsayılan şablonda kişisel ders veya tercih bulunmaz.
+
+
+## V2 geçişi ve yerel görev paketleri
+
+Kurulu kasaya güncel `araclar/` dosyalarını taşı. Kişisel kimlik ve dışlama
+ayarlarını koru; yerel/şablon farklarını publication-manifest.json ile incele.
+Saatlik konsolidasyon yönergesini `komuta/hafıza-konsolidasyonu.md` V2 biçimine
+geçir: eski checkpoint dosyalarını yeniden kullanma, mevcut makbuzları
+karşılaştırarak yalnız yeni anlamlı sonuçları kaydet. Aktif/tanınmayan kaynaklar
+bekler; eski işaretler tamamlanma kanıtı yerine geçmez. Stop zorlamasını açma.
+
+`python3 araclar/hafiza.py --vault KASA context "görev sorusu"` yerel çalışır.
+Mem0 için açıkça `--remote` ekle. `gorev_baglam.py package` JSON çıktısı proje
+manifestiyle eşleşir; yapılandırma örneği ve testler `test_gorev_baglam.py`
+içindedir. Onaylı varlık için gerçek dosya, hash, izinli kök ve onay kaynağı
+zorunludur. Başkasının kişisel manifestini kopyalama.
+
+Varlık gerektiren araç çağrısından önce [girdi kontrolünü](KULLANIM-DOGRULAMA.md)
+uygula. Genel araç engellemesi kurulmaz; ajan bu kontrolü çağırmalıdır.
+`konsolidasyon.py --vault KASA health --check` güncel işletim durumuna göre
+çıkış kodu verir. Birim testleri gerçek görev kalitesinin yerine geçmez.

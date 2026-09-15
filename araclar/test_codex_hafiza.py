@@ -82,8 +82,8 @@ class Hooks(unittest.TestCase):
         (self.vault / 'komuta/bu-hafta.md').write_text('# Öncelik\nKaynaklı işi bitir')
         (self.vault / 'zihin/açık-işler.md').write_text('# Açık\nGerçek uygulama testi bekliyor')
         start = self.event('SessionStart')['hookSpecificOutput']['additionalContext']
-        self.assertIn('Kaynaklı işi bitir', start)
-        self.assertIn('Gerçek uygulama testi bekliyor', start)
+        self.assertNotIn('Kaynaklı işi bitir', start)
+        self.assertNotIn('Gerçek uygulama testi bekliyor', start)
         first = self.event('UserPromptSubmit', 't1', prompt='selam')
         self.assertIn('AÇILIŞ HATIRLATMASI', first['hookSpecificOutput']['additionalContext'])
         self.assertEqual(self.event('UserPromptSubmit', 't2', prompt='devam'), {})
@@ -91,9 +91,11 @@ class Hooks(unittest.TestCase):
 
     def test_missing_priorities_do_not_invent_work(self):
         out = self.event('SessionStart')['hookSpecificOutput']['additionalContext']
-        self.assertIn('iş veya öncelik uydurma', out)
+        self.assertIn('eski işi kendiliğinden açma', out)
 
     def test_reject_secrets_and_replacement(self):
+        for i in range(6):
+            h.hook(self.vault, dict(session_id="s", turn_id="t" if i == 5 else str(i), hook_event_name="UserPromptSubmit", prompt="Gerçek test isteği"))
         with self.assertRaises(ValueError):
             h.record(self.vault, 's', 't', 'API key: ' + 'x' * 40)
         h.record(self.vault, 's', 't', 'Bu kayıt yeterince uzun olan ilk test makbuzudur.')

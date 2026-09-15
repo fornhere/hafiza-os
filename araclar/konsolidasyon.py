@@ -60,63 +60,78 @@ def save_review(vault, candidate_id, action, decision):
     h._append_jsonl(vault / h.EVENT_PATH, event)
 
 
-def clean_user(text):
-    for tag in ('recommended_plugins', 'environment_context', 'permissions instructions'):
-        text = re.sub(r'<' + tag + r'>.*?</' + tag + '>', '', text, flags=re.S)
-    text = text.strip()
-    excluded = ('# AGENTS.md instructions', '<subagent_notification', '<turn_aborted',
-        '<hook_prompt', '[HAFIZA_KAPANIS]', '[HAFIZA_OTOMASYON]', '<system-reminder', '<goal>',
-        '<collaboration', '<codex_internal_context', '<in-app-browser-context')
-    return '' if text.startswith(excluded) else text
+from capture_source import clean_user, snapshot, excluded, validate_source
 
 
-def sessions(vault, root, since, quiet_minutes=20):
-    """Only paths/counts/hashes escape: never copy raw conversations into memory."""
-    seen = {(e.get('session_id'), e.get('source_hash')) for e in h.load_jsonl(vault / h.EVENT_PATH)
-            if e.get('event_type') == 'session.inspected'}
+def sessions(vault, root, since, quiet_minutes=20, diagnostics=None):
+    diagnostics = diagnostics if diagnostics is not None else []
+    events = h.load_jsonl(vault / h.EVENT_PATH)
+    seen = {(e.get('session_id'), e.get('source_hash')) for e in events
+            if e.get('event_type') == 'session.inspected.v2'}
+    legacy = {e.get('session_id') for e in events if e.get('event_type') == 'session.inspected'}
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     grouped = {}
     for directory in ('sessions', 'archived_sessions'):
         for path in (root / directory).rglob('*.jsonl'):
             if path.stat().st_mtime < since.timestamp() or now - path.stat().st_mtime < quiet_minutes * 60:
                 continue
-            meta = None; users = {}
-            for raw in path.read_text(encoding='utf-8').splitlines():
-                try:
-                    item = json.loads(raw)
-                except json.JSONDecodeError:
-                    continue
-                p = item.get('payload', {})
-                # The first metadata record owns this rollout. Later records may
-                # belong to history copied from a parent into a subagent.
-                if item.get('type') == 'session_meta' and meta is None:
-                    meta = p
-                if item.get('type') == 'response_item' and p.get('type') == 'message' and p.get('role') == 'user':
-                    text = clean_user('\n'.join(c.get('text', '') for c in p.get('content', []) if isinstance(c, dict)))
-                    if text:
-                        identity = p.get('id') or str(item.get('timestamp')) + text
-                        users[identity] = text
-            if not meta or meta.get('source') not in ('cli', 'vscode') or not meta.get('id'):
+            try: row = snapshot(path)
+            except (ValueError, OSError, UnicodeError) as error:
+                # Subagent ownership is an intentional filter; all other failure is observable.
+                if 'transcript sahibi' in str(error):
+                    try:
+                        first = next(json.loads(line).get('payload', {}) for line in path.read_text().splitlines()
+                                     if json.loads(line).get('type') == 'session_meta')
+                    except (ValueError, StopIteration, OSError): first = {}
+                    if isinstance(first.get('source'), dict) and 'subagent' in first['source']: continue
+                diagnostics.append({'path': str(path), 'error': str(error)})
                 continue
-            if len(users) <= 5:
-                continue
-            digest = h.statement_hash(json.dumps(users, ensure_ascii=False, sort_keys=True))
-            if (meta['id'], digest) in seen:
-                continue
-            row = {'session_id': meta['id'], 'path': str(path), 'user_count': len(users),
-                   'source_hash': digest, 'last_modified': path.stat().st_mtime}
-            old = grouped.get(meta['id'])
-            if not old or old['user_count'] < row['user_count']:
-                grouped[meta['id']] = row
-    return sorted(grouped.values(), key=lambda r: r['last_modified'])
+            if row.get('parse_status') == 'malformed' or (row['activity_state'] == 'unknown' and row['user_count'] > 5):
+                diagnostics.append({'path': str(path), 'error': 'unknown lifecycle or malformed transcript'})
+            if excluded(vault, row['session_id']) or row['user_count'] <= 5: continue
+            if (row['session_id'], row['source_hash']) in seen: continue
+            row['legacy_review_needed'] = row['session_id'] in legacy
+            old = grouped.get(row['session_id'])
+            if old and (old['source_hash'] != row['source_hash'] or old['activity_state'] == 'ambiguous'):
+                # Divergent copies are never silently resolved by mtime alone.
+                row['activity_state'] = 'ambiguous'
+            grouped[row['session_id']] = row
+    return sorted(grouped.values(), key=lambda r: (r['activity_state'] != 'completed', r['last_modified']))[:10]
 
 
 @h.serialized
 def checkpoint(vault, data):
-    if not data.get('session_id') or not data.get('source_hash') or len(data.get('reason', '')) < 10:
+    session = data.get('session_id')
+    if not session or not data.get('source_hash') or len(data.get('reason', '')) < 10:
         raise ValueError('oturum, kaynak hash ve inceleme sonucu gerekli')
-    h._append_jsonl(vault / h.EVENT_PATH, dict(data, event_type='session.inspected',
-        actor=ACTOR, at=dt.datetime.now(dt.timezone.utc).isoformat()))
+    actual = snapshot(data['path'])
+    if actual['session_id'] != session or actual['source_hash'] != data['source_hash']:
+        raise ValueError('checkpoint kaynak görüntüsü değişti')
+    outcome = data.get('outcome')
+    if outcome not in ('recorded', 'no_relevant_change', 'excluded'):
+        raise ValueError('outcome recorded/no_relevant_change/excluded olmalı')
+    if outcome == 'excluded':
+        evidence = data.get('exclusion_evidence', '')
+        from capture_source import exclusion_evidence
+        if not exclusion_evidence(data['path'], evidence):
+            raise ValueError('kaydetmeme isteği için kaynak kanıtı gerekli')
+        h._append_jsonl(vault / h.EVENT_PATH, dict(event_type='session.policy',
+            session_id=session, policy='do-not-record', actor=ACTOR,
+            at=dt.datetime.now(dt.timezone.utc).isoformat()))
+    else:
+        validate_source(vault, session, data)
+        if outcome == 'recorded':
+            from codex_hafiza import paths
+            expected, _ = paths(vault, session, 'recovery-v2-' + actual['source_hash'])
+            if not expected.is_file(): raise ValueError('doğrulanmış recovery makbuzu gerekli')
+            receipt = expected.read_text()
+            if (f'<!-- codex-receipt:{expected.stem} -->' not in receipt or
+                    f'<!-- capture-source:{actual["source_hash"]} -->' not in receipt or len(receipt) < 100):
+                raise ValueError('recovery makbuzu kimlik/kaynak işaretleri geçersiz')
+            from capture_source import digest
+            data = dict(data, receipt_hash=digest(receipt), receipt_path=str(expected.relative_to(vault)))
+    h._append_jsonl(vault / h.EVENT_PATH, dict(data, schema_version=2,
+        event_type='session.inspected.v2', actor=ACTOR, at=dt.datetime.now(dt.timezone.utc).isoformat()))
 
 
 def status(vault):
@@ -127,7 +142,8 @@ def status(vault):
     return {'pending_candidates': len(pending(vault)),
         'missing_receipts': len(list((vault / 'gelen-kutusu/codex-oturumları').glob('*.pending.json'))),
         'last_sync': last, 'catalog_count': len(h.load_catalog(vault)),
-        'lesson_backlog': __import__('ders_baglam').backlog(vault)}
+        'lesson_backlog': __import__('ders_baglam').backlog(vault),
+        'operational_health': __import__('hafiza_saglik').snapshot(vault)}
 
 
 def health(vault):
@@ -142,11 +158,14 @@ def health(vault):
     hook_states = list((vault / 'gelen-kutusu/codex-oturumları/.state').glob('*.json'))
     lines = ['# Hafıza sağlığı', '', 'Üretildi: ' + dt.datetime.now(dt.timezone.utc).isoformat(), '',
         '| Kontrol | Sonuç |', '|---|---|',
+        f"| İşletim durumu | {report['operational_health']['status']} |",
         f"| Katalog | {report['catalog_count']} kayıt |",
         f"| Bekleyen semantik aday | {report['pending_candidates']} |",
         f"| Eksik işaretli makbuz | {report['missing_receipts']} |",
         f"| Hook sayaç dosyası | {len(hook_states)} — sıfırsa canlı çalıştığı doğrulanmış değildir |",
         f"| Son uygulanan Mem0 senkronu | {report['last_sync']['at'] if report['last_sync'] else 'Yok'} |"]
+    for check in report['operational_health']['checks']:
+        lines.append(f"| {check['name']} | {check['status']}: {check['reason']} |")
     if evaluation:
         e = evaluation['payload']
         lines += [f"| Arama testi | {e['passed']}/{e['total']} |",
@@ -171,14 +190,41 @@ def health(vault):
         '', '[[Ana Sayfa]] · [[komuta/hafıza-konsolidasyonu]] · [[zihin/açık-işler]]']
     atomic(vault / 'komuta/hafıza-sagligi.md', '\n'.join(lines) + '\n')
     from hafiza_git import commit_memory
-    return {'rendered': 'komuta/hafıza-sagligi.md', 'git': commit_memory(vault)}
+    return {'rendered': 'komuta/hafıza-sagligi.md', 'operational_health': report['operational_health'], 'git': commit_memory(vault)}
+
+
+
+def scan_with_receipt(vault, root, since):
+    """Operational receipt only: no transcript or user text is persisted."""
+    from codex_hafiza import atomic
+    from hafiza_saglik import RUN_PATH
+    started = dt.datetime.now(dt.timezone.utc).isoformat()
+    atomic(vault / RUN_PATH, json.dumps(dict(status='running', started_at=started)))
+    try:
+        diagnostics = []
+        rows = sessions(vault, root, since, diagnostics=diagnostics)
+        errors = max(len(diagnostics), sum(r.get('activity_state') in ('unknown', 'ambiguous') for r in rows))
+        eligible = [r for r in rows if r.get('activity_state') == 'completed']
+        oldest = min((r['last_modified'] for r in eligible), default=None)
+        receipt = dict(status='complete', started_at=started,
+            finished_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+            parse_errors=errors, eligible_count=len(eligible),
+            unresolved_count=sum(r.get('activity_state') != 'completed' for r in rows),
+            oldest_eligible_at=dt.datetime.fromtimestamp(oldest, dt.timezone.utc).isoformat() if oldest else None)
+        atomic(vault / RUN_PATH, json.dumps(receipt))
+        return rows
+    except Exception as error:
+        atomic(vault / RUN_PATH, json.dumps(dict(status='failed', started_at=started,
+            finished_at=dt.datetime.now(dt.timezone.utc).isoformat(), error_code=type(error).__name__)))
+        raise
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--vault', type=Path, default=Path(__file__).resolve().parents[1])
     sub = parser.add_subparsers(dest='cmd', required=True)
-    sub.add_parser('pending'); sub.add_parser('status'); sub.add_parser('health')
+    sub.add_parser('pending'); sub.add_parser('status')
+    p = sub.add_parser('health'); p.add_argument('--check', action='store_true')
     p = sub.add_parser('review'); p.add_argument('--input-json', type=Path, required=True)
     p.add_argument('--apply', action='store_true')
     p = sub.add_parser('sessions'); p.add_argument('--since', default=dt.date.today().isoformat())
@@ -190,8 +236,10 @@ def main():
     elif args.cmd == 'health': result = health(vault)
     elif args.cmd == 'review': result = review(vault, json.loads(args.input_json.read_text()), args.apply)
     elif args.cmd == 'checkpoint': result = checkpoint(vault, json.loads(args.input_json.read_text()))
-    else: result = sessions(vault, args.codex_root, dt.datetime.fromisoformat(args.since).replace(tzinfo=dt.timezone.utc))
+    else: result = scan_with_receipt(vault, args.codex_root, dt.datetime.fromisoformat(args.since).replace(tzinfo=dt.timezone.utc))
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.cmd == 'health' and args.check:
+        raise SystemExit({'healthy': 0, 'failed': 1, 'stale': 2, 'unknown': 3}[result['operational_health']['status']])
 
 
 if __name__ == '__main__':

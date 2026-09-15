@@ -15,6 +15,8 @@ class Pipeline(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.vault = Path(self.tmp.name)
+        for i in range(6):
+            hook.hook(self.vault, dict(session_id="s", turn_id="t" if i == 5 else str(i), hook_event_name="UserPromptSubmit", prompt="Gerçek test isteği"))
         self.evidence = 'Videolarımın açıklaması yapay zekâ odaklı olsun.'
         self.proposal = dict(statement='Forn video açıklamalarında yapay zekâ odağını tercih eder.',
                              subject_key='channel.seo-focus', evidence=self.evidence)
@@ -106,6 +108,7 @@ class Pipeline(unittest.TestCase):
             items.append(dict(type='response_item', timestamp=str(i), payload=dict(type='message', role='user', content=[dict(text='Gerçek mesaj')])) )
         items.append(dict(type='response_item', payload=dict(type='message', role='user', content=[dict(text='<goal>otomatik</goal>')])))
         def save():
+            items.append(dict(type='event_msg', payload=dict(type='task_complete', turn_id='t6')))
             path.write_text('\n'.join(json.dumps(i) for i in items)); os.utime(path, (100000, 100000))
         since = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
         save(); self.assertEqual([], k.sessions(self.vault, root, since, 0))
@@ -113,7 +116,7 @@ class Pipeline(unittest.TestCase):
         save(); rows = k.sessions(self.vault, root, since, 0)
         self.assertEqual(6, rows[0]['user_count'])
         self.assertNotIn('Gerçek mesaj', json.dumps(rows))
-        k.checkpoint(self.vault, dict(rows[0], reason='Kalıcı bilgi yok; gözden geçirildi.'))
+        k.checkpoint(self.vault, dict(rows[0], outcome='no_relevant_change', reason='Kalıcı bilgi yok; gözden geçirildi.'))
         self.assertEqual([], k.sessions(self.vault, root, since, 0))
 
 
@@ -139,14 +142,14 @@ class Pipeline(unittest.TestCase):
         messages = [dict(type='response_item', timestamp=str(i), payload=dict(
             type='message', role='user', content=[dict(text='Aynı gerçek istek')])) for i in range(6)]
         for ident in ('first', 'second'):
-            items = [dict(type='session_meta', payload=dict(id=ident, source='vscode'))] + messages
+            items = [dict(type='session_meta', payload=dict(id=ident, source='vscode'))] + messages + [dict(type='event_msg', payload=dict(type='task_complete', turn_id='t6'))]
             (root / 'sessions' / (ident + '.jsonl')).write_text(
                 '\n'.join(json.dumps(x) for x in items))
         since = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
         rows = k.sessions(self.vault, root, since, 0)
         self.assertEqual(2, len(rows))
         inspected = next(r for r in rows if r['session_id'] == 'first')
-        k.checkpoint(self.vault, dict(inspected, reason='Bu oturum incelendi; kalıcı aday yok.'))
+        k.checkpoint(self.vault, dict(inspected, outcome='no_relevant_change', reason='Bu oturum incelendi; kalıcı aday yok.'))
         self.assertEqual(['second'], [r['session_id'] for r in k.sessions(self.vault, root, since, 0)])
 
 if __name__ == '__main__': unittest.main()

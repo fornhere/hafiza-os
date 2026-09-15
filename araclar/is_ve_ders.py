@@ -61,6 +61,10 @@ def brief(vault, limit=3):
     result = []
     for row in latest(vault, 'task').values():
         if row['status'] not in ('active', 'blocked'): continue
+        try:
+            source = h.source_file(vault, row['source_path'])
+            if row.get('evidence', '') not in source.read_text(): continue
+        except (OSError, ValueError): continue
         verified = row.get('last_verified')
         if not verified or (dt.date.today() - dt.date.fromisoformat(verified)).days > 14:
             continue
@@ -73,6 +77,8 @@ def render(vault):
     if not (vault / TASKS).exists():
         raise ValueError('Önce kaynaklı iş defteri oluştur; mevcut liste korunuyor')
     tasks = latest(vault, 'task')
+    current_ids = {r['id'] for r in brief(vault, limit=10000)}
+    tasks = {ident: dict(row, status='needs_confirmation') if row['status'] in ('active', 'blocked') and ident not in current_ids else row for ident, row in tasks.items()}
     lines = ['# Açık İşler', '', 'Kaynak: `zihin/is-durumu.jsonl`. Bu görünüm `araclar/is_ve_ders.py render` ile üretilir.',
              'Durum değişikliği deftere yeni sürüm ekler; geçmiş silinmez. Önceki liste: [[arşiv/is-listesi-oncesi]].', '']
     for statuses, title in [(('active', 'blocked'), 'Aktif İşler'), (('needs_confirmation',), 'Güncelliği teyit edilecek işler'), (('done', 'cancelled'), 'Kapanan işler')]:
