@@ -1,3 +1,12 @@
+# 15 Eylül 2026 — Oturum kimliği ve konsolidasyon
+
+- Oturum taramasında dosyanın ilk kimlik kaydı esas alınır; alt ajanların
+  devraldığı konuşma geçmişi ana oturum olarak işlenmez.
+- İnceleme işaretleri oturum kimliğiyle birlikte eşleştirilir; aynı mesajları
+  içeren farklı oturumlar bağımsız değerlendirilir.
+- Ana oturum/alt ajan ayrımı ve oturumlar arası işaret yalıtımı test edildi;
+  şablonun 44 testi geçti.
+
 # 15 Eylül 2026 — Sessiz kayıt ve görevle ilişkili dersler
 
 - Codex kayıtları cevap sonunu bölmeden arka plan konsolidasyonunda hazırlanır.
