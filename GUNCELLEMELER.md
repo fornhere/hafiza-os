@@ -1,3 +1,53 @@
+# 2026.09.15 — Görev bağlamı ve sessiz hafıza bakımı
+
+Bu sürüm, dosya temelli hafızayı günlük görevlerle daha yakından buluşturuyor:
+ilgili proje, güncel kaynak ve çalışma yöntemini birlikte getiriyor; tamamlanan
+konuşma bölümlerini arka planda işliyor. Mevcut Obsidian/Git temeli ve isteğe
+bağlı Mem0 katmanı korunuyor.
+
+## Bu sürümde öne çıkanlar
+
+- **Göreve uygun bağlam:** yerel paket; proje, kaynaklı açık iş, onaylı varlık
+  ve ilgili yöntemi bir araya getirir. `context` varsayılan olarak yereldir;
+  Mem0 sıralaması için `--remote` açıkça seçilir.
+- **Doğal Türkçe ifadeler:** sınırlı ek, özel isim kesmesi ve yakın yazım
+  desteği görev eşleşmesini genişletir. Açık proje adı çalışma klasöründen
+  önce gelir; birden fazla proje veya belirsiz geçmiş isteği netleştirme bekler.
+- **Sessiz, kaynak sürümüne bağlı kayıt:** altıncı gerçek kullanıcı mesajından
+  itibaren anlamlı sonuçlar arka plan incelemesine alınır. Açık konuşmanın
+  tamamlanan bölümü sınır ve hash ile ayrılır; aktif devam özetlenmez. Alt ajan
+  tarafından devralınmış geçmiş ana oturum sayılmaz; mevcut makbuzlar karşılaştırılır.
+- **Güncel kaynak ve kullanım kontrolü:** onaylı varlığın dosyası, hash'i ve
+  kaynak kanıtı denetlenir. Belirli eski varlık iddiaları tarihçe silinmeden
+  güncel bağlamdan ayrılır. Hazırlanan girdi, gözlenen araç çağrısı, teknik
+  sonuç ve kullanıcı kabulü ayrı tutulur.
+- **İzlenebilir bakım:** zamanlanmış tarama yaşı manuel kontrolden ayrı izlenir;
+  eksik, eski ve başarısız kontroller görünür olur. Anlamlı hafıza veri
+  değişiklikleri yerel Git'e alınır; kişisel kasa otomatik olarak GitHub'a gönderilmez.
+- **Doğrulanmış yayın:** yerel/kamu kod eşliği, tam commit arşivindeki testler
+  ve yayın içerik taraması kontrol edilir; push sonrasında uzak commit geri
+  okunur. GitHub CI aynı commit kontrollerini çalıştırır.
+
+## Güncelleme ve kapsam
+
+Mevcut kurulumda [Codex geçiş rehberini](CODEX.md#v2-geçişi-ve-yerel-görev-paketleri)
+izle; kişisel kimlik, dışlama ve proje ayarlarını koru. Konsolidasyon yönergesini
+V2 tamamlanan bölüm akışına geçir. Sessiz kayıt için zamanlayıcı ayrıca etkin
+olmalıdır; dosyaları güncellemek tek başına otomasyon kurmaz. Otomasyon uygulama
+ve bilgisayarın kullanılabilirliğine bağlıdır. İlk beş mesaj, basit sorular ve
+kaydetmeme tercihleri korunur.
+
+Araç girdi kontrolü tanımlanmış üretim akışında uygulanır; tüm araç yollarını
+zorunlu olarak engelleyen genel bir hook değildir. Görünmeyen veya sarmalanmış
+çağrılar `unknown` kalabilir. Türkçe eşleme genel bir dil anlama modeli değildir.
+Birim testleri, gerçek çalışma kalitesini veya zaman tasarrufunu kanıtlamaz;
+[fayda ölçümü](FAYDA-OLCUMU.md) bunları ayrı izlemek için eklendi.
+
+Ayrıntılar: [kullanım doğrulaması](KULLANIM-DOGRULAMA.md),
+[yayınlama](YAYINLAMA.md), [konsolidasyon yönergesi](komuta/hafıza-konsolidasyonu.md).
+
+---
+
 # 15 Eylül 2026 — Doğal ifadeler ve tamamlanan bölümler
 
 - Türkçe ekler, özel isim kesmeleri ve uzun kelimelerde sınırlı yazım
