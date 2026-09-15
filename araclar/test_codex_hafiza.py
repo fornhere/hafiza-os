@@ -30,8 +30,8 @@ class Hooks(unittest.TestCase):
     def test_sixth_requests_receipt_and_preserves_pending(self):
         self.six()
         result = self.event('Stop')
-        self.assertEqual(result['decision'], 'block')
-        self.assertEqual(len(list(self.vault.rglob('*.pending.json'))), 1)
+        self.assertEqual(result, {})
+        self.assertEqual(len(list(self.vault.rglob('*.pending.json'))), 0)
 
     def test_duplicate_prompt_and_resume_keep_count(self):
         for _ in range(8):
@@ -41,11 +41,11 @@ class Hooks(unittest.TestCase):
 
     def test_continuation_does_not_count_or_loop(self):
         self.six()
-        reason = self.event('Stop')['reason']
+        reason = h.CONTINUATION + ' eski hook devamı'
         self.event('UserPromptSubmit', 'continuation', prompt=reason)
         out = self.event('Stop', 'continuation', stop_hook_active=True)
         self.assertNotIn('decision', out)
-        self.assertEqual(len(list(self.vault.rglob('*.pending.json'))), 1)
+        self.assertEqual(len(list(self.vault.rglob('*.pending.json'))), 0)
         state = json.loads(next(self.vault.rglob('.state/*.json')).read_text())
         self.assertEqual(state['count'], 6)
 
@@ -70,7 +70,7 @@ class Hooks(unittest.TestCase):
         self.assertEqual(self.event('Interrupt'), {})
         self.six()
         self.event('Interrupt')
-        self.assertEqual(len(list(self.vault.rglob('*.pending.json'))), 1)
+        self.assertEqual(len(list(self.vault.rglob('*.pending.json'))), 0)
 
     def test_sessions_isolated(self):
         self.six()

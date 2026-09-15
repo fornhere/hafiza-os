@@ -124,7 +124,8 @@ def status(vault):
     last = applied[-1] if applied else None
     return {'pending_candidates': len(pending(vault)),
         'missing_receipts': len(list((vault / 'gelen-kutusu/codex-oturumları').glob('*.pending.json'))),
-        'last_sync': last, 'catalog_count': len(h.load_catalog(vault))}
+        'last_sync': last, 'catalog_count': len(h.load_catalog(vault)),
+        'lesson_backlog': __import__('ders_baglam').backlog(vault)}
 
 
 def health(vault):
@@ -167,7 +168,8 @@ def health(vault):
         'Yeni pencere açılışı ve gerçek altıncı mesaj hook’u ayrıca canlı doğrulanmalıdır.',
         '', '[[Ana Sayfa]] · [[komuta/hafıza-konsolidasyonu]] · [[zihin/açık-işler]]']
     atomic(vault / 'komuta/hafıza-sagligi.md', '\n'.join(lines) + '\n')
-    return {'rendered': 'komuta/hafıza-sagligi.md'}
+    from hafiza_git import commit_memory
+    return {'rendered': 'komuta/hafıza-sagligi.md', 'git': commit_memory(vault)}
 
 
 def main():

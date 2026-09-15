@@ -1,3 +1,14 @@
+# 15 Eylül 2026 — Sessiz kayıt ve görevle ilişkili dersler
+
+- Codex kayıtları cevap sonunu bölmeden arka plan konsolidasyonunda hazırlanır.
+- Anlamlı hafıza değişiklikleri sağlık kontrolü sonunda yerel Git'e kaydedilir.
+- Dersler kaynak kanıtı ve yapılandırılabilir tetikleyicilerle ilgili göreve taşınır.
+- Yöntemin uygulanması ile gerçek sonuç doğrulaması ayrı izlenir.
+- Önceden hazırlanmış Git değişiklikleri korunur; saat değişimi tek başına commit oluşturmaz.
+
+Kurulum ve geçiş ayrıntıları: [CODEX.md](CODEX.md). Sessiz kayıt için zamanlanmış
+konsolidasyon etkin olmalıdır; kurucu tek başına otomasyon oluşturmaz.
+
 # Güncelleme notları
 
 ## 12 Eylül 2026 — Süreklilik ve görünür hafıza

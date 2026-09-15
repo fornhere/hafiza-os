@@ -140,9 +140,13 @@ def hook(vault, data):
             state['count'] += 1
             state.pop('requested_turn', None)
             atomic(state_path, json.dumps(state))
-        if state['count'] == 1:
+        from ders_baglam import context as lesson_context
+        lesson_text = lesson_context(vault, str(data.get('prompt', '')))
+        parts = ([opening_brief(vault)] if state['count'] == 1 else [])
+        if lesson_text: parts.append(lesson_text)
+        if parts:
             return {'hookSpecificOutput': {'hookEventName': event,
-                    'additionalContext': opening_brief(vault)}}
+                    'additionalContext': '\n\n'.join(parts)}}
         return {}
     if event == 'SessionStart':
         queue = vault / INBOX
@@ -153,50 +157,14 @@ def hook(vault, data):
             f'{vault}/zihin/son-oturum.md oku. Yeni Codex görev makbuzları: {recent or "yok"}. '
             f'Eksik makbuz sayısı: {missing}. Makbuzlar gelen kutusundadır, kanonik gerçek değildir. '
             f'Bu oturumda sayılan kullanıcı mesajı: {state["count"]}. '
-            'İlk 5 kullanıcı mesajında kayıt istenmez; 6. mesajdan itibaren Stop hook '
-            'kısa, sırsız oturum özeti ister. Basit kısa sorular hafızaya girmez. '
+            'Hafıza kaydı arka plan konsolidasyonunda yapılır; cevap sonunda makbuz '
+            'isteme ve sohbeti kayıt bildirimiyle bölme. Basit kısa sorular hafızaya girmez. '
             'Kataloğa ve Mem0’a doğrudan yazma.\n\n' + opening_brief(vault))
         return {'hookSpecificOutput': {'hookEventName': event, 'additionalContext': context}}
-    if event not in ('Stop', 'Interrupt'):
-        return {}
-    if state['count'] <= 5:
-        return {}
-    if data.get('stop_hook_active') and state.get('requested_turn'):
-        data = dict(data, turn_id=state['requested_turn'])
-    note, waiting = pending(vault, data, event)
-    if note.exists():
-        waiting.unlink(missing_ok=True)
-        return {}
-    if event == 'Interrupt':
-        return {}
-    if data.get('stop_hook_active'):
-        return {'systemMessage': 'Hafıza makbuzu hâlâ eksik; gelen kutusunda takip kaydı bırakıldı.'}
-    state['requested_turn'] = data['turn_id']
-    atomic(state_path, json.dumps(state))
-    args = json.dumps({'session_id': data['session_id'], 'turn_id': data['turn_id'],
-                       'summary': 'Karar, yapılan iş, kanıt, kalan iş ve ilgili dosyalar; kısa Türkçe özet.',
-                       'semantic_candidates': []}, ensure_ascii=False)
-    return {'decision': 'block', 'reason': (
-        CONTINUATION + ' Oturum 5 kullanıcı mesajını geçti. Bu oturumun anlamlı kararlarını, '
-        'sonuçlarını ve kalan işlerini özetleyen makbuzu kaydet; basit soruları tek tek biriktirme. '
-        'Şu JSON şablonunda summary alanını gerçek sonuçla doldur: '
-        + args + f' . JSON’u geçici dosyaya güvenli biçimde yaz, sonra '
-        f'python3 {Path(__file__).resolve()} record --input-json DOSYA çalıştır. '
-        'Özel yazışma, ham transcript veya sır ekleme. Kalıcı karar yoksa bunu açıkça yaz. '
-        'semantic_candidates listesini mutlaka değerlendir: altı ay sonra da geçerli, '
-        'kullanıcının açıkça söylediği normal duyarlılıktaki tercihler için en fazla 5 aday '
-        '(statement, subject_key, evidence) ekle. evidence özette aynen yer alan kısa '
-        'kullanıcı beyanıdır; söz uydurma. Günlük işler, basit sorular, ajan tahminleri, '
-        'geçici durumlar ve kaydetmeme talepleri aday değildir; aday yoksa boş liste bırak. '
-        'Bu aday kuyruğudur; ayrı konsolidasyon incelemesinden önce Mem0’a gitmez. '
-        'Bu oturumda biten veya yeni açılan iş varsa, kaynaklı görev sonucuna göre '
-        f'{vault}/zihin/açık-işler.md ve {vault}/komuta/bu-hafta.md listelerini de '
-        'güncel tut. İş defteri varsa is_ve_ders.py task ile kimlik, kaynak kanıtı, '
-        'sonraki adım ve expected_version içeren yeni sürüm ekle; render ile listeyi üret. '
-        'Tekrarlanan hata için is_ve_ders.py lesson ile proposed ders bırak; yöntem '
-        'dosyası değişip test kanıtı oluşmadan verified deme. '
-        'Eski metni gerektiğinde arşivle, öncelik veya son gün uydurma. '
-        'Kaydetme başarısızsa kullanıcıya bildir; başarılıymış gibi söyleme.')}
+    # Stop is the end of an assistant turn, not the end of a session.
+    # Transcript consolidation handles receipts asynchronously. Never interrupt
+    # the conversation or create a per-turn pending receipt here.
+    return {}
 
 
 def main():

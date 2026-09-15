@@ -18,7 +18,8 @@ Kasa taşınırsa eski konuma ait hook'ları `/hooks` üzerinden kaldırıp yeni
 konumda kurucuyu tekrar çalıştır.
 
 İlk beş gerçek kullanıcı mesajı kayıt istemez. Altıncıdan sonra karar, sonuç
-ve kalan işi içeren kısa makbuz istenir. Basit sorular biriktirilmez; kayıt
+ve kalan işi içeren kısa makbuz arka plan konsolidasyonunda üretilir; cevap
+sonunda kayıt zorlaması yapılmaz. Bunun için aşağıdaki otomasyon etkin olmalıdır. Basit sorular biriktirilmez; kayıt
 istemediğin konuşmalar dışarıda kalır. Kapanış devamı ve `[HAFIZA_OTOMASYON]`
 ile başlayan zamanlayıcı mesajları sayaç artırmaz.
 
@@ -86,3 +87,18 @@ python3 araclar/hafiza.py --vault . eval --file araclar/hafıza-testleri.örnek.
 Paketin birim testleri, senin uygulamanda canlı hook veya zamanlayıcı
 çalıştığının yerine geçmez. Gemini/Hermes çalışma zamanı adaptörleri bu
 Codex kurucusunun kapsamı dışındadır.
+
+## Sessiz kayıt, Git ve ders uygulama — 15 Eylül
+
+`health` anlamlı hafıza veri değişikliklerini yerel Git commitine alır. Kasa
+Git deposu olmalı ve Git kullanıcı kimliği tanımlı olmalıdır. Uzak depoya push
+yapılmaz. Yalnız sağlık tarihi değiştiyse commit atılmaz; önceden staged
+değişiklik, silme, sembolik bağ veya sır taraması bulgusunda işlem hata verir.
+Kod ve ilgisiz kullanıcı dosyaları otomatik eklenmez.
+
+Ders kaydına `triggers` (örneğin `["kapak", "thumbnail"]`) ve kasa içinde
+`method_path` ekle. UserPromptSubmit kaynak kanıtı bulunan ilgili yöntemleri
+bütçeli bağlama alır; ilgisiz görevleri bölmez. `implementation_status: applied`
+yöntemin uygulandığını belirtir; gerçek sonuç testi olmadan `verified` yapma.
+`status` çıktısındaki `lesson_backlog`, uygulanmamış veya sonuç testi bekleyen
+dersleri gösterir. Varsayılan şablonda kişisel ders veya tercih bulunmaz.

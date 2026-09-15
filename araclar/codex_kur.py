@@ -34,8 +34,8 @@ def install(vault, codex_home, apply=False):
         'zihin/son-oturum.md dosyasının en yeni bölümü, zihin/açık-işler.md ve '
         'komuta/bu-hafta.md oku. Selam/gündem sorusunda en fazla 2–3 ilgili, '
         'güncel işi hatırlat; eski işi yeniden açma. İlk beş gerçek kullanıcı '
-        'mesajında kayıt isteme. Altıncıdan sonra anlamlı karar/sonuçları hook '
-        'makbuzuna yaz; basit soruları ve otomatik istemleri biriktirme. '
+        'mesajında kayıt isteme. Altıncıdan sonra anlamlı karar/sonuçları arka plan '
+        'konsolidasyonuna bırak; cevap sonunda kayıt isteme veya ek tur açma. '
         'Kaydetmeme isteğine uy. Kalıcı tercihler yalnız kaynaklı adaydır; '
         'inceleme öncesi Mem0’a doğrudan yazma. Ayrıntı: '
         'komuta/hafıza-konsolidasyonu.md.\n' + END)
