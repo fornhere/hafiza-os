@@ -89,3 +89,27 @@ engelleyen genel bir güvenlik duvarı değildir. Çıktı kabulü uydurulmaz.
 süre veya kullanıcı kabulü tahminle doldurulmaz. `fayda_olc.py` A/B/C,
 model, yöntem sürümü ve iş türünü ayırarak ham sayıları çıkarır; başarısız
 ve vazgeçilmiş işleri gizlemez. İki hafta geçmesi tek başına başarı değildir.
+
+
+## Tamamlanan bölüm ve bakım sınırı
+
+`sessions` artık `prefix_end_line` ve `prefix_hash` taşır. Bu satır tüm açık
+konuşmayı değil son tamamlanan bölümü gösterir. Kaynağı
+`capture_source.read_completed_prefix(vault, session_id, satır)` ile oku;
+aktif devamı özete karıştırma. Sonraki tamamlanan sonuç yeni sürüm olur.
+Yarım JSON aktif devamdaysa eski tamamlanan bölüm korunur; tamamlanan
+bölümdeki bozukluk açık hata olur. Hook kaçmış açık kaydetmeme komutu da
+kayıt kapısında denetlenir; karmaşık gizlilik isteğini inceleyen değerlendirir.
+
+Zamanlanmış rol `sessions --since YYYY-AA-GG --scheduled` kullanır; manuel
+kontrol bu bayrağı kullanmaz. İnceleme sonunda tekrar tara, sonra health
+çalıştır. Bir bakımda en fazla 20 kaynak incele; kalanları sonraki bakıma bırak.
+`komuta/hafıza-işletim.json` içinde `require_scheduled_scan: true` varsa
+sağlık son zamanlanmış taramayı ayrıca denetler. Yeni kurulumda gözlenmediyse
+unknown; iki saat geçmişse stale. Elle başarılı tarama bu saati yenilemez.
+Uygulama kapalıyken kesintisiz çalışmayı garanti etmez.
+
+Aynı hata iki ardışık bakımda otomatik düzeltilemiyorsa bir kez somut engeli
+bildir; değişmeyen uyarıyı tekrarlama. Kontroller geçince yeni özellik eklemek
+zorunlu değildir. Kullanıcıdan rutin kabul puanı isteme; gerçek geri bildirimi
+ve varsa araç izini kullan. Model çıkarımını kullanıcı onayı yapma.

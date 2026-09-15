@@ -40,3 +40,11 @@ class HealthTests(unittest.TestCase):
         self.assertEqual('stale',snapshot(self.v,self.now)['status'])
         self.scan(-1)
         self.assertEqual('failed',snapshot(self.v,self.now)['status'])
+    def test_manual_scan_does_not_hide_missing_or_stopped_scheduler(self):
+        self.scan();self.audit()
+        self.write(Path('komuta/hafıza-işletim.json'),dict(require_scheduled_scan=True))
+        self.assertEqual('unknown',snapshot(self.v,self.now)['status'])
+        self.write(RUN_PATH.with_name('scheduled-scan.json'),dict(status='complete',finished_at=(self.now-dt.timedelta(hours=3)).isoformat()))
+        self.assertEqual('stale',snapshot(self.v,self.now)['status'])
+        self.write(RUN_PATH.with_name('scheduled-scan.json'),dict(status='complete',finished_at=self.now.isoformat()))
+        self.assertEqual('healthy',snapshot(self.v,self.now)['status'])

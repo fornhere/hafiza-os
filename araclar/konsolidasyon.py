@@ -73,9 +73,9 @@ def sessions(vault, root, since, quiet_minutes=20, diagnostics=None):
     grouped = {}
     for directory in ('sessions', 'archived_sessions'):
         for path in (root / directory).rglob('*.jsonl'):
-            if path.stat().st_mtime < since.timestamp() or now - path.stat().st_mtime < quiet_minutes * 60:
+            if path.stat().st_mtime < since.timestamp():
                 continue
-            try: row = snapshot(path)
+            try: row = snapshot(path, completed_prefix=True)
             except (ValueError, OSError, UnicodeError) as error:
                 # Subagent ownership is an intentional filter; all other failure is observable.
                 if 'transcript sahibi' in str(error):
@@ -104,7 +104,9 @@ def checkpoint(vault, data):
     session = data.get('session_id')
     if not session or not data.get('source_hash') or len(data.get('reason', '')) < 10:
         raise ValueError('oturum, kaynak hash ve inceleme sonucu gerekli')
-    actual = snapshot(data['path'])
+    actual = snapshot(data['path'], end_line=data.get('prefix_end_line'))
+    if data.get('prefix_end_line') is not None and actual['prefix_hash'] != data.get('prefix_hash'):
+        raise ValueError('checkpoint prefix değişti')
     if actual['session_id'] != session or actual['source_hash'] != data['source_hash']:
         raise ValueError('checkpoint kaynak görüntüsü değişti')
     outcome = data.get('outcome')
@@ -194,7 +196,7 @@ def health(vault):
 
 
 
-def scan_with_receipt(vault, root, since):
+def scan_with_receipt(vault, root, since, scheduled=False):
     """Operational receipt only: no transcript or user text is persisted."""
     from codex_hafiza import atomic
     from hafiza_saglik import RUN_PATH
@@ -212,6 +214,8 @@ def scan_with_receipt(vault, root, since):
             unresolved_count=sum(r.get('activity_state') != 'completed' for r in rows),
             oldest_eligible_at=dt.datetime.fromtimestamp(oldest, dt.timezone.utc).isoformat() if oldest else None)
         atomic(vault / RUN_PATH, json.dumps(receipt))
+        if scheduled:
+            atomic(vault / RUN_PATH.with_name("scheduled-scan.json"), json.dumps(receipt))
         return rows
     except Exception as error:
         atomic(vault / RUN_PATH, json.dumps(dict(status='failed', started_at=started,
@@ -229,6 +233,7 @@ def main():
     p.add_argument('--apply', action='store_true')
     p = sub.add_parser('sessions'); p.add_argument('--since', default=dt.date.today().isoformat())
     p.add_argument('--codex-root', type=Path, default=Path.home() / '.codex')
+    p.add_argument('--scheduled', action='store_true', help='Only the scheduled maintenance role uses this flag')
     p = sub.add_parser('checkpoint'); p.add_argument('--input-json', type=Path, required=True)
     args = parser.parse_args(); vault = args.vault.resolve()
     if args.cmd == 'pending': result = pending(vault)
@@ -236,7 +241,7 @@ def main():
     elif args.cmd == 'health': result = health(vault)
     elif args.cmd == 'review': result = review(vault, json.loads(args.input_json.read_text()), args.apply)
     elif args.cmd == 'checkpoint': result = checkpoint(vault, json.loads(args.input_json.read_text()))
-    else: result = scan_with_receipt(vault, args.codex_root, dt.datetime.fromisoformat(args.since).replace(tzinfo=dt.timezone.utc))
+    else: result = scan_with_receipt(vault, args.codex_root, dt.datetime.fromisoformat(args.since).replace(tzinfo=dt.timezone.utc), scheduled=args.scheduled)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if args.cmd == 'health' and args.check:
         raise SystemExit({'healthy': 0, 'failed': 1, 'stale': 2, 'unknown': 3}[result['operational_health']['status']])

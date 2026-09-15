@@ -43,8 +43,8 @@
       "path": "araclar/konsolidasyon.py",
       "mode": "reviewed-variant",
       "reason": "Private historic exclusion, identity prefix and import start date versus generic defaults.",
-      "local_sha256": "9fc77974c04e34e771f95b8e2af8c046b8344a81b7524e221cbbce4f8960e4fb",
-      "public_sha256": "84e8c3c41248a7a3e5c84714509407fd9aaf0338097d7833de9cd5ccf10e7bad"
+      "local_sha256": "faa5fe4d1f3c5434117489a715705bd3c5c69c00807dc73a5fa6325123f78a91",
+      "public_sha256": "3e98e8abeff58f92f1ccab99b0d87ca52dde51d172c4c6272dd3d627fa665d3a"
     },
     {
       "path": "araclar/kullanim_kontrol.py",

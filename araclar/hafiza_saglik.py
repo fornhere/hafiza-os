@@ -41,6 +41,23 @@ def snapshot(vault, now=None):
                 add('capture', 'healthy', 'Tarama güncel; özetlerin doğruluğu ayrı inceleme gerektirir.', stamp)
         except (ValueError, KeyError, TypeError, OSError):
             add('capture', 'failed', 'Tarama makbuzu okunamadı.')
+    settings = vault / 'komuta/hafıza-işletim.json'
+    try:
+        require_scheduled = settings.exists() and json.loads(settings.read_text()).get('require_scheduled_scan', False)
+    except (ValueError, OSError, AttributeError):
+        require_scheduled = False
+        add('scheduler', 'failed', 'Zamanlayıcı kontrol ayarı okunamadı.')
+    if require_scheduled:
+        scheduled = vault / RUN_PATH.with_name('scheduled-scan.json')
+        if not scheduled.exists():
+            add('scheduler', 'unknown', 'Yeni sürümde zamanlanmış tarama henüz gözlenmedi; elle tarama bunun yerine geçmez.')
+        else:
+            try:
+                data = json.loads(scheduled.read_text()); stamp = data['finished_at']
+                state = 'failed' if data.get('status') != 'complete' else ('stale' if age(stamp) > 7200 else 'healthy')
+                add('scheduler', state, 'Son zamanlanmış taramanın durumu; elle tarama bu saati yenilemez.', stamp)
+            except (ValueError, KeyError, TypeError, OSError):
+                add('scheduler', 'failed', 'Zamanlanmış tarama makbuzu okunamadı.')
     directory = vault / 'günlük/hafıza-makbuzları'
     audits = sorted(directory.glob('*-audit-*.json'))
     if not audits:

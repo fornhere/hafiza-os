@@ -152,4 +152,18 @@ class Pipeline(unittest.TestCase):
         k.checkpoint(self.vault, dict(inspected, outcome='no_relevant_change', reason='Bu oturum incelendi; kalıcı aday yok.'))
         self.assertEqual(['second'], [r['session_id'] for r in k.sessions(self.vault, root, since, 0)])
 
+class ScheduledScan(unittest.TestCase):
+    def test_manual_scan_never_refreshes_scheduled_receipt(self):
+        from hafiza_saglik import RUN_PATH
+        with tempfile.TemporaryDirectory() as directory:
+            vault=Path(directory)
+            since=dt.datetime(1970,1,1,tzinfo=dt.timezone.utc)
+            target=vault/RUN_PATH.with_name('scheduled-scan.json')
+            k.scan_with_receipt(vault,vault/'empty',since)
+            self.assertFalse(target.exists())
+            k.scan_with_receipt(vault,vault/'empty',since,scheduled=True)
+            before=target.read_bytes()
+            k.scan_with_receipt(vault,vault/'empty',since)
+            self.assertEqual(before,target.read_bytes())
+
 if __name__ == '__main__': unittest.main()

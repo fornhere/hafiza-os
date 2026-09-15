@@ -21,15 +21,45 @@ def clean_user(text):
     return '' if text.startswith(excluded) else text
 
 
-def snapshot(path):
+def snapshot(path, completed_prefix=False, end_line=None):
     path = Path(path)
     before = path.stat()
     raw = path.read_bytes()
     after = path.stat()
     if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
         raise ValueError('transcript okuma sırasında değişti')
+    lines = raw.decode('utf-8').splitlines()
+    # Establish rollout ownership before examining copied history or its partial writes.
+    for line in lines:
+        try: first = json.loads(line)
+        except json.JSONDecodeError: continue
+        if first.get('type') == 'session_meta':
+            meta = first.get('payload', {})
+            if meta.get('source') not in ('cli', 'vscode') or not meta.get('id'):
+                raise ValueError('desteklenmeyen veya alt ajan transcript sahibi')
+            break
+    boundary = None; suffix_parse_status = "ok"
+    if completed_prefix or end_line is not None:
+        terminal_lines = []; malformed_lines = []
+        for index, line in enumerate(lines, 1):
+            try: event = json.loads(line)
+            except json.JSONDecodeError:
+                malformed_lines.append(index)
+                continue
+            payload = event.get('payload', {})
+            if event.get('type') == 'event_msg' and payload.get('type') == 'task_complete' and payload.get('turn_id'):
+                terminal_lines.append(index)
+        boundary = end_line if end_line is not None else (terminal_lines[-1] if terminal_lines else None)
+        if boundary is not None:
+            if type(boundary) is not int or boundary not in terminal_lines:
+                raise ValueError('prefix sınırı gerçek task_complete olmalı')
+            if any(index <= boundary for index in malformed_lines):
+                raise ValueError('tamamlanmış prefix içinde bozuk JSON satırı')
+            if malformed_lines: suffix_parse_status = 'malformed'
+            lines = lines[:boundary]
+    prefix_hash = hashlib.sha256(('\n'.join(lines)).encode()).hexdigest() if boundary else None
     owner = None; users = {}; results = []; active = set(); completed = []; malformed = False; latest_turn = None; awaiting_result = False; final_since_terminal = False
-    for line in raw.decode('utf-8').splitlines():
+    for line in lines:
         try: item = json.loads(line)
         except json.JSONDecodeError:
             malformed = True; continue
@@ -65,6 +95,7 @@ def snapshot(path):
     # Terminal result and user content change the revision; token/commentary noise does not.
     revision = digest([owner['id'], users, results, completed])
     return dict(schema_version=2, session_id=owner['id'], path=str(path.resolve()),
+        prefix_end_line=boundary, prefix_hash=prefix_hash, suffix_parse_status=suffix_parse_status,
         user_count=len(users), parse_status='malformed' if malformed else 'ok', source_hash=revision, user_digest=digest(users),
         result_digest=digest([results, completed]), activity_state=state,
         last_completed_turn_id=completed[-1] if completed else None,
@@ -80,7 +111,16 @@ def excluded(vault, session):
 
 def validate_source(vault, session, source):
     if excluded(vault, session): raise ValueError('oturum kaydetmeme politikasıyla dışlandı')
-    actual = snapshot(source['path'])
+    for line in Path(source['path']).read_text().splitlines():
+        try: event = json.loads(line)
+        except json.JSONDecodeError: continue
+        payload = event.get('payload', {})
+        if event.get('type') == 'response_item' and payload.get('type') == 'message' and payload.get('role') == 'user':
+            text = '\n'.join(x.get('text', '') for x in payload.get('content', []) if isinstance(x, dict))
+            if privacy_command(text): raise ValueError('kaynak kullanıcı kaydetmeme isteği içeriyor')
+    actual = snapshot(source['path'], end_line=source.get('prefix_end_line'))
+    if source.get('prefix_end_line') is not None and actual['prefix_hash'] != source.get('prefix_hash'):
+        raise ValueError('incelenen tamamlanmış prefix değişti')
     if actual['session_id'] != session or actual['source_hash'] != source.get('source_hash'):
         raise ValueError('kaynak oturum veya revision uyuşmuyor')
     if actual['user_count'] <= 5: raise ValueError('ilk beş gerçek mesaj kaydedilmez')
@@ -124,13 +164,27 @@ def apply_prompt_policy(vault, session, prompt):
     """Conservative exact commands; nuanced privacy decisions need reviewer context."""
     import hafiza as h
     import datetime as dt
-    text = clean_user(prompt).casefold().strip().rstrip('.!')
-    text = re.sub(r'^kanka[, ]+', '', text)
-    if text not in ('bu oturumu kaydetme', 'bu konuşmayı hafızaya kaydetme',
-                    'bu oturumu hafızaya kaydetme', 'hafızaya kaydetme'):
-        return False
+    if not privacy_command(prompt): return False
     if not excluded(vault, session):
         h._append_jsonl(vault / h.EVENT_PATH, dict(event_type='session.policy',
             session_id=session, policy='do-not-record', actor='explicit-user-hook',
             at=dt.datetime.now(dt.timezone.utc).isoformat()))
     return True
+
+
+def read_completed_prefix(vault, session, source):
+    """Reviewer reads only this validated boundary, never an active suffix."""
+    actual = validate_source(vault, session, source)
+    if actual.get('prefix_end_line') is None:
+        raise ValueError('sınırlı okuma için prefix snapshot gerekli')
+    text = '\n'.join(Path(actual['path']).read_text().splitlines()[:actual['prefix_end_line']])
+    if hashlib.sha256(text.encode()).hexdigest() != actual['prefix_hash']:
+        raise ValueError('prefix okuma sırasında değişti')
+    return text
+
+
+def privacy_command(prompt):
+    text = clean_user(prompt).casefold().strip().rstrip('.!')
+    text = re.sub(r'^kanka[, ]+', '', text)
+    return text in ('bu oturumu kaydetme', 'bu konuşmayı hafızaya kaydetme',
+                    'bu oturumu hafızaya kaydetme', 'hafızaya kaydetme')

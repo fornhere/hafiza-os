@@ -6,6 +6,34 @@ from gorev_baglam import build_task_package, digest, validate_inputs
 from codex_hafiza import hook
 
 class Package(unittest.TestCase):
+ def asset_revision_fixture(self):
+  import hafiza as h
+  (self.v/'zihin').mkdir(exist_ok=True)
+  rows=[]
+  for ident,statement in [('old-asset','Kapak için eski sürüm tek aktif referanstır.'),('dignity','Kapak karakteri küçük düşürücü pozda gösterilmez.')]:
+   rows.append(dict(memory_id=ident,kind='semantic',scope='user',subject_key=ident,statement=statement,status='active',source_path='approval.md',source_anchor=ident,source_hash=h.statement_hash(statement),observed_at='2026-01-01',valid_from='2026-01-01',valid_to=None,confidence='explicit-user',sensitivity='normal',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1))
+  (self.v/'zihin/hafıza-kataloğu.jsonl').write_text('\n'.join(json.dumps(r) for r in rows)+'\n')
+  self.asset['replaces_memory_ids']=['old-asset']
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project]}))
+  return [dict(metadata=dict(memory_id=r['memory_id'])) for r in rows]
+ def test_exact_asset_revision_filters_local_and_remote_only_old_claim(self):
+  from gorev_baglam import hydrate_remote
+  remote=self.asset_revision_fixture()
+  package=build_task_package(self.v,'kapak')
+  self.assertNotIn('old-asset',package['selected_ids'])
+  self.assertIn('dignity',package['selected_ids'])
+  self.assertIn('mascot',package['selected_ids'])
+  self.assertIn('old-asset:asset_revision_replaced',package['omitted_reasons'])
+  self.assertEqual([r['metadata']['memory_id'] for r in hydrate_remote(self.v,remote)],['dignity'])
+ def test_invalid_replacement_exposes_conflict_without_restoring_old_claim(self):
+  from gorev_baglam import hydrate_remote
+  remote=self.asset_revision_fixture();self.image.write_bytes(b'changed')
+  package=build_task_package(self.v,'kapak')
+  self.assertNotIn('old-asset',package['selected_ids'])
+  self.assertIn('dignity',package['selected_ids'])
+  self.assertIn('asset_revision_conflict',package['text'])
+  with self.assertRaisesRegex(ValueError,'asset_revision_conflict'): hydrate_remote(self.v,remote)
+
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
   self.v=Path(self.tmp.name);(self.v/'komuta').mkdir()
@@ -58,3 +86,38 @@ class Package(unittest.TestCase):
     self.assertEqual(h.main(['--vault',str(self.v),'context','kapak']+extra),0)
    payload=json.loads(out.getvalue());self.assertEqual(payload['mode'],'local')
    self.assertEqual(payload['fallback_reason'],'RuntimeError' if extra else None)
+
+ def test_turkish_routing_independent_phrases(self):
+  from gorev_baglam import select_projects
+  projects=[dict(id='cover',aliases=['kapak','thumbnail'],roots=['/tmp/cover']),dict(id='game',aliases=['külaltı'],roots=['/tmp/game']),dict(id='astra',aliases=['astra videosu'],roots=['/tmp/astra'])]
+  cases={'kapağımızı yenileyelim':'cover','kapaklarımızı düzenle':'cover','Külaltına dönelim':'game',"Külaltı’nda ilerleyelim":'game','Astranın videosuna devam':'astra',"Astra’nın videosuna kapak üret":'astra','thumnail üret':'cover','kabak çorbası yap':None,'astral seyahat videosu':None,'dünkü iş':None,'o kapak':None}
+  for query,expected in cases.items():
+   with self.subTest(query=query):
+    rows,_=select_projects(projects,query)
+    self.assertEqual(rows[0]['id'] if len(rows)==1 else None,expected)
+  rows,reason=select_projects(projects,'Külaltına devam',cwd='/tmp/cover')
+  self.assertEqual([p['id'] for p in rows],['game']);self.assertEqual(reason,'explicit')
+  rows,reason=select_projects(projects,'o kapak',cwd='/tmp/cover')
+  self.assertEqual([p['id'] for p in rows],['cover']);self.assertEqual(reason,'cwd')
+  rows,_=select_projects(projects,'Külaltı ile Astranın videosu')
+  self.assertEqual(len(rows),2)
+
+ def test_unresolved_reference_explained_without_unrelated_noise(self):
+  for query in ('o kapağa devam','dünkü işi aç'):
+   result=build_task_package(self.v,query)
+   self.assertIsNone(result['project_id'])
+   self.assertIn('kaynak seçmeden netleştir',result['text'])
+  self.assertEqual(build_task_package(self.v,'kabak nasıl pişer')['text'],'')
+  self.assertEqual(build_task_package(self.v,'OBS nasıl açılır')['text'],'')
+
+ def test_named_project_keeps_identity_with_cover_workflow(self):
+  cfg={'projects':[self.project,dict(id='game',aliases=['külaltı'],roots=['/tmp/game'],assets=[]),dict(id='astra',aliases=['astra videosu'],roots=[],assets=[dict(self.asset,id='selected',role='selected-cover')])]}
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps(cfg))
+  for query,expected in [('Külaltı için kapak hazırla','game'),('Astra videosuna kapak hazırla','astra')]:
+   package=build_task_package(self.v,query)
+   self.assertEqual(package['project_id'],expected)
+   self.assertEqual(package['workflow_ids'],['youtube'])
+   self.assertEqual(validate_inputs(package['assets'],[str(self.image)]),[str(self.image)])
+   if expected=='game': self.assertIn('/tmp/game',package['text'])
+  package=build_task_package(self.v,'Külaltı devam')
+  self.assertEqual(package['assets'],[]);self.assertEqual(package['workflow_ids'],[])

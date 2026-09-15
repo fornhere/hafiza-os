@@ -1,3 +1,17 @@
+# 15 Eylül 2026 — Doğal ifadeler ve tamamlanan bölümler
+
+- Türkçe ekler, özel isim kesmeleri ve uzun kelimelerde sınırlı yazım
+  varyasyonları görev seçiminde desteklenir. Belirsiz geçmiş isteği açık kalır.
+- Açık konuşmaların tamamlanan bölümleri kaynak sınırı ve hash ile işlenir;
+  aktif devam kayıt dışındadır. Sonuç geldiğinde yeni sürüm yakalanır.
+- Gerçek araç kayıtları için kullanım denetimi eklendi; görünmeyen/sarmalanmış
+  çağrılar doğrulanmış sayılmaz. Girdi, araç sonucu ve kullanıcı kabulü ayrıdır.
+- Adlandırılmış projede kapak üretirken proje kökü ile kimlik referansı birlikte getirilir.
+- Kaynak sürümüyle değiştirilen belirli varlık iddiaları eski semantik sonuçlardan ayrılır; tarihçe silinmez.
+- Üretim argümanları doğrulama kapısından çıktıktan sonra değiştirilmeden araca verilebilir.
+- Zamanlanmış tarama yaşı manuel kontrolden ayrı izlenebilir; rutin bakım
+  başına kaynak sınırı ve tekrarsız bildirim yönergesi eklendi.
+
 # 15 Eylül 2026 — Kaynak sürümü, görev bağlamı ve doğrulama
 
 - Tamamlanan oturumların mesajları ve son sonuçları sürümlenir; kayıt ve

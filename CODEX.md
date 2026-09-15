@@ -123,3 +123,15 @@ Varlık gerektiren araç çağrısından önce [girdi kontrolünü](KULLANIM-DOG
 uygula. Genel araç engellemesi kurulmaz; ajan bu kontrolü çağırmalıdır.
 `konsolidasyon.py --vault KASA health --check` güncel işletim durumuna göre
 çıkış kodu verir. Birim testleri gerçek görev kalitesinin yerine geçmez.
+
+
+### Doğal dil ve bakım güncellemesi
+
+Yeni görev eşlemesi sınırlı Türkçe ekleri ve uzun kelimelerin yakın yazımını
+kullanır; genel dil anlama modeli değildir. Açık proje adı cwd'den önce gelir,
+iki açık proje netleştirme gerektirir. Geçmişe gönderme yapan belirsiz istekte
+kaynak uydurulmaz. Otomasyon yönergesindeki tamamlanan bölüm akışını ve
+`--scheduled` bayrağını güncelle. Zamanlayıcı kontrolünü açmak için
+`komuta/hafıza-işletim.json` içine `{"require_scheduled_scan": true}` yaz.
+Bu ayar tek başına otomasyon kurmaz. Manuel testte `--scheduled` kullanma;
+canlı zamanlayıcı doğrulaması ayrı kalmalıdır.

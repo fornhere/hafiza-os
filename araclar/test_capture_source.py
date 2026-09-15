@@ -50,7 +50,7 @@ class Capture(unittest.TestCase):
         self.assertEqual(1,len(rows))
         self.p.write_text(self.p.read_text()+'\n{broken')
         diagnostics=[];rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,diagnostics)
-        self.assertEqual('unknown',rows[0]['activity_state']);self.assertTrue(diagnostics)
+        self.assertEqual('malformed',rows[0]['suffix_parse_status'])
 
     def test_user_after_terminal_without_start_is_active(self):
         self.event('task_complete');self.rows.append(dict(type='response_item',timestamp='later',payload=dict(type='message',role='user',content=[dict(text='Yeni gerçek istek')])));self.save()
@@ -75,7 +75,7 @@ class Capture(unittest.TestCase):
     def test_actionable_rows_precede_old_active_rows(self):
         from unittest.mock import patch
         for i in range(12): (self.root/'sessions'/f'{i}.jsonl').write_text('{}')
-        def fake(path):
+        def fake(path, **kwargs):
             i=int(path.stem)
             return dict(session_id=str(i),source_hash=str(i),user_count=6,
                         activity_state='completed' if i==11 else 'active',last_modified=i)
@@ -86,11 +86,41 @@ class Capture(unittest.TestCase):
         from unittest.mock import patch
         for i in range(3): (self.root/'sessions'/f'{i}.jsonl').write_text('{}')
         calls=iter(['A','B','B'])
-        def fake(path):
+        def fake(path, **kwargs):
             return dict(session_id='s',source_hash=next(calls),user_count=6,
                         activity_state='completed',last_modified=1)
         with patch.object(k,'snapshot',side_effect=fake):
             rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0)
         self.assertEqual('ambiguous',rows[0]['activity_state'])
+
+    def test_completed_prefix_stays_valid_when_suffix_grows(self):
+        self.event('task_complete');self.save();snap=c.snapshot(self.p,completed_prefix=True)
+        self.rows.append(dict(type='response_item',timestamp='later',payload=dict(type='message',role='user',content=[dict(text='AKTIF SUFFIX OZETLENMEMELI')])));self.event('task_started','next');self.save()
+        self.assertEqual(snap['source_hash'],c.snapshot(self.p,completed_prefix=True)['source_hash'])
+        c.validate_source(self.v,'s',snap)
+        self.assertNotIn('AKTIF SUFFIX',c.read_completed_prefix(self.v,'s',snap))
+        hook.record(self.v,'s','recovery-v2-'+snap['source_hash'],'Yalnız tamamlanmış iş sonucu kaydı.',[],snap)
+        k.checkpoint(self.v,dict(snap,outcome='recorded',reason='Tamamlanmış prefix kaynakta incelendi.'))
+        self.event('task_complete','next');self.save()
+        self.assertNotEqual(snap['source_hash'],c.snapshot(self.p,completed_prefix=True)['source_hash'])
+    def test_prefix_must_end_at_terminal_and_preserve_threshold(self):
+        self.rows=self.rows[:6];self.event('task_complete');self.save();snap=c.snapshot(self.p,completed_prefix=True)
+        with self.assertRaises(ValueError): c.validate_source(self.v,'s',snap)
+        with self.assertRaises(ValueError): c.snapshot(self.p,end_line=2)
+    def test_prefix_mutation_invalidates_read(self):
+        self.event('task_complete');self.save();snap=c.snapshot(self.p,completed_prefix=True)
+        self.rows[1]['payload']['content'][0]['text']='Değişmiş kaynak kullanıcı isteği';self.save()
+        with self.assertRaises(ValueError): c.read_completed_prefix(self.v,'s',snap)
+
+    def test_partial_suffix_does_not_poison_completed_prefix(self):
+        self.event('task_complete');self.save();snap=c.snapshot(self.p,completed_prefix=True)
+        self.p.write_text(self.p.read_text()+'\n{"partial":')
+        actual=c.validate_source(self.v,'s',snap)
+        self.assertEqual('malformed',actual['suffix_parse_status'])
+        self.assertNotIn('partial',c.read_completed_prefix(self.v,'s',snap))
+    def test_privacy_suffix_blocks_prefix_without_hook(self):
+        self.event('task_complete');self.save();snap=c.snapshot(self.p,completed_prefix=True)
+        self.rows.append(dict(type='response_item',timestamp='privacy',payload=dict(type='message',role='user',content=[dict(text='Bu oturumu kaydetme')])));self.save()
+        with self.assertRaises(ValueError): c.validate_source(self.v,'s',snap)
 
 if __name__=='__main__':unittest.main()

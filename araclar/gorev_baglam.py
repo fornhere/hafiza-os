@@ -12,6 +12,64 @@ def digest(path):
 def tokens(text):
     return set(re.findall(r"[^\W_]+", text.casefold()))
 
+
+# Deliberately finite inflection vocabulary, not a general Turkish stemmer.
+_SUFFIXES = {'ı','i','u','ü','a','e','da','de','ta','te','dan','den','tan','ten',
+ 'ın','in','un','ün','nın','nin','nun','nün','na','ne','nı','ni','nu','nü',
+ 'ya','ye','yı','yi','yu','yü','la','le','yla','yle','lar','ler','ları','leri',
+ 'ım','im','um','üm','ımız','imiz','umuz','ümüz','ımızı','imizi','umuzu','ümüzü',
+ 'ımızın','imizin','umuzun','ümüzün','ımızda','imizde','umuzda','ümüzde',
+ 'nda','nde','ndan','nden','larımızı','lerimizi','larımız','lerimiz',
+ 'sı','si','su','sü','sına','sine','suna','süne','sını','sini','sunu','sünü'}
+_GENERIC = {'kapak','thumbnail','maskot','video','videosu','iş','proje'}
+
+def query_words(text):
+    # A proper-name apostrophe joins a suffix; quote boundaries remain boundaries.
+    text = text.casefold().replace('i\u0307','i')
+    text = re.sub(r"(?<=\w)['’](?=\w)", '', text)
+    return re.findall(r"[^\W_]+", text)
+
+def inflected(base, word):
+    if base == word: return True
+    if len(base) < 4: return False
+    variants = [base]
+    if base[-1:] in {'k','p','t','ç'}:
+        variants.append(base[:-1]+{'k':'ğ','p':'b','t':'d','ç':'c'}[base[-1]])
+    return any(word.startswith(stem) and word[len(stem):] in _SUFFIXES for stem in variants)
+
+def one_typo(left, right):
+    # Only long tokens: avoid kapak/kabak and short proper-name collisions.
+    if min(len(left),len(right)) < 7 or abs(len(left)-len(right)) > 1: return False
+    if len(left)==len(right):
+        positions=[i for i,(a,b) in enumerate(zip(left,right)) if a!=b]
+        return len(positions)==1 or (len(positions)==2 and positions[1]==positions[0]+1 and left[positions[0]]==right[positions[1]] and left[positions[1]]==right[positions[0]])
+    short,long=sorted([left,right],key=len)
+    return any(long[:i]+long[i+1:]==short for i in range(len(long)))
+
+def alias_match(alias, words, fuzzy=False):
+    parts=query_words(alias)
+    if not parts: return False
+    return all(any(inflected(part,word) or (fuzzy and one_typo(part,word)) for word in words) for part in parts)
+
+def select_projects(projects, query, cwd=None):
+    words=query_words(query)
+    deictic=any(w in words for w in ('dünkü','o','şu','önceki'))
+    def matches(project,fuzzy=False):
+        return any(alias_match(alias,words,fuzzy) and not (deictic and set(query_words(alias)) <= _GENERIC)
+                   for alias in project.get('aliases',[]))
+    explicit=[p for p in projects if matches(p)]
+    if not explicit: explicit=[p for p in projects if matches(p,True)]
+    specific=[p for p in explicit if any(alias_match(a,words) and not set(query_words(a)) <= _GENERIC for a in p.get('aliases',[]))]
+    if specific: explicit=specific
+    located=[p for p in projects if cwd and any(Path(cwd).resolve().is_relative_to(Path(r).resolve()) for r in p.get('roots',[]))]
+    # Nested workspaces choose the most specific root, never a sibling by recency.
+    if len(located)>1:
+        depths={p['id']:max(len(Path(r).resolve().parts) for r in p.get('roots',[]) if Path(cwd).resolve().is_relative_to(Path(r).resolve())) for p in located}
+        located=[p for p in located if depths[p['id']]==max(depths.values())]
+    chosen=explicit or located
+    reason='explicit' if explicit else ('cwd' if located else 'unresolved')
+    return chosen, reason
+
 def config(vault):
     path = vault / 'komuta/gorev-baglam.json'
     try: return json.loads(path.read_text()) if path.exists() else {'projects': []}
@@ -41,33 +99,73 @@ def validate_inputs(assets, actual_paths, role='identity'):
     if not required: raise ValueError('required asset role missing')
     return [str(validate_asset(a, actual_paths)) for a in required]
 
+def asset_claim_overrides(vault):
+    """Exact configured asset revisions only; canonical records stay untouched."""
+    overrides={}
+    for project in config(vault).get('projects',[]):
+        for asset in project.get('assets',[]):
+            ids=asset.get('replaces_memory_ids',[])
+            if not isinstance(ids,list): continue
+            try:
+                validate_asset(asset)
+                reason='asset_revision_replaced'
+            except (ValueError,OSError,KeyError):
+                reason='asset_revision_conflict'
+            for ident in ids:
+                if isinstance(ident,str) and ident:
+                    # Conflicting configured replacements must never restore old claims.
+                    previous=overrides.get(ident)
+                    overrides[ident]='asset_revision_conflict' if previous and previous!=reason else reason
+    return overrides
+
+
 def build_task_package(vault, query, cwd=None, budget=5000):
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions={}
     projects=[]
     cfg=config(vault)
     if cfg.get('invalid'): omitted.append('config_invalid')
-    for project in cfg.get('projects', []):
-        explicit = any(tokens(alias) <= words for alias in project.get('aliases', []) if tokens(alias))
-        location = cwd and any(Path(cwd).resolve().is_relative_to(Path(p).resolve()) for p in project.get('roots', []))
-        if explicit or location: projects.append(project)
+    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd)
     project = projects[0] if len(projects)==1 else None
+    workflows=[]
+    if project:
+        for candidate in cfg.get('projects',[]):
+            if candidate['id']==project['id']: continue
+            if any(set(query_words(a)) <= {'kapak','thumbnail','maskot'} and alias_match(a,query_words(query)) for a in candidate.get('aliases',[]) if query_words(a)):
+                workflows.append(candidate)
+        if workflows:
+            project=dict(project)
+            project['assets']=list(project.get('assets',[]))
+            project['working_sources']=list(project.get('working_sources',[]))
+            for workflow in workflows:
+                for asset in workflow.get('assets',[]):
+                    if not any(a['id']==asset['id'] for a in project['assets']): project['assets'].append(asset)
+                project['working_sources'].extend(workflow.get('working_sources',[]))
     scope = 'project:'+project['id'] if project else 'user'
     def add(ident, text):
         nonlocal used
         if used+len(text)>budget: omitted.append(ident+':budget'); return False
         lines.append(text); selected.append(ident); used+=len(text); return True
+    qwords=query_words(query)
+    deictic=any(w in qwords for w in ('dünkü','o','şu','önceki'))
+    task_reference=any(inflected(base,word) for base in ('kapak','video','proje','çıktı') for word in qwords) or any(w in qwords for w in ('iş','işi','işe','işin'))
+    if not projects and deictic and task_reference:
+        add('unresolved_reference','Hangi proje veya önceki çıktı olduğu bağlamdan belirlenemedi; kaynak seçmeden netleştir.')
     if len(projects)>1:
         omitted.append('ambiguous_project')
         add('ambiguous_project','Birden fazla proje eşleşti; proje seçimini netleştirmeden dosya veya onay uydurma.')
+    overrides=asset_claim_overrides(vault)
     for row in h.load_catalog(vault):
-        if not h.retrievable(row,scope): continue
+        if not any(h.retrievable(row,context_scope) for context_scope in [scope]+['project:'+w['id'] for w in workflows]): continue
         if not words.intersection(tokens(row.get('statement',''))): continue
+        if row.get('memory_id') in overrides:
+            omitted.append(row['memory_id']+':'+overrides[row['memory_id']]); continue
         if h.validate_catalog(vault,[row]): omitted.append(row.get('memory_id','unknown')+':invalid'); continue
         if add(row['memory_id'],row['statement']+' (kaynak: '+row['source_path']+')'):
             source_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
     if project:
         add('project', 'Proje: '+project['id'])
+        if workflows: add('workflow', 'Bu projedeki üretim yöntemi: '+', '.join(w['id'] for w in workflows)+'. Yöntem referansları proje seçimini değiştirmez.')
         for issue in project.get('unresolved',[]): add('unresolved', 'Teyit gerekli: '+issue)
         for ref in project.get('working_sources',[]):
             path=Path(ref['path']).resolve()
@@ -102,7 +200,7 @@ def build_task_package(vault, query, cwd=None, budget=5000):
             omitted.append('input-check:budget')
     errors=[reason for reason in omitted if not reason.endswith(':budget')]
     if errors: lines.append('Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.')
-    result={'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines)}
+    result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines)}
     result['package_id']=hashlib.sha256(json.dumps(result,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
     return result
 
@@ -110,9 +208,14 @@ def build_task_package(vault, query, cwd=None, budget=5000):
 def hydrate_remote(vault, results, scope='user'):
     """Remote search ranks IDs; current canonical rows supply all content."""
     rows = {r['memory_id']: r for r in h.load_catalog(vault)}
+    overrides=asset_claim_overrides(vault)
     output=[]
     for item in results:
         ident=(item.get('metadata') or {}).get('memory_id')
+        if ident in overrides:
+            if overrides[ident]=='asset_revision_conflict':
+                raise ValueError('asset_revision_conflict: replacement invalid; old claim excluded')
+            continue
         row=rows.get(ident)
         if row and h.retrievable(row,scope) and not h.validate_catalog(vault,[row]):
             output.append({'memory':row['statement'],'metadata':row})
