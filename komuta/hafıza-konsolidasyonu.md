@@ -113,3 +113,32 @@ Aynı hata iki ardışık bakımda otomatik düzeltilemiyorsa bir kez somut enge
 bildir; değişmeyen uyarıyı tekrarlama. Kontroller geçince yeni özellik eklemek
 zorunlu değildir. Kullanıcıdan rutin kabul puanı isteme; gerçek geri bildirimi
 ve varsa araç izini kullan. Model çıkarımını kullanıcı onayı yapma.
+
+
+## 16 Eylül — Özgün beyan ve kaynak sürümü
+
+Semantik aday üretirken özet içindeki alıntıyla yetinme. Adayın
+`evidence_source` alanına incelenen snapshot kimlik/hash alanlarını ve
+özgün kullanıcı `response_item` satırının 1 tabanlı `line`, temizlenmiş
+mesajın `message_hash` ve birebir `quote` değerini koy. Tam alan sözleşmesi
+[Codex geçiş rehberindedir](../CODEX.md#16-eylül-kaynak-ve-kapsam-geçişi).
+Özgün beyanı bulunmayan adayı otomatik terfi ettirme. Kaynak hash'i değişmişse
+önce yeni sürümü incele; olumlu review bayrakları bu denetimi atlamaz.
+
+`needs_semantic_review` farklı anahtar altında benzer konu uyarısıdır;
+kesin tekrar veya çelişki kararı değildir. Kaynakları karşılaştırıp
+`duplicate`, `reject` veya `defer` kararı ver. Sırf terfi etsin diye anahtarı
+ya da cümleyi yeniden adlandırma. İlgili karar belirsizse ertelenmiş kalır.
+
+Açık bütün-oturum kaydetmeme isteği dışlama politikası olabilir. “Bunu
+kaydetme” gibi yerel/kapsamı belirsiz istekte kayıt kapısı inceleme bekler;
+bunu otomatik olarak bütün oturumun kalıcı dışlanmasına dönüştürme.
+Alıntı/örnek ile gerçek talimatı kaynaktan ayır. Bu eşleme bütün doğal dil
+ifadelerini kapsamaz; özel bilgiyi kaydetmeme yükümlülüğü devam eder.
+
+Eski kanonik cümleyi güncel kaynak destekliyorsa `bind-source` dry-run ve
+apply ile ayrı kaynak bağı eklenebilir. Kaynağı gerçekten incele; dosyada
+bulunan herhangi bir alıntı cümleyi destekliyor sayılmaz. Desteklenmeyen
+kaydı topluca sabitleme. Bu işlem kanonik tercih değişikliği veya Mem0
+senkronu değildir. Projeye özgü dersleri proje/iş akışı kapsamıyla güncelle;
+kapsamı olmayan eski derslerin global kalacağını dikkate al.

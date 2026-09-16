@@ -100,6 +100,8 @@ class HafizaDogrulamaTesti(unittest.TestCase):
     def test_aday_ekler_ve_ayni_gercegi_tekrar_eklemez(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
+            (vault / "zihin").mkdir()
+            (vault / "zihin/çekirdek.md").write_text("Forn dosya adlarında Türkçe kullanır.")
             kwargs = {
                 "statement": "Forn dosya adlarında Türkçe kullanır.",
                 "kind": "semantic",
@@ -294,6 +296,8 @@ class HafizaDogrulamaTesti(unittest.TestCase):
     def test_terfi_inceleyen_olmadan_katalog_yazmaz(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
+            (vault / "zihin").mkdir()
+            (vault / "zihin/çekirdek.md").write_text("Forn kısa ve net cevapları tercih eder.")
             hafiza.add_candidate(
                 vault,
                 statement="Forn kısa ve net cevapları tercih eder.",

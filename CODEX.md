@@ -135,3 +135,65 @@ kaynak uydurulmaz. Otomasyon yönergesindeki tamamlanan bölüm akışını ve
 `komuta/hafıza-işletim.json` içine `{"require_scheduled_scan": true}` yaz.
 Bu ayar tek başına otomasyon kurmaz. Manuel testte `--scheduled` kullanma;
 canlı zamanlayıcı doğrulaması ayrı kalmalıdır.
+
+
+## 16 Eylül kaynak ve kapsam geçişi
+
+Önce kişisel araçları ve ayarları yedekle; güncel araç dosyalarını taşırken
+kimlik, dışlama ve proje manifestini koru. Aşağıdaki geçişler birbirinden ayrıdır:
+
+1. **Aday üreticisi:** `semantic_candidates` doluysa `source_snapshot` ve her
+   adayda `evidence_source` zorunludur. `evidence_source`, incelenen snapshot'ın
+   `session_id`, `path`, `prefix_end_line`, `prefix_hash`, `source_hash`
+   değerlerini taşır. Buna özgün JSONL kullanıcı `response_item` satırının
+   1 tabanlı `line` numarası, `capture_source.digest(clean_user(mesaj_metni))`
+   ile hesaplanan `message_hash` ve adayın `evidence` alanıyla aynı `quote`
+   eklenir. `evidence` hem özgün mesajda hem makbuz özetinde birebir bulunmalıdır.
+   Aday yoksa `semantic_candidates: []` kullan; kanıt üretmek için metin uydurma.
+2. **Eski kaynak bağları:** erişimden düşen kaydı kaynağıyla tek tek karşılaştır.
+   Kaynak hâlâ kanonik cümleyi destekliyorsa aşağıdaki araçla incelenen sürümü
+   bağla. Desteklemiyorsa topluca hash ekleme; kayıt incelemesini açık tut.
+   Kaynak dosyanın varlığı tek başına yeterli değildir. Eski kaydın tam
+   cümlesi kaynakta bulunuyorsa bağsız erişim mümkün olabilir; bu, kapsamlı
+   bir doğruluk denetimi yerine geçmez.
+3. **Ders kapsamı:** projeye özgü derslere `project_id` ve
+   `scope: "project:PROJE_KIMLIGI"` ekle. Gerçekten ortak yöntemlerde
+   `scope: "global"` kullan. Ne kapsamı ne proje kimliği olan eski dersler
+   uyumluluk için global davranır; bunları ayrıca incele. `project_id` varsa
+   global etiketi proje sınırını kaldırmaz. Ders güncellemesini `is_ve_ders.py`
+   ve `expected_version` ile yap; kapsam düzenlemesi sonucu `verified` yapmaz.
+4. **Açılış:** kişisel yönergelerde bütün oturum günlüğünü okuma talebini
+   yalnız en yeni bölümle sınırla. `python3 araclar/codex_hafiza.py --vault .
+   latest-session` en yeni tarihli bölümü en fazla 2500 karakterle döndürür.
+   Diğer açılış dosyaları bu komutla otomatik sınırlandırılmaz.
+
+Kaynak bağlama girdisi `memory_id`, `reviewed_by`, en az 20 karakterlik
+`reason`, kaynakta birebir bulunan `evidence` ve
+`hafiza.statement_hash(kaynak_metni)` ile hesaplanan `expected_source_hash`
+alanlarını taşır. Önce sonucu incele, sonra uygula:
+
+```bash
+python3 araclar/hafiza.py --vault . bind-source --input-json kaynak-bagi.json
+python3 araclar/hafiza.py --vault . bind-source --input-json kaynak-bagi.json --apply
+```
+
+Bağlar `zihin/kaynak-surumleri.jsonl` dosyasına eklenir; kanonik cümle
+ve Mem0 içeriği bu komutla değiştirilmez. Kaynak tekrar değişirse yeniden
+inceleme gerekir. Farklı `subject_key` altında benzer konu bulunan aday
+`needs_semantic_review` dönebilir: bunu doğrulanmış tekrar veya çelişki
+sayma. Kaynak incelemesiyle `duplicate`, `reject` veya `defer` kullan;
+uyarıyı aşmak için anahtarı ya da kanıtı değiştirme.
+
+`gorev_baglam.py package` çıktısındaki `usage` karakter bütçesini ve seçilen/
+dışlanan öğe sayılarını verir. Hook durumundaki `context_usage` gönderilen ve
+atlanmış karakterleri biriktirir. `token_count: null` ölçüm yok demektir.
+Paket tekrar kontrolü yalnız birebir aynı paket ve kaynak sürümlerinde bir
+ardışık tekrarı atlar; her iki istemde yeniden gönderim mümkündür.
+`SessionStart` önbelleği sıfırlar; uygulamadaki her bağlam daraltmanın bu
+olayı ürettiğini kendi kurulumunda ayrıca gözle. Genel maliyet hesabına
+inceleme, kaynak açma ve model yanıtları da katılmalıdır.
+
+Geçiş sonrası birim testlerini, kişisel proje eşleşmesini, değiştirilmiş
+kaynağın dışlanmasını ve gerçek hook/zamanlayıcı akışını ayrı doğrula.
+Manuel taramayı zamanlanmış başarı gibi kaydetme; `--scheduled` yalnız
+zamanlayıcı rolünde kullanılır. İlk beş mesaj ve sessiz bakım kuralları sürer.

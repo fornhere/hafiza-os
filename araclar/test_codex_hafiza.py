@@ -103,5 +103,43 @@ class Hooks(unittest.TestCase):
             h.record(self.vault, 's', 't', 'Mevcut makbuzun üzerine yazılması reddedilmelidir.')
 
 
+    def test_package_repeat_refresh_and_source_invalidation(self):
+        from unittest.mock import patch
+        package={'text':'Güncel karar ve kaynak.', 'source_versions':{'karar.md':'v1'}}
+        with patch('gorev_baglam.build_task_package',return_value=package):
+            a=self.event('UserPromptSubmit','t1',prompt='aynı görev')
+            b=self.event('UserPromptSubmit','t2',prompt='aynı görev')
+            c=self.event('UserPromptSubmit','t3',prompt='aynı görev')
+            self.assertIn(package['text'],a['hookSpecificOutput']['additionalContext'])
+            self.assertEqual({},b)
+            self.assertIn(package['text'],c['hookSpecificOutput']['additionalContext'])
+            package['source_versions']['karar.md']='v2'
+            d=self.event('UserPromptSubmit','t4',prompt='aynı görev')
+            self.assertIn(package['text'],d['hookSpecificOutput']['additionalContext'])
+        state=json.loads(next(self.vault.rglob('.state/*.json')).read_text())
+        self.assertEqual(len(package['text']),state['context_usage']['suppressed_chars'])
+        self.assertIsNone(state['context_usage']['token_count'])
+
+    def test_resume_compaction_resets_package_cache(self):
+        from unittest.mock import patch
+        with patch('gorev_baglam.build_task_package',return_value={'text':'Korunacak önemli bağlam'}):
+            for i,source in enumerate(('startup','resume','compact')):
+                self.event('UserPromptSubmit',f'before-{i}',prompt='iş')
+                self.event('SessionStart',source=source)
+                result=self.event('UserPromptSubmit',f'after-{i}',prompt='iş')
+                self.assertIn('Korunacak önemli bağlam',result['hookSpecificOutput']['additionalContext'])
+
+    def test_latest_section_is_bounded_and_date_selected(self):
+        (self.vault/'zihin').mkdir()
+        path=self.vault/'zihin/son-oturum.md'
+        path.write_text('## 2026-09-16 — güncel\n'+('güncel '*1000)+'\n## 2026-01-01 — eski\nESKİ BİLGİ')
+        text=h.latest_session_section(self.vault)
+        self.assertLessEqual(len(text),2500)
+        self.assertNotIn('ESKİ BİLGİ',text)
+        self.assertIn('Kesildi',text)
+        opening=self.event('SessionStart')['hookSpecificOutput']['additionalContext']
+        self.assertIn('latest-session',opening)
+        self.assertIn('Diğer ajan açılış yönergeleri geçerlidir',opening)
+
 if __name__ == '__main__':
     unittest.main()

@@ -123,4 +123,92 @@ class Capture(unittest.TestCase):
         self.rows.append(dict(type='response_item',timestamp='privacy',payload=dict(type='message',role='user',content=[dict(text='Bu oturumu kaydetme')])));self.save()
         with self.assertRaises(ValueError): c.validate_source(self.v,'s',snap)
 
+    def test_exec_requires_user_ownership(self):
+        self.rows[0]['payload'].update(source='exec', thread_source='user')
+        self.event('task_complete'); self.save()
+        self.assertEqual('completed', c.snapshot(self.p)['activity_state'])
+        for source in ({'subagent': {}}, 'agent', None):
+            self.rows[0]['payload']['thread_source'] = source; self.save()
+            with self.assertRaises(ValueError): c.snapshot(self.p)
+
+    def test_desktop_created_task_is_known_main_source(self):
+        self.rows[0]['payload'].update(source='vscode', thread_source='agent_created_thread', originator='Codex Desktop')
+        self.event('task_complete'); self.save()
+        self.assertEqual('completed', c.snapshot(self.p)['activity_state'])
+        errors=[]
+        rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,errors)
+        self.assertEqual(['s'], [row['session_id'] for row in rows])
+        self.assertEqual([], errors)
+        # Known ownership does not bypass the first-five-message gate.
+        self.rows=self.rows[:6]+[self.rows[-1]]; self.save()
+        snap=c.snapshot(self.p)
+        with self.assertRaises(ValueError): c.validate_source(self.v,'s',snap)
+
+    def test_unknown_created_task_producer_remains_diagnostic(self):
+        self.event('task_complete')
+        for source, origin in [('exec','Codex Desktop'), ('vscode','unknown'), ('vscode',None)]:
+            with self.subTest(source=source,origin=origin):
+                self.rows[0]['payload'].update(source=source, thread_source='agent_created_thread', originator=origin)
+                self.save(); errors=[]
+                self.assertEqual([],k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,errors))
+                self.assertEqual(1,len(errors))
+
+    def test_desktop_origin_does_not_promote_collaboration_worker(self):
+        self.event('task_complete')
+        for owner in ['subagent','agent',{'subagent': {'parent_thread_id':'parent'}}]:
+            with self.subTest(owner=owner):
+                self.rows[0]['payload'].update(source='vscode', thread_source=owner, originator='Codex Desktop')
+                self.save(); errors=[]
+                self.assertEqual([],k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,errors))
+                self.assertEqual([],errors)
+                with self.assertRaises(ValueError): c.snapshot(self.p)
+
+    def test_original_evidence_rejects_fabricated_summary(self):
+        self.event('task_complete'); self.save(); snap=c.snapshot(self.p, completed_prefix=True)
+        quote='Gerçek istek 5'
+        evidence=dict(snap, line=7, message_hash=c.digest(quote), quote=quote)
+        c.validate_candidate_evidence(self.v, 's', snap, evidence, quote)
+        with self.assertRaises(ValueError):
+            c.validate_candidate_evidence(self.v,'s',snap,dict(evidence,quote='Uydurulmuş tercih'), 'Uydurulmuş tercih')
+        with self.assertRaises(ValueError):
+            c.validate_candidate_evidence(self.v,'s',snap,dict(evidence,line=8),quote)
+
+    def test_natural_privacy_defers_without_copying(self):
+        self.rows[6]['payload']['content'][0]['text']='Şu anlattığımı hafızaya kaydetme lütfen'
+        self.event('task_complete'); self.save(); snap=c.snapshot(self.p,completed_prefix=True)
+        with self.assertRaises(ValueError): c.read_completed_prefix(self.v,'s',snap)
+        self.assertFalse(c.privacy_command('Kanka bunu hatırlama.'))
+        self.assertTrue(c.privacy_ambiguous('Kanka bunu hatırlama.'))
+        self.assertFalse(c.apply_prompt_policy(self.v,'s','Şu anlattığımı hafızaya kaydetme lütfen'))
+
+    def test_concurrent_suffix_append_preserves_snapshot(self):
+        from unittest.mock import patch
+        self.event('task_complete'); self.save(); snap=c.snapshot(self.p,completed_prefix=True)
+        original=Path.read_bytes
+        def growing(path):
+            raw=original(path)
+            if path==self.p:
+                with path.open('ab') as out: out.write(b'\n{"partial":')
+            return raw
+        with patch.object(Path,'read_bytes',growing):
+            self.assertEqual(snap['prefix_hash'], c.snapshot(self.p,completed_prefix=True)['prefix_hash'])
+
+    def test_privacy_common_holdouts_and_quoted_examples(self):
+        requests = ['Bunu hafızaya alma lütfen.', 'Şu bilgiyi kayıt altına almayalım.',
+            'Lütfen bunu saklama, örnek vermiştim.', 'Bunları bellekte tutma.',
+            'Söylediğimi not olarak yazma.', 'Bunu kaydetmeni istemiyorum.',
+            'Bu bilgiyi hafızaya almayın.', 'Bunu kaydetmeyelim.', 'Bu bilgiyi saklamayalım.', 'Hafızanda kalmasın.', 'Aramızda kalsın.', 'Hafızaya alınmasın.']
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertTrue(c.privacy_ambiguous(request))
+                self.assertFalse(c.apply_prompt_policy(self.v,'s',request))
+        discussions = ['Bana önceki kaydetme hatasını açıkla.',
+            '"Bunu hafızaya alma" komutu nasıl çalışır?',
+            'Örnek: `bunu kaydetme`. Bu komutun testini yaz.',
+            'Belgede “bu oturumu kaydetme” yazıyor; belgenin üslubunu incele.']
+        for request in discussions:
+            with self.subTest(request=request): self.assertFalse(c.privacy_ambiguous(request))
+        self.assertTrue(c.privacy_ambiguous('"Bunu kaydetme" örneğini açıkladım. Şu bilgiyi hafızaya alma.'))
+        self.assertTrue(c.privacy_command('Kanka, bu sohbeti kaydetme lütfen.'))
+
 if __name__=='__main__':unittest.main()

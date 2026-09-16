@@ -26,7 +26,7 @@ def snapshot(path, completed_prefix=False, end_line=None):
     before = path.stat()
     raw = path.read_bytes()
     after = path.stat()
-    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+    if not (completed_prefix or end_line is not None) and (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
         raise ValueError('transcript okuma sırasında değişti')
     lines = raw.decode('utf-8').splitlines()
     # Establish rollout ownership before examining copied history or its partial writes.
@@ -35,7 +35,7 @@ def snapshot(path, completed_prefix=False, end_line=None):
         except json.JSONDecodeError: continue
         if first.get('type') == 'session_meta':
             meta = first.get('payload', {})
-            if meta.get('source') not in ('cli', 'vscode') or not meta.get('id'):
+            if not main_owner(meta):
                 raise ValueError('desteklenmeyen veya alt ajan transcript sahibi')
             break
     boundary = None; suffix_parse_status = "ok"
@@ -88,7 +88,7 @@ def snapshot(path, completed_prefix=False, end_line=None):
                 active.discard(turn)
                 if latest_turn is None: latest_turn = turn
                 if turn not in completed: completed.append(turn)
-    if not owner or owner.get('source') not in ('cli', 'vscode') or not owner.get('id'):
+    if not owner or not main_owner(owner):
         raise ValueError('desteklenmeyen veya alt ajan transcript sahibi')
     state = ('unknown' if malformed else 'active' if latest_turn in active or awaiting_result
              else 'completed' if completed else 'unknown')
@@ -117,7 +117,7 @@ def validate_source(vault, session, source):
         payload = event.get('payload', {})
         if event.get('type') == 'response_item' and payload.get('type') == 'message' and payload.get('role') == 'user':
             text = '\n'.join(x.get('text', '') for x in payload.get('content', []) if isinstance(x, dict))
-            if privacy_command(text): raise ValueError('kaynak kullanıcı kaydetmeme isteği içeriyor')
+            if privacy_command(text) or privacy_ambiguous(text): raise ValueError('kaynak kullanıcı kaydetmeme isteği veya belirsiz gizlilik kapsamı içeriyor; inceleme gerekli')
     actual = snapshot(source['path'], end_line=source.get('prefix_end_line'))
     if source.get('prefix_end_line') is not None and actual['prefix_hash'] != source.get('prefix_hash'):
         raise ValueError('incelenen tamamlanmış prefix değişti')
@@ -183,8 +183,78 @@ def read_completed_prefix(vault, session, source):
     return text
 
 
+def privacy_text(prompt):
+    """Remove clearly quoted examples, preserving actual surrounding instructions."""
+    text = clean_user(prompt).casefold()
+    unquoted = re.sub(r'```.*?```|`[^`]*`|"[^"\n]*"|“[^”\n]*”', ' ', text, flags=re.S)
+    unquoted = re.sub(r'^\s*>[^\n]*', ' ', unquoted, flags=re.M)
+    # A standalone quote may itself be an instruction: defer instead of ignoring it.
+    if not unquoted.strip(): return text
+    return unquoted
+
+
 def privacy_command(prompt):
-    text = clean_user(prompt).casefold().strip().rstrip('.!')
-    text = re.sub(r'^kanka[, ]+', '', text)
-    return text in ('bu oturumu kaydetme', 'bu konuşmayı hafızaya kaydetme',
-                    'bu oturumu hafızaya kaydetme', 'hafızaya kaydetme')
+    """Only explicit whole-session scope becomes a persistent exclusion policy."""
+    text = privacy_text(prompt).strip().rstrip('.!')
+    text = re.sub(r'^(?:(?:kanka|lütfen)[, ]+)+', '', text)
+    text = re.sub(r'[, ]+lütfen$', '', text)
+    return bool(re.fullmatch(
+        r'(?:bu (?:oturumu|konuşmayı|sohbeti)(?: hafızaya)? (?:kaydetme|alma|saklama)'
+        r'|bu (?:konuşma|sohbet) aramızda kalsın)', text))
+
+
+def main_owner(meta):
+    """Exec is a main conversation only with explicit user-thread ownership."""
+    if not meta.get('id'): return False
+    source = meta.get('source')
+    # Desktop create_thread produces a standalone, user-visible task, not a
+    # collaboration worker. Accept only the observed explicit metadata tuple;
+    # unknown producers and subagent ownership must remain rejected.
+    if meta.get('thread_source') == 'agent_created_thread':
+        return source == 'vscode' and meta.get('originator') == 'Codex Desktop'
+    if source == 'exec': return meta.get('thread_source') == 'user'
+    return source in ('cli', 'vscode') and meta.get('thread_source', 'user') == 'user'
+
+
+def validate_candidate_evidence(vault, session, source, evidence_source, evidence):
+    """Bind the quoted statement to an immutable original user message."""
+    if not isinstance(evidence_source, dict):
+        raise ValueError('özgün kullanıcı mesajı kanıtı gerekli')
+    actual = validate_source(vault, session, source)
+    for field in ('session_id', 'path', 'prefix_end_line', 'prefix_hash', 'source_hash'):
+        if evidence_source.get(field) != actual.get(field):
+            raise ValueError('aday kanıtı kaynak snapshot ile uyuşmuyor')
+    lines = read_completed_prefix(vault, session, source).splitlines()
+    line = evidence_source.get('line')
+    if type(line) is not int or not 1 <= line <= len(lines):
+        raise ValueError('özgün kullanıcı mesaj satırı gerekli')
+    item = json.loads(lines[line - 1]); p = item.get('payload', {})
+    if item.get('type') != 'response_item' or p.get('type') != 'message' or p.get('role') != 'user':
+        raise ValueError('kanıt özgün kullanıcı mesajı olmalı')
+    text = clean_user('\n'.join(x.get('text', '') for x in p.get('content', []) if isinstance(x, dict)))
+    if not text or evidence_source.get('message_hash') != digest(text):
+        raise ValueError('kullanıcı mesaj hash uyuşmazlığı')
+    if evidence_source.get('quote') != evidence or evidence not in text:
+        raise ValueError('alıntı özgün kullanıcı mesajında yok')
+    return evidence_source
+
+
+def privacy_ambiguous(prompt):
+    """Conservative review gate for local/unclear scope; not a session policy.
+
+    This covers common Turkish forms, not arbitrary natural-language semantics.
+    Instruction-vs-quotation and final scope still require reviewer judgment.
+    """
+    text = privacy_text(prompt)
+    negative = r'(?:kaydetme(?:yin|yiniz|meni|ni|k|yelim)?|saklama(?:yın|manı|yalım)?|hatırlama(?:manı)?|unut|alma(?:yın|yalım)?|alınmasın|kalmasın|tutma|yazma|etmeyelim)'
+    # Names of commands/errors are discussion, not imperatives. No blanket
+    # exemption for a word such as "örnek" anywhere else in the request.
+    text = re.sub(r'\b(?:kaydetme|hatırlama|saklama) (?:hatasını|hatası|komutu|komutunu|komutunun|işlemini|işlemi)\b', '', text)
+    patterns = (
+        r'\b(?:bunu|bunları|şunu|şunları|bu bilgiyi|şu bilgiyi|anlattığımı|söylediğimi|konuştuklarımızı)\b[^.!?\n]{0,90}\b'+negative+r'\b',
+        r'\b(?:hafızaya|hafızanda|belleğe|bellekte|kayıt altına|not olarak)\b[^.!?\n]{0,50}\b'+negative+r'\b',
+        r'\b(?:kaydetmeni|saklamanı|hatırlamanı) istemiyorum\b',
+        r'\b(?:kaydedilmesin|kaydedilmesini istemiyorum|hafızaya alınmasın|aramızda kalsın)\b',
+        r'^(?:\s*(?:kanka|lütfen)[, ]+)*(?:kaydetme|saklama|hatırlama)[.! ]*$',
+    )
+    return privacy_command(prompt) or any(re.search(pattern, text) for pattern in patterns)

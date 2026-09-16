@@ -8,6 +8,7 @@ import unittest
 import hafiza as h
 import codex_hafiza as hook
 import konsolidasyon as k
+import capture_source as capture
 from test_hafiza import FakeMem0
 
 
@@ -22,13 +23,37 @@ class Pipeline(unittest.TestCase):
                              subject_key='channel.seo-focus', evidence=self.evidence)
 
     def receipt(self):
-        return hook.record(self.vault, 's', 't', 'Kullanıcı beyanı: ' + self.evidence, [self.proposal])
+        path=self.vault/'original.jsonl'
+        rows=[dict(type='session_meta',payload=dict(id='s',source='exec',thread_source='user'))]
+        rows += [dict(type='response_item',timestamp=str(i),payload=dict(type='message',role='user',content=[dict(text=self.evidence if i==5 else 'Gerçek istek '+str(i))])) for i in range(6)]
+        rows.append(dict(type='event_msg',payload=dict(type='task_complete',turn_id='t')))
+        path.write_text('\n'.join(map(json.dumps,rows)))
+        snap=capture.snapshot(path,completed_prefix=True)
+        proposal=dict(self.proposal,evidence_source=dict(snap,line=7,message_hash=capture.digest(self.evidence),quote=self.evidence))
+        return hook.record(self.vault, 's', 'recovery-v2-'+snap['source_hash'], 'Kullanıcı beyanı: ' + self.evidence, [proposal],snap)
 
     def decision(self, ident):
         return dict(candidate_id=ident, reviewed_by=k.ACTOR, decision='approve',
             reason='Kaynak kullanıcı beyanı okundu; kalıcı tercih ve katalogda eşdeğeri yok.',
             source_checked=True, explicit_user=True, durable=True,
             normal_sensitivity=True, no_semantic_duplicate=True)
+
+    def test_review_booleans_cannot_replace_original_evidence(self):
+        first=self.receipt(); cid=first['candidates'][0]['candidate_id']
+        rows=h.load_jsonl(self.vault/h.CANDIDATE_PATH)
+        rows[0].pop('evidence_source',None)
+        h._write_jsonl(self.vault/h.CANDIDATE_PATH,rows)
+        with self.assertRaises(ValueError): k.review(self.vault,self.decision(cid),True)
+        self.assertEqual([],h.load_catalog(self.vault))
+
+    def test_original_message_mutation_blocks_promotion(self):
+        first=self.receipt(); cid=first['candidates'][0]['candidate_id']
+        original=self.vault/'original.jsonl'
+        events=[json.loads(line) for line in original.read_text().splitlines()]
+        events[6]['payload']['content'][0]['text']='Tamamen farklı kullanıcı isteği'
+        original.write_text('\n'.join(map(json.dumps,events)))
+        with self.assertRaises(ValueError): k.review(self.vault,self.decision(cid),True)
+        self.assertEqual([],h.load_catalog(self.vault))
 
     def test_receipt_review_sync_retry_roundtrip(self):
         first = self.receipt(); self.receipt()

@@ -1,4 +1,5 @@
 """Local, source-validated task context. No network and no memory writes."""
+import math
 import hashlib
 import json
 import re
@@ -20,7 +21,8 @@ _SUFFIXES = {'ı','i','u','ü','a','e','da','de','ta','te','dan','den','tan','te
  'ım','im','um','üm','ımız','imiz','umuz','ümüz','ımızı','imizi','umuzu','ümüzü',
  'ımızın','imizin','umuzun','ümüzün','ımızda','imizde','umuzda','ümüzde',
  'nda','nde','ndan','nden','larımızı','lerimizi','larımız','lerimiz',
- 'sı','si','su','sü','sına','sine','suna','süne','sını','sini','sunu','sünü'}
+ 'larını','lerini','larının','lerinin','larına','lerine','larda','lerde','lardan','lerden',
+ 'ki','sı','si','su','sü','sına','sine','suna','süne','sını','sini','sunu','sünü'}
 _GENERIC = {'kapak','thumbnail','maskot','video','videosu','iş','proje'}
 
 def query_words(text):
@@ -35,7 +37,12 @@ def inflected(base, word):
     variants = [base]
     if base[-1:] in {'k','p','t','ç'}:
         variants.append(base[:-1]+{'k':'ğ','p':'b','t':'d','ç':'c'}[base[-1]])
-    return any(word.startswith(stem) and word[len(stem):] in _SUFFIXES for stem in variants)
+    def suffix_chain(tail, depth=0):
+        if not tail: return depth > 0
+        if depth >= 4 or len(tail) > 20: return False
+        return any(tail.startswith(suffix) and suffix_chain(tail[len(suffix):], depth+1)
+                   for suffix in _SUFFIXES)
+    return any(word.startswith(stem) and suffix_chain(word[len(stem):]) for stem in variants)
 
 def one_typo(left, right):
     # Only long tokens: avoid kapak/kabak and short proper-name collisions.
@@ -50,6 +57,35 @@ def alias_match(alias, words, fuzzy=False):
     parts=query_words(alias)
     if not parts: return False
     return all(any(inflected(part,word) or (fuzzy and one_typo(part,word)) for word in words) for part in parts)
+
+# Function words cannot establish a memory match. Domain aliases belong in config.
+_STOPWORDS = set('bir bu şu o ve veya ile için gibi daha çok az ne nasıl neden hangi ben benim sen bizim biz bana bunu şunu mı mi mu mü da de ama olarak olan olsun yap yapalım devam et üret'.split())
+_SYNONYMS = ({'kapak', 'thumbnail'}, {'sunum', 'slayt', 'slideshow'},
+             {'hafıza', 'bellek'}, {'yöntem', 'prosedür'}, {'yedek', 'yedekleme'})
+
+def content_words(text):
+    return set(query_words(text)) - _STOPWORDS
+
+def word_match(left, right):
+    if inflected(left, right) or inflected(right, left): return True
+    return any(any(inflected(term, left) for term in group) and
+               any(inflected(term, right) for term in group) for group in _SYNONYMS)
+
+def rank_records(rows, query):
+    """Query coverage weighted by corpus rarity; order cannot affect selection."""
+    terms = content_words(query)
+    documents = [(row, content_words(row.get('statement', ''))) for row in rows]
+    frequencies = {term: sum(any(word_match(term, word) for word in words)
+                             for _, words in documents) for term in terms}
+    informative = {term for term in terms if 0 < frequencies[term] < max(2, len(rows)*0.5)}
+    ranked = []
+    for row, words in documents:
+        matched = {term for term in terms if any(word_match(term, word) for word in words)}
+        if not matched or (informative and not matched.intersection(informative)): continue
+        score = sum(1 + math.log((len(rows) + 1) / (frequencies[term] + 1)) for term in matched)
+        ranked.append((score, len(matched), row))
+    return [row for _, _, row in sorted(ranked, key=lambda item:
+            (-item[0], -item[1], item[2].get('memory_id', '')))]
 
 def select_projects(projects, query, cwd=None):
     words=query_words(query)
@@ -122,6 +158,7 @@ def asset_claim_overrides(vault):
 def build_task_package(vault, query, cwd=None, budget=5000):
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions={}
+    budget=max(0, int(budget)); candidates=[]
     projects=[]
     cfg=config(vault)
     if cfg.get('invalid'): omitted.append('config_invalid')
@@ -143,9 +180,14 @@ def build_task_package(vault, query, cwd=None, budget=5000):
                 project['working_sources'].extend(workflow.get('working_sources',[]))
     scope = 'project:'+project['id'] if project else 'user'
     def add(ident, text):
-        nonlocal used
-        if used+len(text)>budget: omitted.append(ident+':budget'); return False
-        lines.append(text); selected.append(ident); used+=len(text); return True
+        priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
+                    'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
+                    'working-source':5, 'working-root':8}.get(ident, 10)
+        if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
+        if ident in task_ids: priority=4
+        candidates.append((priority, len(candidates), ident, text))
+        return True
+    task_ids=set()
     qwords=query_words(query)
     deictic=any(w in qwords for w in ('dünkü','o','şu','önceki'))
     task_reference=any(inflected(base,word) for base in ('kapak','video','proje','çıktı') for word in qwords) or any(w in qwords for w in ('iş','işi','işe','işin'))
@@ -155,12 +197,11 @@ def build_task_package(vault, query, cwd=None, budget=5000):
         omitted.append('ambiguous_project')
         add('ambiguous_project','Birden fazla proje eşleşti; proje seçimini netleştirmeden dosya veya onay uydurma.')
     overrides=asset_claim_overrides(vault)
-    for row in h.load_catalog(vault):
+    for row in rank_records(h.load_catalog(vault), query):
         if not any(h.retrievable(row,context_scope) for context_scope in [scope]+['project:'+w['id'] for w in workflows]): continue
-        if not words.intersection(tokens(row.get('statement',''))): continue
         if row.get('memory_id') in overrides:
             omitted.append(row['memory_id']+':'+overrides[row['memory_id']]); continue
-        if h.validate_catalog(vault,[row]): omitted.append(row.get('memory_id','unknown')+':invalid'); continue
+        if h.context_record_errors(vault,row): omitted.append(row.get('memory_id','unknown')+':invalid'); continue
         if add(row['memory_id'],row['statement']+' (kaynak: '+row['source_path']+')'):
             source_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
     if project:
@@ -176,6 +217,7 @@ def build_task_package(vault, query, cwd=None, budget=5000):
         for working_root in project.get('roots',[]): add('working-root','Çalışma kökü: '+working_root+'; devam etmeden canlı Git HEAD/status ve ilgili testleri doğrula.')
         for task in brief(vault,limit=100):
             if task.get('project_id')==project['id'] or task['id'] in project.get('task_ids',[]):
+                task_ids.add(task['id'])
                 add(task['id'],task['title']+': '+task['next_step']+' (kaynak: '+task['source_path']+')')
         for asset in project.get('assets',[]):
             try: path=validate_asset(asset)
@@ -191,7 +233,7 @@ def build_task_package(vault, query, cwd=None, budget=5000):
                     add(relative,'Tarihli geçmiş, güncel dosya yerine geçmez: '+relative+'\n'+text[:700]+'\n[Kaynak özeti kesilmiş olabilir; karar için tam kaynağı aç.]')
                 except (OSError,ValueError): omitted.append(relative+':missing')
     from ders_baglam import context
-    methods=context(vault,query,budget=max(0,budget-used))
+    methods=context(vault,query,budget=min(2600, budget), project_id=project['id'] if project else None, workflow_ids=[w['id'] for w in workflows])
     if methods: add('methods',methods)
     if assets:
         instruction='Üretim öncesi gorev_baglam.py package ile bu paketi al; gerçek araca gönderilecek referans yollarını JSON dizisi yapıp validate-inputs --package <paket.json> --actual-inputs <yollar.json> çalıştır. Bu denetim araç çağrısının otomatik gözlemcisi değildir; gerçek argümanlarla aynı yollar olmalı.'
@@ -199,8 +241,20 @@ def build_task_package(vault, query, cwd=None, budget=5000):
         if not add('input-check',instruction):
             omitted.append('input-check:budget')
     errors=[reason for reason in omitted if not reason.endswith(':budget')]
-    if errors: lines.append('Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.')
+    if errors:
+        detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'
+        if len(detail)>min(600,budget): detail='Bağlam kontrolü: Geçersiz veya değişmiş kaynaklar dışlandı; omitted_reasons alanını incele.'
+        candidates.append((0,-1,'context-check',detail))
+    for _, _, ident, text in sorted(candidates):
+        cost=len(text)+(1 if lines else 0)
+        if used+cost>budget:
+            omitted.append(ident+':budget'); continue
+        lines.append(text);selected.append(ident);used+=cost
+    assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines)}
+    result['usage']={'context_chars':len(result['text']), 'budget_chars':budget,
+                     'selected_count':len(selected), 'omitted_count':len(omitted),
+                     'token_count':None, 'token_count_method':'not_measured'}
     result['package_id']=hashlib.sha256(json.dumps(result,ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
     return result
 
@@ -217,7 +271,7 @@ def hydrate_remote(vault, results, scope='user'):
                 raise ValueError('asset_revision_conflict: replacement invalid; old claim excluded')
             continue
         row=rows.get(ident)
-        if row and h.retrievable(row,scope) and not h.validate_catalog(vault,[row]):
+        if row and h.retrievable(row,scope) and not h.context_record_errors(vault,row):
             output.append({'memory':row['statement'],'metadata':row})
     return output
 

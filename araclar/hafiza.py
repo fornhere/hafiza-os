@@ -141,6 +141,7 @@ def add_candidate(
     sensitivity: str,
     proposed_by: str,
     evidence: str | None = None,
+    evidence_source: dict | None = None,
 ) -> dict[str, Any]:
     if contains_secret(statement):
         raise ValueError("aday gizli bilgi içeriyor")
@@ -153,6 +154,9 @@ def add_candidate(
             raise ValueError("geçersiz veya gizli kaynak kanıtı")
         if evidence not in source_file(vault, source_path).read_text(encoding="utf-8"):
             raise ValueError("kanıt kaynak dosyada bulunamadı")
+    if evidence_source is not None:
+        from capture_source import validate_candidate_evidence
+        validate_candidate_evidence(vault, evidence_source.get("session_id"), evidence_source, evidence_source, evidence)
     normalized = " ".join(statement.casefold().split())
     for existing in load_jsonl(vault / CANDIDATE_PATH):
         if " ".join(str(existing.get("statement", "")).casefold().split()) == normalized:
@@ -176,6 +180,9 @@ def add_candidate(
     if evidence is not None:
         candidate["evidence"] = evidence
         candidate["evidence_hash"] = statement_hash(evidence)
+    candidate["source_content_hash"] = statement_hash(source_file(vault, source_path).read_text(encoding="utf-8"))
+    if evidence_source is not None:
+        candidate["evidence_source"] = evidence_source
     _append_jsonl(vault / CANDIDATE_PATH, candidate)
     _append_jsonl(
         vault / EVENT_PATH,
@@ -203,6 +210,18 @@ def assess_candidate(
             return {"result": "duplicate", "duplicate_of": record.get("memory_id")}
         if record.get("subject_key") == candidate.get("subject_key"):
             return {"result": "conflict", "conflicts_with": record.get("memory_id")}
+        # Cross-key overlap is a review warning, never an automatic semantic verdict.
+        if record.get("scope", "user") != candidate.get("scope", "user"): continue
+        from gorev_baglam import content_words, word_match, inflected
+        ignored = ("kullanıcı", "tercih", "eder", "ister", "istiyor", "istiyorum", "kullanır", "kullanıyor")
+        def concepts(text):
+            text = text.casefold().replace("arka plan", "zemin").replace("karanlık", "koyu")
+            return {w for w in content_words(text) if not any(inflected(i, w) for i in ignored)}
+        a, b = concepts(candidate["statement"]), concepts(record.get("statement", ""))
+        overlap = sum(any(word_match(x,y) for y in b) for x in a)
+        if min(len(a),len(b)) >= 2 and overlap >= 2 and overlap / max(1,min(len(a),len(b))) >= 0.6:
+            return {"result": "needs_semantic_review", "related_to": record.get("memory_id"),
+                    "reason": "Farklı anahtarda benzer konu; tekrar/çelişki insan veya kaynak incelemesi gerektirir."}
     return {"result": "eligible"}
 
 
@@ -237,6 +256,14 @@ def promote_candidate(
         evidence = candidate["evidence"]
         if statement_hash(evidence) != candidate.get("evidence_hash") or evidence not in source.read_text(encoding="utf-8"):
             raise ValueError("kaynak kanıtı değişmiş veya kayıp")
+    if candidate.get("source_content_hash") and statement_hash(source.read_text(encoding="utf-8")) != candidate["source_content_hash"]:
+        raise ValueError("adayın kaynak sürümü değişmiş; yeniden incele")
+    if candidate.get("evidence_source"):
+        from capture_source import validate_candidate_evidence
+        origin = candidate["evidence_source"]
+        validate_candidate_evidence(vault, origin.get("session_id"), origin, origin, candidate.get("evidence"))
+    elif reviewed_by == "codex-consolidator" and candidate.get("kind") == "semantic":
+        raise ValueError("otomatik terfi için özgün kullanıcı mesajı kanıtı gerekli")
     if candidate.get("sensitivity") != "normal" or contains_secret(candidate["statement"]):
         raise ValueError("özel veya gizli aday terfi edemez")
     assessment = assess_candidate(candidate, records)
@@ -267,6 +294,9 @@ def promote_candidate(
         "reviewed_by": reviewed_by,
         "schema_version": 1,
     }
+    record["source_content_hash"] = statement_hash(source.read_text(encoding="utf-8"))
+    for field in ("evidence", "evidence_hash", "evidence_source"):
+        if field in candidate: record[field] = candidate[field]
     if not apply:
         return {"result": "planned", "record": record}
     for old in records:
@@ -634,7 +664,82 @@ def validate_catalog(vault: Path, records: list[dict[str, Any]]) -> list[str]:
         source = (vault / str(record["source_path"])).resolve()
         if not source.is_relative_to(vault.resolve()) or not source.is_file():
             errors.append(f"{memory_id}: kaynak yok: {record['source_path']}")
+        elif record.get("source_content_hash") and statement_hash(source.read_text(encoding="utf-8")) != record["source_content_hash"]:
+            if not current_source_binding(vault, record, source.read_text(encoding="utf-8")):
+                errors.append(f"{memory_id}: source_revision_changed")
     return errors
+
+
+SOURCE_BINDINGS = Path("zihin/kaynak-surumleri.jsonl")
+
+
+def current_source_binding(vault, record, content):
+    bindings = [b for b in load_jsonl(vault / SOURCE_BINDINGS)
+                if b.get("memory_id") == record["memory_id"]]
+    if not bindings: return False
+    b = bindings[-1]
+    return (b.get("source_path") == record["source_path"]
+            and b.get("statement_hash") == statement_hash(record["statement"])
+            and b.get("source_content_hash") == statement_hash(content)
+            and len(b.get("evidence", "")) >= 10 and b.get("evidence") in content
+            and bool(b.get("reviewed_by")))
+
+
+def context_record_errors(vault, record):
+    """Schema integrity and current local source revision are separate checks.
+
+    Legacy records need an explicitly reviewed binding, or their exact statement
+    still present in the source. A present file alone is never enough.
+    """
+    errors = validate_catalog(vault, [record])
+    if errors: return errors
+    source = source_file(vault, record["source_path"])
+    content = source.read_text(encoding="utf-8")
+    expected = record.get("source_content_hash")
+    if expected:
+        if statement_hash(content) != expected and not current_source_binding(vault, record, content):
+            return [record["memory_id"] + ":source_revision_changed"]
+        return []
+    bindings = [b for b in load_jsonl(vault / SOURCE_BINDINGS)
+                if b.get("memory_id") == record["memory_id"]]
+    if bindings:
+        binding = bindings[-1]
+        valid = (binding.get("source_path") == record["source_path"]
+                 and binding.get("statement_hash") == statement_hash(record["statement"])
+                 and binding.get("source_content_hash") == statement_hash(content)
+                 and binding.get("evidence") in content
+                 and len(binding.get("evidence", "")) >= 10)
+        return [] if valid else [record["memory_id"] + ":source_binding_changed"]
+    if record["statement"] in content:
+        return []
+    return [record["memory_id"] + ":source_revision_unreviewed"]
+
+
+@serialized
+def bind_source(vault, data, apply=False):
+    """Attach a reviewed source version without rewriting a canonical statement.
+
+    Exact evidence and revision are mechanical checks; entailment is explicitly
+    the reviewer's responsibility. No automatic bulk pinning of stale sources.
+    """
+    row = next((r for r in load_catalog(vault) if r["memory_id"] == data.get("memory_id")), None)
+    if row is None: raise ValueError("kayıt bulunamadı")
+    if not data.get("reviewed_by") or len(data.get("reason", "")) < 20:
+        raise ValueError("kaynak inceleyen ve gerekçe gerekli")
+    source = source_file(vault, row["source_path"])
+    content = source.read_text(encoding="utf-8")
+    evidence = data.get("evidence", "")
+    if len(evidence) < 10 or evidence not in content or contains_secret(evidence):
+        raise ValueError("kaynakta bulunan açık kanıt gerekli")
+    current_hash = statement_hash(content)
+    if data.get("expected_source_hash") != current_hash:
+        raise ValueError("incelenen kaynak sürümü değişti")
+    record = dict(memory_id=row["memory_id"], source_path=row["source_path"],
+                  statement_hash=statement_hash(row["statement"]), source_content_hash=current_hash,
+                  evidence=evidence, reviewed_by=data["reviewed_by"], reason=data["reason"],
+                  at=dt.datetime.now(dt.timezone.utc).isoformat())
+    if apply: _append_jsonl(vault / SOURCE_BINDINGS, record)
+    return {"result": "bound" if apply else "planned", "binding": record}
 
 
 class Mem0HttpClient:
@@ -771,6 +876,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("validate")
     sub.add_parser("audit")
+    binding = sub.add_parser("bind-source")
+    binding.add_argument("--input-json", type=Path, required=True)
+    binding.add_argument("--apply", action="store_true")
     sync_parser = sub.add_parser("sync")
     sync_parser.add_argument("--apply", action="store_true")
 
@@ -821,6 +929,10 @@ def main(argv: list[str] | None = None) -> int:
     vault = args.vault.expanduser().resolve()
     records = load_catalog(vault)
 
+    if args.command == "bind-source":
+        _json_print(bind_source(vault, json.loads(args.input_json.read_text()), args.apply))
+        return 0
+
     if args.command == "validate":
         errors = validate_catalog(vault, records)
         _json_print({"catalog_errors": errors, "record_count": len(records)})
@@ -864,12 +976,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "context":
-        from gorev_baglam import hydrate_remote, tokens
+        from gorev_baglam import hydrate_remote, rank_records
         errors = validate_catalog(vault, records)
-        valid = [row for row in records if retrievable(row, args.scope) and not validate_catalog(vault, [row])]
-        words = tokens(args.query)
-        ranked = sorted(valid, key=lambda row: len(words & tokens(row['statement'])), reverse=True)
-        results = [{'memory':row['statement'], 'metadata':row} for row in ranked if words & tokens(row['statement'])]
+        valid = [row for row in records if retrievable(row, args.scope) and not context_record_errors(vault, row)]
+        ranked = rank_records(valid, args.query)
+        results = [{'memory':row['statement'], 'metadata':row} for row in ranked]
         mode = 'local'; fallback = None
         if args.remote:
             try:

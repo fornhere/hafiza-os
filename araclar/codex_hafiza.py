@@ -6,6 +6,8 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+import shlex
 from pathlib import Path
 import sys
 
@@ -68,7 +70,7 @@ def pending(vault, data, event):
 
 
 def record(vault, session, turn, summary, semantic_candidates=None, source_snapshot=None):
-    from capture_source import record_gate
+    from capture_source import record_gate, validate_candidate_evidence
     record_gate(vault, session, turn, source_snapshot)
     if not isinstance(summary, str) or not 20 <= len(summary.strip()) <= 6000:
         raise ValueError('Özet 20–6000 karakter olmalı')
@@ -83,6 +85,9 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
             raise ValueError('aday statement, subject_key ve evidence içermeli')
         if not 10 <= len(candidate['evidence']) <= 1500 or candidate['evidence'] not in summary:
             raise ValueError('aday kanıtı özet içinde açık kullanıcı beyanı olarak bulunmalı')
+        if source_snapshot is None:
+            raise ValueError('semantik aday için özgün source_snapshot gerekli')
+        validate_candidate_evidence(vault, session, source_snapshot, candidate.get('evidence_source'), candidate['evidence'])
         if not 10 <= len(candidate['statement']) <= 600 or contains_secret(candidate['statement']):
             raise ValueError('geçersiz aday cümlesi')
     note, waiting = paths(vault, session, turn)
@@ -109,9 +114,31 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
             scope='user', subject_key=candidate['subject_key'],
             source_path=str(note.relative_to(vault)), source_anchor='Kullanıcı beyanı',
             confidence='explicit-user', sensitivity='normal', proposed_by='codex-receipt',
-            evidence=candidate['evidence']))
+            evidence=candidate['evidence'], evidence_source=candidate['evidence_source']))
     waiting.unlink(missing_ok=True)
     return {'saved': str(note), 'candidates': queued}
+
+
+def latest_session_section(vault, limit=2500):
+    """Read the newest dated section without sending the whole journal to the model."""
+    path = vault / 'zihin/son-oturum.md'
+    if not path.exists(): return 'Son oturum notu yok.'
+    text = path.read_text()
+    matches = list(re.finditer(r'^## (\d{4}-\d{2}-\d{2})[^\n]*', text, re.M))
+    if not matches: return 'Tarihli son oturum bölümü bulunamadı; gerekirse kaynakta ara.'
+    index = max(range(len(matches)), key=lambda i: (matches[i].group(1), i))
+    section = text[matches[index].start():matches[index+1].start() if index+1<len(matches) else len(text)].strip()
+    if len(section)>limit:
+        section=section[:max(0,limit-90)]+'\n[Kesildi; yalnız gereken ayrıntı için kaynak bölümü aç.]'
+    return section
+
+
+def account_context(state, emitted, suppressed=0):
+    usage = state.setdefault('context_usage', {})
+    usage['emitted_chars'] = usage.get('emitted_chars', 0) + emitted
+    usage['suppressed_chars'] = usage.get('suppressed_chars', 0) + suppressed
+    usage['token_count'] = None
+    usage['token_count_method'] = 'not_measured'
 
 
 def hook(vault, data):
@@ -137,14 +164,27 @@ def hook(vault, data):
             state.pop('requested_turn', None)
             atomic(state_path, json.dumps(state))
         from gorev_baglam import build_task_package
-        lesson_text = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'))['text']
+        package = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'))
+        lesson_text = package['text']
+        # One consecutive repeat may be omitted; the next prompt refreshes it.
+        # Hash includes source versions, not only rendered prose.
+        package_hash = hashlib.sha256(json.dumps(package, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        cache = state.get('package_cache', {})
+        suppress = bool(lesson_text and package_hash == cache.get('hash') and not cache.get('suppressed'))
+        original_chars = len(lesson_text)
+        if suppress: lesson_text = ''
+        state['package_cache'] = {'hash': package_hash, 'suppressed': suppress}
         parts = ([opening_brief(vault)] if state['count'] == 1 else [])
         if lesson_text: parts.append(lesson_text)
+        emitted = '\n\n'.join(parts)
+        account_context(state, len(emitted), original_chars if suppress else 0)
+        atomic(state_path, json.dumps(state))
         if parts:
             return {'hookSpecificOutput': {'hookEventName': event,
                     'additionalContext': '\n\n'.join(parts)}}
         return {}
     if event == 'SessionStart':
+        state.pop('package_cache', None)
         queue = vault / INBOX
         missing = len(list(queue.glob('*.pending.json')))
         latest = sorted(queue.glob('*.md'), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -152,12 +192,16 @@ def hook(vault, data):
         from hafiza_saglik import notice
         health_notice = notice(vault)
         context = (f'Hafıza kasası: {vault}. Önce {vault}/agents.md ve '
-            f'{vault}/zihin/son-oturum.md oku. Yeni Codex görev makbuzları: {recent or "yok"}. '
+            f'{vault}/zihin/son-oturum.md dosyasının yalnız en yeni bölümünü oku. '
+            f'Bütçeli okuma: python3 {shlex.quote(str(vault / "araclar/codex_hafiza.py"))} --vault {shlex.quote(str(vault))} latest-session . '
+            f'Diğer ajan açılış yönergeleri geçerlidir. Yeni Codex görev makbuzları: {recent or "yok"}. '
             f'Eksik makbuz sayısı: {missing}. Makbuzlar gelen kutusundadır, kanonik gerçek değildir. '
             f'Bu oturumda sayılan kullanıcı mesajı: {state["count"]}. '
             'Hafıza kaydı arka plan konsolidasyonunda yapılır; cevap sonunda makbuz '
             'isteme ve sohbeti kayıt bildirimiyle bölme. Basit kısa sorular hafızaya girmez. '
             'Kataloğa ve Mem0’a doğrudan yazma.\n\n' + health_notice + '\n\n' + opening_brief(vault))
+        account_context(state, len(context))
+        atomic(state_path, json.dumps(state))
         return {'hookSpecificOutput': {'hookEventName': event, 'additionalContext': context}}
     # Stop is the end of an assistant turn, not the end of a session.
     # Transcript consolidation handles receipts asynchronously. Never interrupt
@@ -170,9 +214,13 @@ def main():
     parser.add_argument('--vault', type=Path, default=DEFAULT_VAULT)
     sub = parser.add_subparsers(dest='cmd', required=True)
     sub.add_parser('hook')
+    sub.add_parser('latest-session')
     save = sub.add_parser('record')
     save.add_argument('--input-json', type=Path, required=True)
     args = parser.parse_args()
+    if args.cmd == 'latest-session':
+        print(latest_session_section(args.vault))
+        return
     queue = args.vault / INBOX
     queue.mkdir(parents=True, exist_ok=True)
     with (queue / '.lock').open('a') as lock:

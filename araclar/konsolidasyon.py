@@ -83,7 +83,9 @@ def sessions(vault, root, since, quiet_minutes=20, diagnostics=None):
                         first = next(json.loads(line).get('payload', {}) for line in path.read_text().splitlines()
                                      if json.loads(line).get('type') == 'session_meta')
                     except (ValueError, StopIteration, OSError): first = {}
-                    if isinstance(first.get('source'), dict) and 'subagent' in first['source']: continue
+                    if any((isinstance(first.get(field), dict) and 'subagent' in first[field])
+                           or first.get(field) in ('subagent', 'agent')
+                           for field in ('source', 'thread_source')): continue
                 diagnostics.append({'path': str(path), 'error': str(error)})
                 continue
             if row.get('parse_status') == 'malformed' or (row['activity_state'] == 'unknown' and row['user_count'] > 5):

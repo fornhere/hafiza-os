@@ -1,3 +1,44 @@
+# 2026.09.16 — Kaynak doğrulaması ve seçici görev bağlamı
+
+Bu güncelleme, mevcut dosya temelli hafızanın kayıt ve geri çağırma
+kontrollerini genişletir. Amaç, güncel kaynağı ilgili göreve daha küçük bir
+paketle taşımak ve inceleme gerektiren bilgiyi görünür tutmaktır.
+
+- **Özgün beyana bağlı aday:** otomatik semantik adaylar tamamlanan konuşma
+  bölümündeki kullanıcı mesajının satırı, hash'i ve birebir alıntısıyla
+  eşleştirilir. İnceleme onay kutuları tek başına kaynak kanıtı sayılmaz.
+- **Sürümlü kaynak:** yeni kayıtta kaynak içerik hash'i tutulur. Kaynağı
+  değişen bilgi, yeniden incelenmiş bir bağ olmadan güncel bağlama alınmaz.
+  Eski kayıtlar kanonik metni değiştirmeyen `bind-source` aracıyla incelenebilir.
+- **Mahremiyet kapsamı:** açık oturum dışlama isteği ile kapsamı belirsiz
+  “bunu kaydetme” ifadeleri ayrılır; ikincisi otomatik kaydı incelemeye bırakır.
+- **İlgili ve bütçeli erişim:** yerel sıralama sorgu kapsamını ve kelimelerin
+  kayıtlar arasındaki ayırt ediciliğini kullanır. Sınırlı Türkçe ek zincirleri
+  ve eş anlam grupları desteklenir. Proje, onaylı varlık ve yöntemler genel
+  geçmişten önce bütçeye alınır; proje derslerinin kapsamı denetlenir.
+- **Tekrar kontrolü:** aynı görev paketi ardışık ikinci gelişinde bir kez
+  atlanabilir; sonraki istemde yenilenir. Kaynak sürümü değişince yeniden
+  gönderilir. `SessionStart` olayı tekrar önbelleğini sıfırlar.
+- **Ölçülebilir bağlam:** paket ve hook çıktılarının karakter sayıları görünürdür.
+  Ölçülmeyen token sayısı `null` kalır; karakter sayısı token veya ücret değildir.
+  `latest-session` yalnız en yeni tarihli oturum bölümünü bütçeli döndürür.
+- **Kaynak biçimi desteği:** `exec` kaynakları açıkça kullanıcı görevine aitse
+  kabul edilir; bilinen alt ajan kaynakları ana konuşma olarak işlenmez.
+
+[Geçiş adımları](CODEX.md#16-eylül-kaynak-ve-kapsam-geçişi) kayıt üreticisi,
+eski kaynak bağları ve kişisel ders kapsamları için ayrıca uygulanmalıdır.
+Dosyaları güncellemek zamanlayıcının canlı çalıştığını kanıtlamaz. Yerel
+hash kontrolleri imzalı kimlik doğrulaması değildir; alıntının önerilen
+tercihi gerçekten destekleyip desteklemediğini inceleyen değerlendirir.
+Kelime benzerliği uyarısı genel anlamsal tekrar/çelişki çözümü değildir.
+
+Bu notlar mekanizmaları açıklar. Testlerin geçmesi gerçek görevlerde daha
+iyi çıktı, daha düşük toplam maliyet veya zaman tasarrufu sağlandığını
+kanıtlamaz. Bu sonuçlar [ayrı görev karşılaştırmalarıyla](FAYDA-OLCUMU.md)
+ölçülür; burada tamamlanmış bir B/C deneyi veya verim artışı iddiası yoktur.
+
+---
+
 # 2026.09.15 — Görev bağlamı ve sessiz hafıza bakımı
 
 Bu sürüm, dosya temelli hafızayı günlük görevlerle daha yakından buluşturuyor:
