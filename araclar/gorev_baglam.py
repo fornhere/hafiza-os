@@ -201,8 +201,11 @@ def build_task_package(vault, query, cwd=None, budget=5000):
     for row in h.load_catalog(vault):
         if not any(h.retrievable(row,context_scope) for context_scope in [scope]+['project:'+w['id'] for w in workflows]): continue
         if row.get('memory_id') in overrides:
-            omitted.append(row['memory_id']+':'+overrides[row['memory_id']]); continue
-        if h.context_record_errors(vault,row): omitted.append(row.get('memory_id','unknown')+':invalid'); continue
+            if rank_records([row], query): omitted.append(row['memory_id']+':'+overrides[row['memory_id']])
+            continue
+        if h.context_record_errors(vault,row):
+            if rank_records([row], query): omitted.append(row.get('memory_id','unknown')+':invalid')
+            continue
         eligible.append(row)
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
     for row in rank_records(eligible, query):

@@ -70,3 +70,12 @@ class Retrieval(unittest.TestCase):
      for r in noise:r['scope']='project:amber';(v/r['source_path']).write_text('Changed source')
     h._write_jsonl(v/h.CATALOG_PATH,[target]+noise)
     self.assertIn('target',g.build_task_package(v,'Amber ses seviyesi sınırlayıcı ayarı')['selected_ids'])
+
+ def test_irrelevant_stale_memory_does_not_interrupt_simple_question(self):
+  import hafiza as h
+  with tempfile.TemporaryDirectory() as temp:
+   v=Path(temp);(v/'zihin').mkdir()
+   stale=dict(memory_id='stale',kind='semantic',scope='user',subject_key='video',statement='Video sesi dengeli olmalı',status='active',source_path='missing.md',source_anchor='test',source_hash=statement_hash('Video sesi dengeli olmalı'),observed_at='2026-01-01',valid_from='2026-01-01',valid_to=None,confidence='explicit-user',sensitivity='normal',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
+   h._write_jsonl(v/h.CATALOG_PATH,[stale])
+   self.assertEqual('',g.build_task_package(v,'Kabak çorbası nasıl yapılır')['text'])
+   self.assertIn('stale:invalid',g.build_task_package(v,'Video sesi')['omitted_reasons'])
