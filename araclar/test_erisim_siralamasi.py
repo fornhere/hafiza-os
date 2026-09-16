@@ -44,7 +44,7 @@ class Retrieval(unittest.TestCase):
   with tempfile.TemporaryDirectory() as temp:
    v=Path(temp);(v/'zihin').mkdir();(v/'s.md').write_text('Kaynak kanıtı.')
    (v/'method.md').write_text('PROJE YÖNTEMİ')
-   row=dict(id='lesson',title='Başlık',triggers=['kapak'],status='proposed',source_path='s.md',evidence='Kaynak kanıtı.',method_path='method.md',project_id='delta',implementation_hash=statement_hash('PROJE YÖNTEMİ'))
+   row=dict(id='lesson',title='Başlık',triggers=['kapak'],status='proposed',source_path='s.md',evidence='Kaynak kanıtı.',method_path='method.md',project_id='delta',source_content_hash=statement_hash((v/'s.md').read_text()),implementation_hash=statement_hash('PROJE YÖNTEMİ'))
    (v/'zihin/ders-durumu.jsonl').write_text(json.dumps(row)+'\n')
    self.assertEqual(d.context(v,'kapak'), '')
    self.assertEqual(d.context(v,'kapak',project_id='other'), '')
@@ -52,3 +52,21 @@ class Retrieval(unittest.TestCase):
    self.assertEqual(d.context(v,'kapakçılık',project_id='delta'), '')
    self.assertEqual(d.context(v,'kapak',project_id='delta',budget=len(good)-1),'')
    self.assertEqual(len(d.context(v,'kapak',project_id='delta',budget=len(good))),len(good))
+ def test_foreign_and_invalid_records_cannot_change_relevant_ranking(self):
+  import hafiza as h
+  with tempfile.TemporaryDirectory() as temp:
+   v=Path(temp);(v/'komuta').mkdir();(v/'zihin').mkdir()
+   (v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[{'id':'amber','aliases':['amber']}]}))
+   def row(ident,statement,scope):
+    source='zihin/'+ident+'.md';(v/source).write_text(statement)
+    return dict(memory_id=ident,kind='semantic',scope=scope,subject_key=ident,statement=statement,status='active',source_path=source,source_content_hash=statement_hash(statement),source_anchor='test',source_hash=statement_hash(statement),observed_at='2026-01-01',valid_from='2026-01-01',valid_to=None,confidence='explicit-user',sensitivity='normal',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
+   target=row('target','Amber ses seviyesi konuşma dengesi','project:amber')
+   noise=[row('noise'+str(i),'Amber ses seviyesi genel kayıt','project:foreign') for i in range(80)]
+   noise.append(row('rare','Sınırlayıcı ayarı','project:foreign'))
+   h._write_jsonl(v/h.CATALOG_PATH,[target])
+   self.assertIn('target',g.build_task_package(v,'Amber ses seviyesi sınırlayıcı ayarı')['selected_ids'])
+   for invalid in (False,True):
+    if invalid:
+     for r in noise:r['scope']='project:amber';(v/r['source_path']).write_text('Changed source')
+    h._write_jsonl(v/h.CATALOG_PATH,[target]+noise)
+    self.assertIn('target',g.build_task_package(v,'Amber ses seviyesi sınırlayıcı ayarı')['selected_ids'])

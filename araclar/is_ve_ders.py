@@ -37,6 +37,8 @@ def put(vault, kind, data):
             date = dt.date.fromisoformat(data['last_verified'])
             if date > dt.date.today(): raise ValueError('gelecek teyit tarihi olamaz')
     else:
+        # Bind the reviewed lesson to the complete evidence revision.
+        data['source_content_hash'] = h.statement_hash(source.read_text())
         if data['status'] not in ('proposed', 'verified', 'rejected'):
             raise ValueError('geçersiz ders durumu')
         if data['status'] == 'verified':

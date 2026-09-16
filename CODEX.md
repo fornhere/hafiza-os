@@ -197,3 +197,13 @@ Geçiş sonrası birim testlerini, kişisel proje eşleşmesini, değiştirilmi�
 kaynağın dışlanmasını ve gerçek hook/zamanlayıcı akışını ayrı doğrula.
 Manuel taramayı zamanlanmış başarı gibi kaydetme; `--scheduled` yalnız
 zamanlayıcı rolünde kullanılır. İlk beş mesaj ve sessiz bakım kuralları sürer.
+
+
+### Ders kaynak sürümü geçişi
+
+Güncel ders yazıcısı `source_content_hash` alanını incelenen kaynak
+dosyanın tamamından üretir. Ders bağlamı hem bu hash'i hem yöntem hash'ini
+doğrular. Eski hash'siz dersler erişimden çıkar; bütün eski dersleri körlemesine
+yeniden kaydetmeyin. Kaynak ve yöntemi okuyup hâlâ desteklenenleri mevcut
+`expected_version` ile `is_ve_ders.py lesson` üzerinden sürümleyin. İptal
+edilen veya belirsiz dersi terfi ettirmeyin.

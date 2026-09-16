@@ -25,7 +25,11 @@ def context(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
         if not any(alias_match(term,query_words(text)) for term in row.get('triggers', ())): continue
         try: source=source_file(vault,row['source_path'])
         except ValueError: continue
-        if not source.is_file() or row['evidence'] not in source.read_text(): continue
+        if not source.is_file(): continue
+        content = source.read_text()
+        # Legacy lessons require explicit re-review through put; never auto-pin.
+        if not row.get('source_content_hash') or row['source_content_hash'] != statement_hash(content): continue
+        if row['evidence'] not in content: continue
         method=row.get('method_path')
         if not method: continue
         path=(vault/method).resolve()

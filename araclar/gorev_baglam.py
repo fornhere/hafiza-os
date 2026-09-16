@@ -197,11 +197,15 @@ def build_task_package(vault, query, cwd=None, budget=5000):
         omitted.append('ambiguous_project')
         add('ambiguous_project','Birden fazla proje eşleşti; proje seçimini netleştirmeden dosya veya onay uydurma.')
     overrides=asset_claim_overrides(vault)
-    for row in rank_records(h.load_catalog(vault), query):
+    eligible=[]
+    for row in h.load_catalog(vault):
         if not any(h.retrievable(row,context_scope) for context_scope in [scope]+['project:'+w['id'] for w in workflows]): continue
         if row.get('memory_id') in overrides:
             omitted.append(row['memory_id']+':'+overrides[row['memory_id']]); continue
         if h.context_record_errors(vault,row): omitted.append(row.get('memory_id','unknown')+':invalid'); continue
+        eligible.append(row)
+    # Out-of-scope, stale and replaced rows must not influence corpus rarity.
+    for row in rank_records(eligible, query):
         if add(row['memory_id'],row['statement']+' (kaynak: '+row['source_path']+')'):
             source_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
     if project:

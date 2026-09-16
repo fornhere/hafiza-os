@@ -1,3 +1,19 @@
+# 2026.09.16 — Sentetik çok oturumlu denetim ek düzeltmeleri
+
+- Görev paketinde kapsam, geçerlilik ve kaynak denetimi sıralamadan önce
+  uygulanır. Başka projedeki veya değişmiş kaynaklı kayıtlar ilgili kayıtların
+  kelime sıklığı puanını etkileyemez.
+- Prosedürel ders kaynağı tam içerik hash'iyle sürümlenir. Kaynakta eski
+  alıntı kalsa bile sonradan yapılan değişiklik yeniden inceleme gerektirir.
+- Kaynak sürümü bulunmayan eski dersler otomatik sabitlenmez. İnceleyen
+  kaynağı ve yöntemi okuyup mevcut expected_version ile is_ve_ders.py lesson
+  üzerinden yeniden kaydeder; kullanıcı kabulü/statü kendiliğinden yükselmez.
+
+Bu değişiklikler izole kurmaca kasalarda doğrulanan hataları giderir;
+kişisel verim kazancı veya tüm Türkçe ifadelerin çözüldüğü iddiası değildir.
+
+---
+
 # 2026.09.16 — Kaynak doğrulaması ve seçici görev bağlamı
 
 Bu güncelleme, mevcut dosya temelli hafızanın kayıt ve geri çağırma
