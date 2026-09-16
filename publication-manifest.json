@@ -36,8 +36,8 @@
       "path": "araclar/is_ve_ders.py",
       "mode": "reviewed-variant",
       "reason": "Public empty-vault guard and generic archive path versus installed vault archive.",
-      "local_sha256": "b779effe23bbb8bb3cdec4d7dea1509abc2db1f7cc9fec7c23473afca3d1e5fe",
-      "public_sha256": "118538059d771e80849e2d566ff16f686728530b9738e818107171abb1382d7c"
+      "local_sha256": "089d9d487b43abbeb14d724db300afc7bd1a14eac90a85fdb4847f4a24b19d32",
+      "public_sha256": "d0154151c63220fca48eabdfeac5bb0d9765ee1aab134837967214041d935fb5"
     },
     {
       "path": "araclar/konsolidasyon.py",

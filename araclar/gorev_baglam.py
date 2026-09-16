@@ -155,10 +155,11 @@ def asset_claim_overrides(vault):
     return overrides
 
 
-def build_task_package(vault, query, cwd=None, budget=5000):
+def build_task_package(vault, query, cwd=None, budget=5000, history="auto"):
+    if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions={}
-    budget=max(0, int(budget)); candidates=[]
+    budget=max(0, int(budget)); candidates=[]; current_facts=[]; current_tasks=[]
     projects=[]
     cfg=config(vault)
     if cfg.get('invalid'): omitted.append('config_invalid')
@@ -182,7 +183,7 @@ def build_task_package(vault, query, cwd=None, budget=5000):
     def add(ident, text):
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
-                    'working-source':5, 'working-root':8}.get(ident, 10)
+                    'working-source':8, 'working-root':8, 'summary-policy':6}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
         if ident in task_ids: priority=4
         candidates.append((priority, len(candidates), ident, text))
@@ -209,7 +210,10 @@ def build_task_package(vault, query, cwd=None, budget=5000):
         eligible.append(row)
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
     for row in rank_records(eligible, query):
-        if add(row['memory_id'],row['statement']+' (kaynak: '+row['source_path']+')'):
+        if add(row['memory_id'],'Güncel kayıt: '+row['statement']+' (kaynak: '+row['source_path']+')'):
+            current_facts.append(row)
+            priority,sequence,ident,text=candidates[-1]
+            candidates[-1]=(4,sequence,ident,text)
             source_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
     if project:
         add('project', 'Proje: '+project['id'])
@@ -219,29 +223,66 @@ def build_task_package(vault, query, cwd=None, budget=5000):
             path=Path(ref['path']).resolve()
             if path.is_file():
                 source_versions[str(path)]=digest(path)
-                add('working-source',ref['role']+': '+str(path)+'; kaynak: '+ref['evidence_source']+'. Güncel içeriği aç; dosya varlığı kullanıcı kabulü değildir.')
+                add('working-source',ref['role']+': '+str(path)+'; kaynak: '+ref['evidence_source']+'. Gerektikçe aç; varlık ≠ kabul.')
             else: omitted.append(str(path)+':missing')
-        for working_root in project.get('roots',[]): add('working-root','Çalışma kökü: '+working_root+'; devam etmeden canlı Git HEAD/status ve ilgili testleri doğrula.')
+        for working_root in project.get('roots',[]): add('working-root','Çalışma kökü: '+working_root+'; dosyada işlem yapmadan canlı Git HEAD/status ve ilgili testleri doğrula.')
         for task in brief(vault,limit=100):
             if task.get('project_id')==project['id'] or task['id'] in project.get('task_ids',[]):
                 task_ids.add(task['id'])
-                add(task['id'],task['title']+': '+task['next_step']+' (kaynak: '+task['source_path']+')')
+                source=h.source_file(vault,task['source_path'])
+                pinned=task.get('source_content_hash')==h.statement_hash(source.read_text())
+                if task.get('source_content_hash') and not pinned:
+                    omitted.append(task['id']+':source_changed'); continue
+                if pinned: current_tasks.append(task)
+                source_versions[task['source_path']]=digest(source)
+                add(task['id'],('Güncel sonraki adım: ' if pinned else 'Kaynağı yeniden doğrulanacak iş: ')+task['title']+': '+task['next_step']+' (kaynak: '+task['source_path']+')')
         for asset in project.get('assets',[]):
             try: path=validate_asset(asset)
             except (ValueError,OSError,KeyError) as e: omitted.append(asset.get('id','asset')+':'+str(e)); continue
             if add(asset['id'], 'Onaylı '+asset['role']+': '+str(path)+'; hash: '+asset['sha256']+'. Gerçek araç girdisini validate_inputs ile doğrula; dosyanın bulunması kullanıldığını kanıtlamaz.'): assets.append(asset)
-        if words.intersection({'devam','dün','önceki','kaldık','hatırla'}):
-            for relative in sorted(project.get('episode_sources',[]), key=lambda p: len(words & tokens(p)), reverse=True)[:3]:
-                try:
-                    path=h.source_file(vault,relative)
-                    text=path.read_text()
-                    if h.contains_secret(text): continue
-                    source_versions[relative]=digest(path)
-                    add(relative,'Tarihli geçmiş, güncel dosya yerine geçmez: '+relative+'\n'+text[:700]+'\n[Kaynak özeti kesilmiş olabilir; karar için tam kaynağı aç.]')
-                except (OSError,ValueError): omitted.append(relative+':missing')
     from ders_baglam import context
     methods=context(vault,query,budget=min(2600, budget), project_id=project['id'] if project else None, workflow_ids=[w['id'] for w in workflows])
     if methods: add('methods',methods)
+    # Current records are a derived view, never a new canonical statement.
+    # Project names and continuation words alone do not prove topic coverage.
+    continuation=any(alias_match(term,qwords) for term in ('devam','kaldık','sonraki adım'))
+    def history_phrase(term):
+        parts=query_words(term)
+        return any(all(inflected(part,word) for part,word in zip(parts,qwords[i:i+len(parts)]))
+                   for i in range(len(qwords)-len(parts)+1))
+    explicit_history=any(history_phrase(term) for term in
+                         ('geçmiş','dün','dünkü','hatırla','neden seçtik','eski karar','önceki karar','önceki oturum'))
+    topic=content_words(query)-set(query_words('devam kaldık nerede şimdi sonraki adım edelim iş işine önceki ders dersini uygulayarak bu ayki teslim kontrol plan planını yaz hazırla yap çıkar oluştur'))
+    if project:
+        for alias in project.get('aliases',[]):
+            topic={t for t in topic if not any(word_match(t,a) for a in query_words(alias))}
+    # Only candidates that fit the actual bounded package can satisfy coverage.
+    preview_ids=set(); preview_used=0
+    for _,_,ident,text in sorted(candidates):
+        cost=len(text)+(1 if preview_ids else 0)
+        if preview_used+cost<=budget: preview_ids.add(ident); preview_used+=cost
+    current_facts=[r for r in current_facts if r['memory_id'] in preview_ids]
+    current_tasks=[t for t in current_tasks if t['id'] in preview_ids]
+    coverage_text=' '.join(r['statement'] for r in current_facts)+' '+ ' '.join(t['title']+' '+t['next_step'] for t in current_tasks)
+    coverage_words=content_words(coverage_text+(' '+methods if 'methods' in preview_ids else ''))
+    covered=bool(current_tasks or current_facts) and all(any(word_match(t,w) for w in coverage_words) for t in topic)
+    # Generic continuation requires an actual next step, not just preferences.
+    if continuation and not topic: covered=bool(current_tasks)
+    use_history=bool(project) and (history=='always' or (history=='auto' and
+                         (explicit_history or (continuation and not covered))))
+    history_reason=('explicit' if history=='always' or explicit_history else
+                    'current_context_insufficient' if use_history else 'current_context_sufficient' if covered else 'not_requested')
+    if history=='never': history_reason='disabled'
+    if project and covered and not use_history:
+        add('summary-policy','Kaynaklı özet yeterliyse yeniden okuma. Hash ≠ doğruluk; yeni talep öncelikli. Belirsizlikte/işlemde kaynağı doğrula.')
+    if use_history:
+        for relative in sorted(project.get('episode_sources',[]), key=lambda p: len(words & tokens(p)), reverse=True)[:3]:
+            try:
+                path=h.source_file(vault,relative); text=path.read_text()
+                if h.contains_secret(text): continue
+                source_versions[relative]=digest(path)
+                add(relative,'Tarihli geçmiş, güncel dosya yerine geçmez: '+relative+'\n'+text[:700]+'\n[Kaynak özeti kesilmiş olabilir; karar için tam kaynağı aç.]')
+            except (OSError,ValueError): omitted.append(relative+':missing')
     if assets:
         instruction='Üretim öncesi gorev_baglam.py package ile bu paketi al; gerçek araca gönderilecek referans yollarını JSON dizisi yapıp validate-inputs --package <paket.json> --actual-inputs <yollar.json> çalıştır. Bu denetim araç çağrısının otomatik gözlemcisi değildir; gerçek argümanlarla aynı yollar olmalı.'
         instruction += ' Paket varlık rolleri: '+', '.join(sorted({a['role'] for a in assets}))+'. validate-inputs için ilgili --role değerini kullan.'
@@ -259,6 +300,8 @@ def build_task_package(vault, query, cwd=None, budget=5000):
         lines.append(text);selected.append(ident);used+=cost
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines)}
+    result['history']={'mode':history,'included':any(p in selected for p in (project or {}).get('episode_sources',[])), 'requested':use_history,'reason':history_reason,'topic_covered':covered}
+    result['summary']={'record_ids':[r['memory_id'] for r in current_facts if r['memory_id'] in selected], 'task_ids':[t['id'] for t in current_tasks if t['id'] in selected], 'derived':True}
     result['usage']={'context_chars':len(result['text']), 'budget_chars':budget,
                      'selected_count':len(selected), 'omitted_count':len(omitted),
                      'token_count':None, 'token_count_method':'not_measured'}
@@ -287,10 +330,10 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--vault',type=Path,default=Path(__file__).resolve().parents[1])
     sub=parser.add_subparsers(dest='command',required=True)
-    p=sub.add_parser('package');p.add_argument('query');p.add_argument('--cwd')
+    p=sub.add_parser('package');p.add_argument('query');p.add_argument('--cwd');p.add_argument('--history',choices=('auto','always','never'),default='auto')
     p=sub.add_parser('validate-inputs');p.add_argument('--package',type=Path,required=True);p.add_argument('--actual-inputs',type=Path,required=True);p.add_argument('--role',default='identity')
     args=parser.parse_args()
-    if args.command=='package': result=build_task_package(args.vault,args.query,args.cwd)
+    if args.command=='package': result=build_task_package(args.vault,args.query,args.cwd,history=args.history)
     else: result={'validated':validate_inputs(json.loads(args.package.read_text())['assets'],json.loads(args.actual_inputs.read_text()),args.role)}
     print(json.dumps(result,ensure_ascii=False,indent=2))
 

@@ -28,6 +28,7 @@ def put(vault, kind, data):
     source = h.source_file(vault, data['source_path'])
     if len(data['evidence']) < 10 or data['evidence'] not in source.read_text():
         raise ValueError('kanıt kaynak notta aynen bulunmalı')
+    data['source_content_hash'] = h.statement_hash(source.read_text())
     if kind == 'task':
         if data['status'] not in ('active', 'blocked', 'needs_confirmation', 'done', 'cancelled'):
             raise ValueError('geçersiz iş durumu')
@@ -37,8 +38,6 @@ def put(vault, kind, data):
             date = dt.date.fromisoformat(data['last_verified'])
             if date > dt.date.today(): raise ValueError('gelecek teyit tarihi olamaz')
     else:
-        # Bind the reviewed lesson to the complete evidence revision.
-        data['source_content_hash'] = h.statement_hash(source.read_text())
         if data['status'] not in ('proposed', 'verified', 'rejected'):
             raise ValueError('geçersiz ders durumu')
         if data['status'] == 'verified':
@@ -65,7 +64,9 @@ def brief(vault, limit=3):
         if row['status'] not in ('active', 'blocked'): continue
         try:
             source = h.source_file(vault, row['source_path'])
-            if row.get('evidence', '') not in source.read_text(): continue
+            content=source.read_text()
+            if row.get('evidence', '') not in content: continue
+            if row.get('source_content_hash') and row['source_content_hash'] != h.statement_hash(content): continue
         except (OSError, ValueError): continue
         verified = row.get('last_verified')
         if not verified or (dt.date.today() - dt.date.fromisoformat(verified)).days > 14:

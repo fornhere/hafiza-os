@@ -1,3 +1,23 @@
+# 2026.09.16 — Kısa proje özeti ve seçici tarihçe
+
+- Kaynak sürümü doğrulanmış mevcut kayıtlar, sonraki iş ve ilgili yöntem
+  görev paketinin öncelikli bölümüne alınır; ayrı bir özet veri tabanı oluşmaz.
+- `--history auto` varsayılanında yeterli güncel bağlam varsa sırf “devam”
+  denildiği için tarihçe eklenmez. Açık geçmiş isteği veya devam görevinde
+  konu eksikliği geçmişe döner. `always` ve `never` elle seçilebilir.
+- Çok sözcüklü geçmiş ifadelerinde sözcüklerin yan yana gelmesi aranır.
+- Çalışma kaynağı, ihtiyaç olduğunda açılacak başvuru olarak sunulur.
+  Belirsizlik, değişmiş kaynak ve gerçek işlem öncesi doğrulama korunur.
+- Yeni iş kayıtları kaynak içerik hash'i taşır; kaynak değişince eski iş
+  güncel görünümden çıkar. Eski hash'siz iş, yeniden incelenecek ipucudur;
+  güncel özeti veya geçmişi atlama kararını desteklemez.
+
+Hash içerik bütünlüğüdür; anlamsal doğruluk veya yeni kullanıcı kabulü
+anlamına gelmez. Konu yeterliliği kelime temelli ve temkinlidir; her görevde
+bağlamın küçüleceği veya daha az araç çağrısı yapılacağı garantisi yoktur.
+
+---
+
 # 2026.09.16 — Sentetik çok oturumlu denetim ek düzeltmeleri
 
 - Görev paketinde kapsam, geçerlilik ve kaynak denetimi sıralamadan önce

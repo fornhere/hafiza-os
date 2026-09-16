@@ -31,6 +31,12 @@ class Work(unittest.TestCase):
         w.put(self.vault, 'task', dict(self.row, expected_version=1, status='needs_confirmation'))
         self.assertEqual([], w.brief(self.vault))
 
+    def test_task_source_change_invalidates_current_summary_even_with_quote(self):
+        row=w.put(self.vault, 'task', self.row)
+        self.assertIn('source_content_hash',row)
+        source=self.vault/'kaynak.md';source.write_text(source.read_text()+' Ancak önceki iş iptal edildi.')
+        self.assertEqual([],w.brief(self.vault))
+
     def test_stale_writer_and_missing_source_rejected(self):
         w.put(self.vault, 'task', self.row)
         with self.assertRaisesRegex(ValueError, 'sürüm'):

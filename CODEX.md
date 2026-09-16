@@ -207,3 +207,20 @@ doğrular. Eski hash'siz dersler erişimden çıkar; bütün eski dersleri körl
 yeniden kaydetmeyin. Kaynak ve yöntemi okuyup hâlâ desteklenenleri mevcut
 `expected_version` ile `is_ve_ders.py lesson` üzerinden sürümleyin. İptal
 edilen veya belirsiz dersi terfi ettirmeyin.
+
+
+### Kısa proje özeti ve tekrar okuma
+
+Görev paketi, yeni bir serbest metin hafızası üretmek yerine mevcut kaynaklı
+kayıtların güncel görünümünü oluşturur. Kaynak hash'i içerik bütünlüğünü
+gösterir; bilginin anlamsal doğruluğu veya kullanıcının yeni onayı değildir.
+Yeni kullanıcı isteği ve değişmiş canlı kaynak bu görünümden önceliklidir.
+Paketin eksiksiz verdiği, sürümü denetlenmiş bilgiyle metin taslağı üretirken
+aynı dosyayı sırf tören olarak yeniden okumak gerekmez. Eksik/çelişkili
+bilgi, kaynak değişimi ve gerçek işlem öncesi teknik kontrol bu kolaylığa
+dahil değildir. Tarihçe istemleri gerektiğinde geçmiş kaynaklara döner.
+
+Yeni iş kaydı da kaynak içerik sürümünü taşır. Eski hash'siz işler yeniden
+incelenmeden sürümü doğrulanmış bilgi sayılmaz; kaynakları topluca körlemesine
+sabitlemeyin. İşin kabul durumunu veya son teyit tarihini sırf geçiş için
+yükseltmeyin.
