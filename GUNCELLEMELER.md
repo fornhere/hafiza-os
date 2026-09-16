@@ -22,6 +22,13 @@ paketle taşımak ve inceleme gerektiren bilgiyi görünür tutmaktır.
 - **Ölçülebilir bağlam:** paket ve hook çıktılarının karakter sayıları görünürdür.
   Ölçülmeyen token sayısı `null` kalır; karakter sayısı token veya ücret değildir.
   `latest-session` yalnız en yeni tarihli oturum bölümünü bütçeli döndürür.
+- **Kaynaklı doğal sonuç kaydı:** olağan kabul/ret/vazgeçme geri bildirimi
+  tamamlanmış özgün kullanıcı mesajına bağlanır. İlk beş mesaj ve kaydetmeme
+  kapıları korunur; kayıt sürümlüdür, aynı kanıt tekrar satır üretmez. Doğal
+  gözlemler deney koşullarından ayrıdır; bilinmeyen insan ölçümleri null kalır.
+- **Açılışta kaynak önceliği:** tarihli son oturum özeti geçmiş bilgi olarak
+  okunur; güncel işletim iddiaları canlı sağlık, iş durumu ve yeni makbuzlarla
+  denetlenir. Tarihsel notlar sessizce yeniden tarihlenmez.
 - **Kaynak biçimi desteği:** `exec` kaynakları açıkça kullanıcı görevine aitse
   kabul edilir; bilinen alt ajan kaynakları ana konuşma olarak işlenmez.
 

@@ -43,3 +43,13 @@ ve tekrar gönderilen bağlamı kapsayabilir; hepsi hafızanın ek maliyeti değ
 Normal işlerde olağan geri bildirimden kaynaklı gözlem çıkarın; rutin puan
 istemi, aynı işi kullanıcıya iki kez yaptırma veya sentetik sonuçtan insan
 faydası üretme yoktur. Bakım yükünü kazançtan düşmeden net fayda iddia etmeyin.
+
+## Kaynaklı doğal gözlem kaydı
+
+Olağan kabul/ret/vazgeçme geri bildirimini `fayda_olc.py record` kapısından
+geçirin. Bu komut tamamlanmış kaynak, özgün kullanıcı alıntısı, ilk beş
+mesaj ve kaydetmeme kurallarını denetler. `observational` koşulu A/B/C’den
+ayrıdır; kabul nedeni veya zaman kazancı otomatik çıkarılmaz. Bu ilk yazıcı
+yalnız sonucu kaydeder; dört nicel insan ölçümü null kalmalıdır. Tekrar
+güvenliği ve eklemeli sürümler desteklenir. Ayrıntılı alanlar ve inceleme
+sırası [konsolidasyon yönergesinde](komuta/hafıza-konsolidasyonu.md).

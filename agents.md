@@ -15,7 +15,7 @@ Her oturumun başında, bu sırayla oku. Atlama, sıralamayı bozma.
 
 1. `agents.md` — bu dosya (anayasa)
 2. `zihin/ruh.md` — kim olduğun, nasıl konuştuğun, neye değer verdiğin
-3. `zihin/son-oturum.md` — dün ne oldu
+3. `zihin/son-oturum.md` — yalnız en yeni tarihli bölüm; güncel durumla karıştırma
 4. `zihin/çekirdek.md` — kullanıcı hakkında kalıcı doğrular
 5. `zihin/hafıza-sistemi.md` — kanonik kayıt ve Mem0 erişim politikası *(Mem0 katmanını kurduysan)*
 6. `zihin/açık-işler.md` — havada duran işler
@@ -23,6 +23,20 @@ Her oturumun başında, bu sırayla oku. Atlama, sıralamayı bozma.
 8. `komuta/ajan-briefingi.md` — bu oturumda senden beklenen rol
 
 Bir dosya yoksa: yokluğunu not et, uydurma, akışı durdurma.
+
+**Güncellik ve kaynak önceliği:** `son-oturum.md` tarihli bir geçmiş
+özetidir; dosya adı veya en üstte olması güncel çalışma durumunu kanıtlamaz.
+Yalnız en yeni tarihli bölümü bütçeli oku: `python3 araclar/codex_hafiza.py
+--vault . latest-session`. Komut yoksa en yeni bölümü dosyadan oku.
+Bu bölüm eskiyse yeni oturum olmuş gibi yeniden adlandırma ve tarihini
+ilerletme. Çelişen işletim durumu için `python3 araclar/konsolidasyon.py
+--vault . status` çıktısındaki güncel sağlık ve kontrol zamanlarını kullan;
+eski başarılı durum güncel `failed`, `stale` veya `unknown` sonucunu örtemez.
+İşlerin devamı için kaynaklı güncel açık işler ve ilgili yeni görev makbuzunu
+incele; makbuz bir görev özeti olup tek başına kullanıcı kararı veya kanonik
+gerçek değildir. Eski özetin “henüz doğrulanmadı” bilgisini daha yeni gerçek
+kontrol kanıtı varsa güncel eksik gibi tekrarlama. Kaynaklar arasında tarih
+ve kanıt çözülmeden çelişkiyi kapatma.
 
 ---
 

@@ -142,3 +142,30 @@ bulunan herhangi bir alıntı cümleyi destekliyor sayılmaz. Desteklenmeyen
 kaydı topluca sabitleme. Bu işlem kanonik tercih değişikliği veya Mem0
 senkronu değildir. Projeye özgü dersleri proje/iş akışı kapsamıyla güncelle;
 kapsamı olmayan eski derslerin global kalacağını dikkate al.
+
+
+## Olağan geri bildirimden fayda gözlemi
+
+Yalnız incelemekte olduğun tamamlanmış kaynakta bir teslimata ilişkin açık
+kabul, ret veya vazgeçme varsa aynı incelemede fayda gözlemi öner. Selam, genel
+övgü ve her oturum için otomatik gözlem oluşturma. Kaynağın hangi teslimata
+işaret ettiğini bağlamdan doğrula; anlamsal karar inceleyene aittir.
+
+`python3 araclar/fayda_olc.py record --vault . --input-json gozlem.json`
+önce dry-run, ardından aynı girdiye `--apply` ile kayıt yapar. Girdi: task_id,
+condition=`observational`, workflow, model (bilinmiyorsa `unknown`),
+protocol_version, outcome (`accepted`, `rejected`, `abandoned`, `unknown`),
+session_id, tamamlanmış source_snapshot, birebir evidence, özgün kullanıcı
+mesajının evidence_source alanı ve reviewed_by=`codex-consolidator`.
+evidence_source, semantik adayla aynı satır/hash/quote sözleşmesini kullanır.
+İlk kayıt expected_version=0; güncellemede mevcut sürümü kullan. Kayıt hedefi
+`zihin/fayda-gozlemleri.jsonl`; sürümler eklenir, geçmiş silinmez. Tekrar
+işleme aynı kanıtı çoğaltmaz. İlk beş mesaj, kaydetmeme ve kaynak sürümü
+kontrolleri bu kayıt için de geçerlidir.
+
+Doğal işleri A/B/C deneyi gibi etiketleme. Bu kapı yalnız kaynaklı sonucu
+kaydeder; repeat_explanations, correction_rounds, elapsed_seconds ve
+maintenance_seconds alanlarını null bırak. Bir kabul cümlesinden hız veya
+fayda çıkarma. `fayda_olc.py --observations zihin/fayda-gozlemleri.jsonl`
+gözlenen sonuçları özetler; normal çalışma ve deney koşulları ayrı kalır.
+Kullanıcıya rutin puan, kayıt veya değerlendirme sorusu gönderme.
