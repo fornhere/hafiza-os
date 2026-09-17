@@ -228,3 +228,15 @@ altıncı gerçek mesajda kayıt ve Mem0 geri çağırma denemesini de yap. Otom
 Kanonik kayıt kataloğu, aday kuyruğu, kaynak ve kimlik metadata'sı, bütçeli
 erişim paketleri ve Mem0 senkron denetimi eklendi. Bu temel, yeni konsolidasyon
 ve iş takibi araçlarının üzerine kurulduğu yapıyı oluşturuyor.
+
+
+## 18 Eylül 2026 — Bağlam kimliği ve erişim görünürlüğü
+
+- Skill dosyasının yolu artık hedef proje seçimini, yöntem eşlemesini veya
+  geçmiş arama niyetini değiştirmiyor; sıradan yollar ve gerçek proje adları korunuyor.
+- Katalog bütünlüğü ve kaynak incelemesi nedeniyle erişime giremeyen etkin
+  kayıtlar sağlık çıktısında ayrıldı. Gizlilik ve geçerlilik dışlamaları normaldir.
+- Codex sessiz kayıt politikası, Claude Code kapanış şablonundan açıkça ayrıldı.
+- İş defteri yokken mevcut iş görünümünü koruyan davranış regresyon testine bağlandı.
+
+Bu kontroller model cevabının kalitesi veya kullanıcı zaman kazancının kanıtı değildir.

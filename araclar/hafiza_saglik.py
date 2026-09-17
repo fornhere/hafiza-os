@@ -3,7 +3,70 @@ import datetime as dt
 import json
 from pathlib import Path
 
+import hafiza as memory
+
 RUN_PATH = Path('gelen-kutusu/codex-oturumları/.state/maintenance.json')
+
+
+def catalog_health(vault):
+    """Global eligibility, before query/scope ranking; never return catalog text."""
+    result = dict(status='unknown', active_count=None, eligible_count=None,
+                  excluded_count=None, policy_excluded_count=None, source_blocked_count=None,
+                  inactive_count=None, exclusion_reasons={})
+    if not (vault / memory.CATALOG_PATH).exists():
+        return result, []  # The catalog/Mem0 layer is optional.
+    checks = []
+    def check(name, status, reason):
+        checks.append(dict(name=name, status=status, reason=reason, at=None))
+    try:
+        records = memory.load_catalog(vault)
+        errors = memory.validate_catalog(vault, records)
+        result['validation_error_count'] = len(errors)
+        check('catalog_validation', 'failed' if errors else 'healthy',
+              'Katalog şema, kaynak ve hash bütünlüğü hatalı.' if errors else
+              'Katalog şema, kaynak ve hash bütünlüğü geçerli; erişilebilirlik ayrı kontrol edilir.')
+        active = [row for row in records if row.get('status') == 'active']
+        reasons = {}
+        eligible = 0
+        policy_excluded = 0
+        source_blocked = 0
+        for row in active:
+            codes = set()
+            if not memory.retrievable(row):
+                code = ('sensitivity_restricted' if row.get('sensitivity', 'normal') != 'normal'
+                        else 'validity_window_excluded')
+                reasons[code] = reasons.get(code, 0) + 1
+                policy_excluded += 1
+                continue  # Match context: source eligibility is checked only after policy.
+            row_errors = memory.context_record_errors(vault, row)
+            for error in row_errors:
+                # Only fixed, public reason codes may leave this function.
+                code = str(error).rsplit(':', 1)[-1].strip()
+                codes.add(code if code in {'source_revision_unreviewed', 'source_revision_changed',
+                                           'source_binding_changed'} else 'record_integrity_error')
+            if codes:
+                source_blocked += 1
+                for code in codes:
+                    reasons[code] = reasons.get(code, 0) + 1
+            else:
+                eligible += 1
+        excluded = len(active) - eligible
+        result.update(status='failed' if errors or source_blocked else 'healthy',
+                      active_count=len(active), eligible_count=eligible, excluded_count=excluded,
+                      policy_excluded_count=policy_excluded, source_blocked_count=source_blocked,
+                      inactive_count=len(records)-len(active), exclusion_reasons=reasons)
+        check('retrieval_eligibility', 'failed' if source_blocked else 'healthy',
+              f'Etkin kayıt: {len(active)}; erişime uygun: {eligible}; dışlanan: {excluded} '
+              f'(politika: {policy_excluded}; kaynak: {source_blocked}). '
+              'Kapsam ve sorgu sıralaması bu sayılara dahil değildir.' +
+              (' Nedenler: ' + ', '.join(f'{code}={count}' for code, count in sorted(reasons.items()))
+               if reasons else ''))
+    except (ValueError, TypeError, KeyError, AttributeError, OSError):
+        checks.clear()
+        result['status'] = 'failed'
+        check('catalog_validation', 'failed', 'Katalog veya kaynak doğrulama verisi okunamadı.')
+        check('retrieval_eligibility', 'unknown', 'Katalog erişilebilirliği hesaplanamadı.')
+    return result, checks
 
 
 def snapshot(vault, now=None):
@@ -76,16 +139,24 @@ def snapshot(vault, now=None):
                     'Denetim 24 saatten eski.' if elapsed > 86400 else 'Son uzak doğrulama güncel.', data['at'])
         except (ValueError, KeyError, TypeError, OSError):
             add('remote_audit', 'failed', 'Denetim makbuzu okunamadı.')
+    catalog, catalog_checks = catalog_health(vault)
+    checks.extend(catalog_checks)
     rank = {'healthy': 0, 'unknown': 1, 'stale': 2, 'failed': 3}
     return dict(status=max((c['status'] for c in checks), key=rank.get),
-                checked_at=now.isoformat(), checks=checks,
+                checked_at=now.isoformat(), checks=checks, catalog=catalog,
                 limits='Veri hattı kontrolüdür; modelin uygulaması ve kullanıcı faydası ayrı ölçülür.')
 
 
 def notice(vault):
     report = snapshot(vault)
-    if report['status'] == 'healthy':
+    # Static catalog diagnostics belong in status, not every task's opening.
+    # Runtime scan/scheduler/remote audit failures keep their existing notices.
+    checks = [c for c in report['checks']
+              if c['name'] not in {'catalog_validation', 'retrieval_eligibility'}]
+    rank = {'healthy': 0, 'unknown': 1, 'stale': 2, 'failed': 3}
+    status = max((c['status'] for c in checks), key=rank.get, default='healthy')
+    if status == 'healthy':
         return ''
-    return ('Hafıza işletim durumu: ' + report['status'] + '. ' + ' '.join(
-        c['reason'] for c in report['checks'] if c['status'] != 'healthy') +
+    return ('Hafıza işletim durumu: ' + status + '. ' + ' '.join(
+        c['reason'] for c in checks if c['status'] != 'healthy') +
         ' Eski başarıyı güncel çalışma garantisi sayma; net kullanıcı görevini bölme.')

@@ -35,6 +35,8 @@ def inflected(base, word):
     if base == word: return True
     if len(base) < 4: return False
     variants = [base]
+    # Explicit domain vocabulary; do not infer vowel loss for arbitrary words.
+    if base == 'beyin': variants.append('beyn')
     if base[-1:] in {'k','p','t','ç'}:
         variants.append(base[:-1]+{'k':'ğ','p':'b','t':'d','ç':'c'}[base[-1]])
     def suffix_chain(tail, depth=0):
@@ -87,8 +89,26 @@ def rank_records(rows, query):
     return [row for _, _, row in sorted(ranked, key=lambda item:
             (-item[0], -item[1], item[2].get('memory_id', '')))]
 
+def task_intent(text):
+    """Exclude skill packaging from topic matching, preserving ordinary user paths.
+
+    This only changes the retrieval query, never captured source evidence.
+    """
+    def skill_block(match):
+        block = match.group(0)
+        name = re.search(r'<name>\s*([^<]+?)\s*</name>', block, re.I)
+        path = re.search(r'<path>\s*([^<]+?)\s*</path>', block, re.I)
+        if name and path and path.group(1).strip().casefold().endswith('/skill.md'):
+            return name.group(1).strip()
+        return block
+    text = re.sub(r'<skill(?:\s[^>]*)?>.*?</skill>', skill_block, text,
+                  flags=re.S | re.I)
+    return re.sub(r'\[(\$[^\]\n]+)\]\(<?[^()\n]*?/SKILL\.md>?\)',
+                  lambda match: match.group(1), text, flags=re.I)
+
+
 def select_projects(projects, query, cwd=None):
-    words=query_words(query)
+    words=query_words(task_intent(query))
     deictic=any(w in words for w in ('dünkü','o','şu','önceki'))
     def matches(project,fuzzy=False):
         return any(alias_match(alias,words,fuzzy) and not (deictic and set(query_words(alias)) <= _GENERIC)
@@ -157,6 +177,7 @@ def asset_claim_overrides(vault):
 
 def build_task_package(vault, query, cwd=None, budget=5000, history="auto"):
     if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
+    query = task_intent(query)
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions={}
     budget=max(0, int(budget)); candidates=[]; current_facts=[]; current_tasks=[]

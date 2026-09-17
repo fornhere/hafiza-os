@@ -74,7 +74,20 @@ Bir işi bitiremediysen, bunu da yaz. Yarım iş bir makbuzdur; sessizlik değil
 
 ---
 
-## 4. Oturum Kapanış Protokolü
+## 4. Oturum Kayıt Protokolü
+
+### Codex: sessiz arka plan kaydı
+
+Codex için bu bölümdeki elle kapanış ve zorlama kuralları uygulanmaz.
+İlk beş gerçek kullanıcı mesajında kayıt istenmez. Altıncı mesajdan itibaren
+anlamlı karar, sonuç ve kalan işler mevcut arka plan konsolidasyonunda
+kaynaklarıyla incelenir. Basit sorular ve kaydetmeme talepleri dışarıda kalır.
+Stop/Interrupt sonunda makbuz isteme, kayıt için ek tur açma veya rutin
+"kaydettim" mesajı gönderme. Makbuz yoksa kaydedildi deme. Ayrıntılar: CODEX.md.
+
+### Claude Code: dosya temelli kapanış
+
+Aşağıdaki kapanış şablonu ve zorlama, yalnız Claude Code akışını anlatır.
 
 **5 mesajı geçen her oturumun sonunda** `zihin/son-oturum.md` dosyasının
 **en üstüne** yeni bir not eklenir (eski notlar altta kalır, silinmez).
@@ -234,6 +247,9 @@ Araç bunları desen taramasıyla reddeder, ama kural araçtan önce gelir.
 ---
 
 ## 7. Hook'lar
+
+Aşağıdaki tablo Claude Code hook'larını gösterir. Codex adaptörünün
+güncel sessiz davranışı için bölüm 4 ve CODEX.md geçerlidir.
 
 Otomatik davranışlar `.claude/hooks/` içinde yaşar. Başka yerde durmazlar.
 Bir hook eklendiğinde ne yaptığı tek satırla yanına yazılır.

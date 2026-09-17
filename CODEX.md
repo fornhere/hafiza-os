@@ -224,3 +224,22 @@ Yeni iş kaydı da kaynak içerik sürümünü taşır. Eski hash'siz işler yen
 incelenmeden sürümü doğrulanmış bilgi sayılmaz; kaynakları topluca körlemesine
 sabitlemeyin. İşin kabul durumunu veya son teyit tarihini sırf geçiş için
 yükseltmeyin.
+
+
+## Görev kimliği ve erişim sağlığı
+
+Skill çağrısının SKILL.md dosya yolu görev konusu sayılmaz. `[$skill](.../SKILL.md)`
+bağlantılarında skill adı korunur; dosyanın bulunduğu başka proje bağlama sızmaz.
+Normal belge bağlantıları ve kullanıcının açık proje adları korunur. Yeni proje
+adı için yerel görev manifestindeki aliases ve roots alanlarını güncelleyin.
+
+`status` içindeki operasyonel sağlık artık katalog bütünlüğünü ve erişime uygun
+etkin kayıtları ayrı gösterir. `policy_excluded_count` gizlilik/tarih nedeniyle
+beklenen dışlamadır; `source_blocked_count` kaynak sürümü incelemesi isteyen
+kayıtları gösterir. Karantina/eski sürümler etkin kayıp sayılmaz. Katalog yoksa
+isteğe bağlı katman unknown kalır. Bu sayılar sorgu veya proje kapsamından önceki
+uygunluktur; doğru cevabı bulma ve kullanıcı faydası ölçümü değildir.
+Statik katalog uyarıları sıradan görev açılışlarına tekrar tekrar eklenmez;
+ayrıntılı status/health görünümünde kalır. Tarama, zamanlayıcı ve uzak audit
+arızalarının açılış bildirimleri sürer. Kaynak uyarısını çözmek için gerçek
+inceleme gerekir; hash'i körlemesine yenilemek onay değildir.

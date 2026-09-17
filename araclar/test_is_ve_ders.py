@@ -16,6 +16,15 @@ class Work(unittest.TestCase):
             source_path='kaynak.md', evidence='İşin uygulaması tamamlandı', actor='test',
             last_verified=dt.date.today().isoformat())
 
+    def test_missing_ledger_preserves_existing_view(self):
+        target = self.vault / 'zihin/açık-işler.md'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('Existing user work list\n')
+        before = target.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'defteri'):
+            w.render(self.vault)
+        self.assertEqual(before, target.read_bytes())
+
     def test_done_disappears_from_brief_but_history_remains(self):
         w.put(self.vault, 'task', self.row)
         self.assertEqual(1, len(w.brief(self.vault)))
