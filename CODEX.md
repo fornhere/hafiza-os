@@ -243,3 +243,30 @@ Statik katalog uyarıları sıradan görev açılışlarına tekrar tekrar eklen
 ayrıntılı status/health görünümünde kalır. Tarama, zamanlayıcı ve uzak audit
 arızalarının açılış bildirimleri sürer. Kaynak uyarısını çözmek için gerçek
 inceleme gerekir; hash'i körlemesine yenilemek onay değildir.
+
+
+## Yerel çalışma kapsülü ve bilgi kartları
+
+`devam`, `nerede kaldık`, `sonraki adım` içeren proje istekleri mevcut görev
+paketinde kısa devam kartlarını açar. En fazla üç güncel görev ve beş kaynak
+sürümü incelenmiş bilgi kartı gösterilir. Normal görevlerin standart görünümü
+korunur. Elle küçük paket almak için:
+
+```bash
+python3 araclar/gorev_baglam.py --vault KASA resume "Proje adı devam" --budget 1800
+```
+
+`capsule` alanı görevleri, kaynak hash'lerini, tarihleri, bilgi kartlarını ve
+varsa önerilen sonraki adımı taşır. Bu bir komut çalıştırmaz, yeni yetki vermez.
+Tek güncel aktif görev sorgunun konusuna uyuyorsa adımı önerilir. Birden fazla
+veya engelli görevde seçim yapılmaz; eski veya kaynak sürümü değişmiş kayıt
+kart olmaz. Son doğrulanmış çıktı bu defterde izlenmediğinden null kalır.
+Eksik veri model tarafından doldurulmaz.
+
+Kapsül yeni kanonik hafıza kaydı değildir. Her çağrıda mevcut kaynaklardan
+derlenir; ayrı önbellek, zamanlayıcı, ücretli API veya model çağrısı yoktur.
+Hook var olan package çağrısını kullanır. Kartlar metin bütçesine bütün olarak
+sığar; seçim/varlık kontrolü kapsül başlığından önceliklidir. CLI JSON'undaki
+structured capsule, text alanının veri görünümüdür; karakter bütçesi yalnız
+ajana verilen text için geçerlidir. Sonraki iş önerisi ve kaynak hash'i içerik
+kalitesini veya insan kabulünü ispatlamaz.

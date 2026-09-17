@@ -175,9 +175,17 @@ def asset_claim_overrides(vault):
     return overrides
 
 
-def build_task_package(vault, query, cwd=None, budget=5000, history="auto"):
+def continuation_request(query):
+    words = query_words(task_intent(query))
+    return any(alias_match(term, words) for term in ('devam', 'kaldık', 'sonraki adım'))
+
+
+def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view="auto"):
     if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
+    if view not in ("auto", "standard", "resume"): raise ValueError("invalid view")
     query = task_intent(query)
+    resume = view == "resume" or (view == "auto" and continuation_request(query))
+    resume_tasks = []; card_facts = []
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions={}
     budget=max(0, int(budget)); candidates=[]; current_facts=[]; current_tasks=[]
@@ -204,7 +212,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto"):
     def add(ident, text):
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
-                    'working-source':8, 'working-root':8, 'summary-policy':6}.get(ident, 10)
+                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
         if ident in task_ids: priority=4
         candidates.append((priority, len(candidates), ident, text))
@@ -231,7 +239,16 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto"):
         eligible.append(row)
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
     for row in rank_records(eligible, query):
-        if add(row['memory_id'],'Güncel kayıt: '+row['statement']+' (kaynak: '+row['source_path']+')'):
+        # A source-derived card requires a reviewed source revision, not a new
+        # hash computed from an unreviewed legacy statement's current file.
+        content = h.source_file(vault, row['source_path']).read_text()
+        pinned = (row.get('source_content_hash') == h.statement_hash(content)
+                  or h.current_source_binding(vault, row, content))
+        if resume and pinned and len(card_facts) >= 5:
+            omitted.append(row['memory_id']+':card_limit'); continue
+        if pinned: card_facts.append(row)
+        prefix = 'Bilgi kartı: ' if resume and pinned else 'Güncel kayıt: '
+        if add(row['memory_id'],prefix+row['statement']+' (kaynak: '+row['source_path']+')'):
             current_facts.append(row)
             priority,sequence,ident,text=candidates[-1]
             candidates[-1]=(4,sequence,ident,text)
@@ -254,19 +271,33 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto"):
                 pinned=task.get('source_content_hash')==h.statement_hash(source.read_text())
                 if task.get('source_content_hash') and not pinned:
                     omitted.append(task['id']+':source_changed'); continue
-                if pinned: current_tasks.append(task)
+                if pinned:
+                    resume_tasks.append(task)
+                    if resume and len(resume_tasks) > 3:
+                        omitted.append(task['id']+':card_limit'); continue
+                    current_tasks.append(task)
                 source_versions[task['source_path']]=digest(source)
+                if resume and pinned:
+                    state_label = 'engelli' if task['status'] == 'blocked' else 'devam edilebilir'
+                    add(task['id'], 'Devam kartı ['+state_label+']: '+task['title']+': '+task['next_step']+' (kaynak: '+task['source_path']+')')
+                    continue
                 add(task['id'],('Güncel sonraki adım: ' if pinned else 'Kaynağı yeniden doğrulanacak iş: ')+task['title']+': '+task['next_step']+' (kaynak: '+task['source_path']+')')
         for asset in project.get('assets',[]):
             try: path=validate_asset(asset)
             except (ValueError,OSError,KeyError) as e: omitted.append(asset.get('id','asset')+':'+str(e)); continue
             if add(asset['id'], 'Onaylı '+asset['role']+': '+str(path)+'; hash: '+asset['sha256']+'. Gerçek araç girdisini validate_inputs ile doğrula; dosyanın bulunması kullanıldığını kanıtlamaz.'): assets.append(asset)
+    if resume and project:
+        status = ('birden fazla güncel iş var; hedef işi varsayma' if len(resume_tasks)>1 else
+                  'güncel iş engelli; otomatik adım yok' if resume_tasks and resume_tasks[0]['status']=='blocked' else
+                  'güncel iş kaydı yok; sonraki adımı uydurma' if not resume_tasks else
+                  'kaynaklı iş kartı aşağıda; yeni istek öncelikli')
+        add('capsule-status', 'Devam kapsülü: '+status+'.')
     from ders_baglam import context
     methods=context(vault,query,budget=min(2600, budget), project_id=project['id'] if project else None, workflow_ids=[w['id'] for w in workflows])
     if methods: add('methods',methods)
     # Current records are a derived view, never a new canonical statement.
     # Project names and continuation words alone do not prove topic coverage.
-    continuation=any(alias_match(term,qwords) for term in ('devam','kaldık','sonraki adım'))
+    continuation=resume or continuation_request(query)
     def history_phrase(term):
         parts=query_words(term)
         return any(all(inflected(part,word) for part,word in zip(parts,qwords[i:i+len(parts)]))
@@ -309,7 +340,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto"):
         instruction += ' Paket varlık rolleri: '+', '.join(sorted({a['role'] for a in assets}))+'. validate-inputs için ilgili --role değerini kullan.'
         if not add('input-check',instruction):
             omitted.append('input-check:budget')
-    errors=[reason for reason in omitted if not reason.endswith(':budget')]
+    errors=[reason for reason in omitted if not reason.endswith((':budget', ':card_limit'))]
     if errors:
         detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'
         if len(detail)>min(600,budget): detail='Bağlam kontrolü: Geçersiz veya değişmiş kaynaklar dışlandı; omitted_reasons alanını incele.'
@@ -323,6 +354,29 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto"):
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines)}
     result['history']={'mode':history,'included':any(p in selected for p in (project or {}).get('episode_sources',[])), 'requested':use_history,'reason':history_reason,'topic_covered':covered}
     result['summary']={'record_ids':[r['memory_id'] for r in current_facts if r['memory_id'] in selected], 'task_ids':[t['id'] for t in current_tasks if t['id'] in selected], 'derived':True}
+    visible_tasks = [t for t in current_tasks if t['id'] in selected][:3]
+    visible_facts = [f for f in card_facts if f['memory_id'] in selected][:5]
+    task_cards = [dict(id=t['id'], title=t['title'], status=t['status'],
+                       next_step=t['next_step'], source_path=t['source_path'],
+                       source_sha256=source_versions[t['source_path']],
+                       verified_at=t.get('last_verified')) for t in visible_tasks]
+    fact_cards = [dict(id=f['memory_id'], statement=f['statement'], kind=f['kind'],
+                       source_path=f['source_path'], source_sha256=source_versions[f['source_path']],
+                       observed_at=f.get('observed_at')) for f in visible_facts]
+    # A relevant fact must not make an unrelated task look like the next action.
+    task_words = content_words(' '.join(t['title']+' '+t['next_step'] for t in visible_tasks))
+    task_covers_topic = all(any(word_match(t,w) for w in task_words) for t in topic)
+    # Only a single current active project task can be suggested, never executed.
+    single = (task_cards[0] if len(resume_tasks) == 1 and len(task_cards) == 1
+              and task_cards[0]['status'] == 'active' and task_covers_topic and not explicit_history else None)
+    result['capsule'] = dict(enabled=resume, derived=True, project_id=result['project_id'],
+        tasks=task_cards if resume else [], facts=fact_cards if resume else [],
+        available_task_count=len(resume_tasks) if resume else 0,
+        omitted_task_count=max(0,len(resume_tasks)-len(task_cards)) if resume else 0,
+        suggested_next_step=single['next_step'] if resume and single else None,
+        selection_required=resume and len(resume_tasks)>1,
+        last_verified_output=None,
+        limits='Kaynaklı türetilmiş görünüm; izin veya otomatik yürütme değildir. Son çıktı bu defterde doğrulanmıyor.')
     result['usage']={'context_chars':len(result['text']), 'budget_chars':budget,
                      'selected_count':len(selected), 'omitted_count':len(omitted),
                      'token_count':None, 'token_count_method':'not_measured'}
@@ -352,9 +406,11 @@ def main():
     parser.add_argument('--vault',type=Path,default=Path(__file__).resolve().parents[1])
     sub=parser.add_subparsers(dest='command',required=True)
     p=sub.add_parser('package');p.add_argument('query');p.add_argument('--cwd');p.add_argument('--history',choices=('auto','always','never'),default='auto')
+    p=sub.add_parser('resume');p.add_argument('query');p.add_argument('--cwd');p.add_argument('--budget',type=int,default=1800)
     p=sub.add_parser('validate-inputs');p.add_argument('--package',type=Path,required=True);p.add_argument('--actual-inputs',type=Path,required=True);p.add_argument('--role',default='identity')
     args=parser.parse_args()
     if args.command=='package': result=build_task_package(args.vault,args.query,args.cwd,history=args.history)
+    elif args.command=='resume': result=build_task_package(args.vault,args.query,args.cwd,budget=args.budget,view='resume')
     else: result={'validated':validate_inputs(json.loads(args.package.read_text())['assets'],json.loads(args.actual_inputs.read_text()),args.role)}
     print(json.dumps(result,ensure_ascii=False,indent=2))
 

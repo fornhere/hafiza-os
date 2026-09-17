@@ -240,3 +240,12 @@ ve iş takibi araçlarının üzerine kurulduğu yapıyı oluşturuyor.
 - İş defteri yokken mevcut iş görünümünü koruyan davranış regresyon testine bağlandı.
 
 Bu kontroller model cevabının kalitesi veya kullanıcı zaman kazancının kanıtı değildir.
+
+
+## 18 Eylül 2026 — Düşük maliyetli devam görünümü
+
+- Devam isteklerinde üç görev ve beş kaynaklı bilgi kartına kadar yerel kapsül.
+- Yeni `resume` komutu ve karakter bütçesi; kaynak değişiminde taze doğrulama.
+- Engelli/çoklu/konu dışı görev için otomatik sonraki adım önerilmez.
+- Kaynak sürümü incelenmemiş eski kayıtlar yeni bilgi kartı sayılmaz.
+- Ek API, ayrı önbellek veya arka plan otomasyonu olmadan mevcut hook'a bağlı.
