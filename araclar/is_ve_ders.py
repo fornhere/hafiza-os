@@ -37,6 +37,9 @@ def put(vault, kind, data):
         if data.get('last_verified'):
             date = dt.date.fromisoformat(data['last_verified'])
             if date > dt.date.today(): raise ValueError('gelecek teyit tarihi olamaz')
+        if 'outputs' in data:
+            from cikti_kayit import validate_outputs
+            data['outputs'] = validate_outputs(vault, data.get('project_id'), data['outputs'])
     else:
         if data['status'] not in ('proposed', 'verified', 'rejected'):
             raise ValueError('geçersiz ders durumu')

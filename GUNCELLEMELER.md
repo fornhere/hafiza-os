@@ -1,3 +1,11 @@
+# 2026.09.18 — Kaynaklı çıktı ve karar takibi
+
+- Devam kapsülüne dosya ve kontrol sürümüne bağlı çıktı eklendi.
+- Eski/güncel karar ayrımı, çelişki ve varlık değişimi denetlenir.
+- Doğrulanmış çıktılardan sözcük temelli yeniden kullanım önerisi alınır.
+- Kaynaklı soru ve deney için yerel pilot doğrulayıcısı eklendi.
+- Ek uzak servis veya zamanlayıcı yok; eski çıktılar otomatik onaylanmaz.
+
 # 2026.09.16 — Kısa proje özeti ve seçici tarihçe
 
 - Kaynak sürümü doğrulanmış mevcut kayıtlar, sonraki iş ve ilgili yöntem

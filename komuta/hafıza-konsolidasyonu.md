@@ -169,3 +169,35 @@ maintenance_seconds alanlarını null bırak. Bir kabul cümlesinden hız veya
 fayda çıkarma. `fayda_olc.py --observations zihin/fayda-gozlemleri.jsonl`
 gözlenen sonuçları özetler; normal çalışma ve deney koşulları ayrı kalır.
 Kullanıcıya rutin puan, kayıt veya değerlendirme sorusu gönderme.
+
+
+## Çıktı, karar geçmişi ve yerel deney
+
+Görev defterinin isteğe bağlı `outputs` alanı doğrulanmış dosyaları taşır.
+İnceleme rolü yalnız gerçekten kontrol ettiği dosyayı mevcut görev sürümüne
+`is_ve_ders.py task` ile ekler; eski teslimatları topluca onaylamaz.
+Her çıktı id, label, mutlak path, sha256, saat dilimli verified_at, reviewer,
+verification_path (kasa içi), verification_sha256 ve birebir
+verification_evidence içerir; isteğe bağlı uses bir metin listesidir.
+Çıktı tanımlı projenin roots dizininde olmalıdır. Hash alanları dosya
+baytlarının düz SHA-256 değeridir. Kontrol raporuna `output-review: ` ardından
+`cikti_kayit.review_binding(output)` sözlüğünün tek satırlık JSON'u yazılır;
+rapor hash'i bundan sonra alınır. Kontrol dosya kimliğine, yoluna, sürümüne,
+inceleyene ve zamana bağlıdır. Hash tek başına kalite veya insan kabulü değildir.
+Dosya, kontrol raporu veya görev kaynağı değişirse çıktı yeniden incelemeye
+kadar kapsülden ve yeniden kullanım önerilerinden çıkar. İlk beş mesaj,
+kaydetmeme ve ayrı inceleme rolü kuralları değişmez.
+
+“Proje adı karar geçmişi” eski ve güncel kararları kaynaklarıyla gösterir.
+Çelişkide güncel karar seçilmez; kayıtlı gerekçe yoksa gerekçe uydurulmaz.
+“Proje adı CSV yeniden kullan” doğrulanmış çıktıların etiket ve uses alanlarını
+sözcüklerle eşleştirir. Sonuç öneridir; uyarlama ve yeniden kontrol gerekir.
+Eşleşmeyen ihtiyaçta boş döner; zaman tasarrufu veya kullanıcı kabulü çıkarmaz.
+
+`python3 araclar/ogrenme_pilotu.py --vault KASA --input-json deney.json`
+kaynaklı küçük deney önerisini doğrular. Girdi topic, source_path, evidence,
+expected_source_hash (`sha256:` önekli kaynak metin hash'i), question,
+experiment ve success_criterion alanlarını içerir. Kaynak sürümü değişirse
+reddedilir. Araç deneyi yürütmez, kişisel bilgi eksikliği veya öğrenme sonucu
+çıkarmaz; deney ayrıca uygulanıp ölçülür. Bu özellikler ek API çağrısı,
+abonelik veya zamanlayıcı eklemez. Dosya doğrulaması yerel disk okuması yapar.

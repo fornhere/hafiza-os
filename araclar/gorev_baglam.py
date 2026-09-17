@@ -209,12 +209,31 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                     if not any(a['id']==asset['id'] for a in project['assets']): project['assets'].append(asset)
                 project['working_sources'].extend(workflow.get('working_sources',[]))
     scope = 'project:'+project['id'] if project else 'user'
+    def requested_phrase(phrase):
+        parts=query_words(phrase); actual=query_words(query)
+        return any(all(inflected(p,w) for p,w in zip(parts,actual[i:i+len(parts)]))
+                   for i in range(len(actual)-len(parts)+1))
+    wants_decisions=any(requested_phrase(p) for p in ('karar geçmişi','eski karar','önceki karar','neden seçtik','neden seçmiştik'))
+    wants_reuse=any(requested_phrase(p) for p in ('yeniden kullan','yeniden kullanım','yeniden kullanabiliriz','yeniden kullanabilirim','başka nerede','hangi çıktıyı'))
+    decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
+    if wants_decisions and len(projects)<=1:
+        from karar_gecmisi import history as read_decisions
+        decision_query=' '.join(w for w in query_words(query) if not any(
+            word_match(w,a) for alias in (project or {}).get('aliases',[]) for a in query_words(alias)))
+        decision_data=read_decisions(vault,decision_query,scope,budget=min(1800,budget))
+    if project and resume:
+        from cikti_kayit import verified_outputs
+        output_data=verified_outputs(vault,project['id'])
+    if project and wants_reuse:
+        from yeniden_kullanim import propose
+        reuse_data=propose(vault,project['id'],query,max_chars=min(1800,budget))
     def add(ident, text):
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
-                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6}.get(ident, 10)
+                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'decision-history':4, 'reuse':5}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
         if ident in task_ids: priority=4
+        if ident.startswith('output:'): priority=5
         candidates.append((priority, len(candidates), ident, text))
         return True
     task_ids=set()
@@ -229,6 +248,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     overrides=asset_claim_overrides(vault)
     eligible=[]
     for row in h.load_catalog(vault):
+        if decision_data and row.get('memory_id') in decision_data['considered_ids']: continue
         if not any(h.retrievable(row,context_scope) for context_scope in [scope]+['project:'+w['id'] for w in workflows]): continue
         if row.get('memory_id') in overrides:
             if rank_records([row], query): omitted.append(row['memory_id']+':'+overrides[row['memory_id']])
@@ -286,6 +306,19 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
             try: path=validate_asset(asset)
             except (ValueError,OSError,KeyError) as e: omitted.append(asset.get('id','asset')+':'+str(e)); continue
             if add(asset['id'], 'Onaylı '+asset['role']+': '+str(path)+'; hash: '+asset['sha256']+'. Gerçek araç girdisini validate_inputs ile doğrula; dosyanın bulunması kullanıldığını kanıtlamaz.'): assets.append(asset)
+    if decision_data and decision_data['text']:
+        add('decision-history',decision_data['text'])
+        source_versions.update(decision_data['source_versions'])
+    if reuse_data and reuse_data['text']:
+        add('reuse',reuse_data['text'])
+    for output in output_data['outputs'][:3]:
+        ident='output:'+output['task_id']+':'+output['id']
+        add(ident,'Doğrulanmış çıktı: '+output['label']+' — '+output['path']+
+            ' (kontrol: '+output['verified_at']+'; kanıt: '+output['verification_path']+'). Dosya sürümü ve kayıtlı kontrol; insan kabulü değildir.')
+        source_versions[output['path']]=output['sha256']
+        source_versions[output['verification_path']]=output['verification_sha256']
+    if output_data['diagnostics']:
+        add('output-status','Çıktı bağlantısı: dosya veya kontrol kaynağı değişmiş/eksik; önceki çıktıyı doğrulanmış sayma.')
     if resume and project:
         status = ('birden fazla güncel iş var; hedef işi varsayma' if len(resume_tasks)>1 else
                   'güncel iş engelli; otomatik adım yok' if resume_tasks and resume_tasks[0]['status']=='blocked' else
@@ -369,14 +402,21 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     # Only a single current active project task can be suggested, never executed.
     single = (task_cards[0] if len(resume_tasks) == 1 and len(task_cards) == 1
               and task_cards[0]['status'] == 'active' and task_covers_topic and not explicit_history else None)
+    delivered_outputs=[o for o in output_data['outputs'][:3]
+                       if 'output:'+o['task_id']+':'+o['id'] in selected]
+    latest_output=(delivered_outputs[0] if delivered_outputs and
+                   delivered_outputs[0]==output_data['outputs'][0] and
+                   sum(o['verified_at']==delivered_outputs[0]['verified_at'] for o in output_data['outputs'])==1 else None)
+    result['decision_history']=(decision_data if 'decision-history' in selected else None)
+    result['reuse']=(reuse_data if 'reuse' in selected else None)
     result['capsule'] = dict(enabled=resume, derived=True, project_id=result['project_id'],
         tasks=task_cards if resume else [], facts=fact_cards if resume else [],
         available_task_count=len(resume_tasks) if resume else 0,
         omitted_task_count=max(0,len(resume_tasks)-len(task_cards)) if resume else 0,
         suggested_next_step=single['next_step'] if resume and single else None,
         selection_required=resume and len(resume_tasks)>1,
-        last_verified_output=None,
-        limits='Kaynaklı türetilmiş görünüm; izin veya otomatik yürütme değildir. Son çıktı bu defterde doğrulanmıyor.')
+        outputs=delivered_outputs, last_verified_output=latest_output,
+        limits='Kaynaklı türetilmiş görünüm; izin veya otomatik yürütme değildir. Çıktı varsa dosya ve kayıtlı kontrol sürümüne bağlıdır; kalite veya insan kabulü çıkarılamaz.')
     result['usage']={'context_chars':len(result['text']), 'budget_chars':budget,
                      'selected_count':len(selected), 'omitted_count':len(omitted),
                      'token_count':None, 'token_count_method':'not_measured'}

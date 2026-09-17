@@ -36,8 +36,8 @@
       "path": "araclar/is_ve_ders.py",
       "mode": "reviewed-variant",
       "reason": "Only the historical archive link differs in the installed vault; missing-ledger protection is identical.",
-      "local_sha256": "5529c356789fa8239b0fffecb23adccee8122d8af8fa202cde8892704cfb1968",
-      "public_sha256": "d0154151c63220fca48eabdfeac5bb0d9765ee1aab134837967214041d935fb5"
+      "local_sha256": "dc7dc7b389a5b4273cdfd9fc424a48c29ea4a2f4ecc594edba65487c8db0f7fc",
+      "public_sha256": "3100011398455db73efe353bc56b28f6f49c03b2bf132a306c772de14a1ddf42"
     },
     {
       "path": "araclar/konsolidasyon.py",
@@ -56,6 +56,22 @@
     },
     {
       "path": "araclar/fayda_olc.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/cikti_kayit.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/karar_gecmisi.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/yeniden_kullanim.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/ogrenme_pilotu.py",
       "mode": "shared"
     }
   ]
