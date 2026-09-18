@@ -1,3 +1,7 @@
+# 2026.09.18 — Alanlar arası gerekçeli uyarlama
+
+Sunum ve site tercihleri kaynak özellik üzerinden öneri olarak aktarılır; yeni alan onayı uydurulmaz.
+
 # 2026.09.18 — Geri bildirimden kaynaklı bilgi ağına
 
 - Kaynak alıntısı, sürüm, kapsam ve inceleme içeren Markdown bilgi notları.

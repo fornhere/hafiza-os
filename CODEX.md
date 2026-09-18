@@ -319,3 +319,16 @@ okuduğunu ve son çalışmanın bilgi incelemesi sonucunu ayrıca doğrula.
 Kayıt oluşturma, sorguda geri getirme ve gerçek görevde doğru uygulama ayrı
 başarı ölçütleridir. Bir sunum akışı tercihi, site görsel tasarımı tercihi
 olarak kullanılamaz; açık kapsam ve kaynak desteği gerekir.
+
+
+## Alanlar arası uyarlama
+
+Sunum ve site arasında kaynağın açıkça belirttiği anlatı sırası, metin dili,
+tipografi, renk, yerleşim veya hareket özelliği için uyarlama önerisi getirilebilir.
+Bunlar `transfers` alanında `status=proposed` taşır; hedef alanın onaylı tercihi
+olarak `records` listesine girmez. Kaynak kapsamı ve sürümü korunur. Özellik
+eşlemesi sınırlı sözcük kurallarıdır; anlamsal uygunluğu ajan görevde inceler.
+Bir özelliğin anılması onun beğenildiğini tek başına kanıtlamaz; kaynak cümledeki
+olumsuzluk ve koşulları koru. Bahsedilmeyen görsel özellikleri çıkarma.
+Doğrudan alan eşleşmeleri önerilerden önce gelir; proje sınırı ve bütçe korunur.
+Mevcut köprü sunum ↔ site ile sınırlıdır; bütün alanlar birbirine açılmaz.

@@ -15,7 +15,17 @@ class KnowledgeFlow(unittest.TestCase):
         self.assertIn('bilgi/sunum-dil.md',p['source_versions'])
     def test_off_domain_never_claims_site_style(self):
         p=build_task_package(self.v,'Benim sevdiğim tarzda site üret')
-        self.assertFalse(p['knowledge']['records']);self.assertNotIn('günlük Türkçe',p['text']);self.assertIn('genellenmedi',p['text'])
+        self.assertFalse(p['knowledge']['records']);self.assertIn('günlük Türkçe',p['text']);self.assertIn('Uyarlama önerisi',p['text']);self.assertEqual(p['knowledge']['transfers'][0]['status'],'proposed')
+    def test_transfer_keeps_provenance_and_drops_stale_source(self):
+        p=build_task_package(self.v,'Benim tarzımda site üret')
+        self.assertIn('gelen-kutusu/tercih.md',p['source_versions'])
+        self.assertEqual(p['knowledge']['transfers'][0]['aspects'],['metin dili'])
+        self.source.write_text('Kaynak değişti.')
+        p=build_task_package(self.v,'Benim tarzımda site üret')
+        self.assertFalse(p['knowledge']['transfers'])
+    def test_no_transfer_to_unrelated_thumbnail_domain(self):
+        p=build_task_package(self.v,'thumbnail üret')
+        self.assertFalse(p['knowledge']['records']);self.assertFalse(p['knowledge']['transfers'])
     def test_changed_source_reopens_knowledge_backlog(self):
         assess_source(self.v,dict(path='gelen-kutusu/tercih.md',sha256=self.record['sources'][0]['sha256'],outcome='linked',record_ids=['sunum-dil'],reason='Sentetik kaynak incelendi',reviewed_by='test-review'),True)
         self.assertFalse(status(self.v)['unreviewed_sources'])

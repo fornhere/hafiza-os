@@ -144,3 +144,16 @@ Girdi tam olarak `path`, `sha256`, `outcome`, `record_ids`, `reason`,
 bağlı kayıt geçersizleşirse kaynak tekrar inceleme bekler. Makbuz checkpoint'i
 bu değerlendirme yerine geçmez. Yeni kaydı görevde geri çağırma ve kapsam dışı
 sorguda dışlama deneyi inceleme raporunda ayrıca belirtilir.
+
+
+## Alanlar arası uyarlama
+
+Sunum ve site arasında kaynağın açıkça belirttiği anlatı sırası, metin dili,
+tipografi, renk, yerleşim veya hareket özelliği için uyarlama önerisi getirilebilir.
+Bunlar `transfers` alanında `status=proposed` taşır; hedef alanın onaylı tercihi
+olarak `records` listesine girmez. Kaynak kapsamı ve sürümü korunur. Özellik
+eşlemesi sınırlı sözcük kurallarıdır; anlamsal uygunluğu ajan görevde inceler.
+Bir özelliğin anılması onun beğenildiğini tek başına kanıtlamaz; kaynak cümledeki
+olumsuzluk ve koşulları koru. Bahsedilmeyen görsel özellikleri çıkarma.
+Doğrudan alan eşleşmeleri önerilerden önce gelir; proje sınırı ve bütçe korunur.
+Mevcut köprü sunum ↔ site ile sınırlıdır; bütün alanlar birbirine açılmaz.

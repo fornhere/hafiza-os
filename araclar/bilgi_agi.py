@@ -192,31 +192,52 @@ def retrieve(vault,query,project_id=None,budget=1800):
     domain_aliases={'site':('site','web','website'),'sunum':('sunum','slayt','slideshow'),'thumbnail':('thumbnail','kapak')}
     requested={domain for domain,aliases in domain_aliases.items() if any(word_match(alias,word) for alias in aliases for word in terms)}
     ranked=[]
+    # These are candidate analogies, never new user preferences. Only features
+    # actually named in the reviewed statement can support a transfer.
+    bridges={('sunum','site'),('site','sunum')}
+    features=[('anlatı sırası',('altyapı','ayrıntı','anlatı','hikâye','akış')),
+              ('metin dili',('konuşma','Türkçe','sözcük','cümle','anlatım')),
+              ('tipografi',('tipografi','font','yazı tipi')),
+              ('renk',('renk','palet')),
+              ('yerleşim',('boşluk','hiyerarşi','kompozisyon','yerleşim')),
+              ('hareket',('animasyon','hareket'))]
     for d in rows:
         if d['scope']!='user' and d['scope']!=f'project:{project_id}':continue
-        if requested and 'all' not in d['domains'] and not requested.intersection(d['domains']):continue
+        transfer=None
+        if requested and 'all' not in d['domains'] and not requested.intersection(d['domains']):
+            targets=sorted({target for source in d['domains'] for target in requested if (source,target) in bridges})
+            words=content_words(d['statement'])
+            aspects=[label for label,aliases in features if any(word_match(t,w) for alias in aliases for t in content_words(alias) for w in words)]
+            if d['kind']!='preference' or not targets or not aspects:continue
+            transfer=dict(status='proposed',source_record_id=d['id'],source_domains=d['domains'],target_domains=targets,
+                          aspects=aspects,reason='İki işte de '+', '.join(aspects)+' kararları bulunabilir; uygunluğu bu görevde değerlendirilmelidir.')
         # Domain-specific knowledge needs an explicit domain query; do not generalize taste.
         if not requested and 'all' not in d['domains']:continue
         words=content_words(d['title']+' '+d['statement']+' '+' '.join(d['domains']))
         score=sum(any(word_match(t,w) for w in words) for t in terms)
-        if score:ranked.append((score,d))
-    ranked.sort(key=lambda item:(-item[0],item[1]['id']))
-    selected=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
-    for _,d in ranked:
+        if score or transfer:ranked.append((score,d,transfer))
+    ranked.sort(key=lambda item:(item[2] is not None,-item[0],item[1]['id']))
+    selected=[];transfers=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
+    for _,d,transfer in ranked:
         card=f"Bilgi [{d['kind']}; {', '.join(d['domains'])}]: {d['statement']}\nKaynak: bilgi/{d['id']}.md"
+        if transfer:
+            card='Uyarlama önerisi ['+', '.join(d['domains'])+' → '+', '.join(transfer['target_domains'])+']: '+d['statement']+'\nAktarılabilecek özellik: '+', '.join(transfer['aspects'])+'. '+transfer['reason']+' Yeni alanda kullanıcı onayı değildir; renk/font gibi belirtilmeyen özellikleri çıkarma.\nKaynak: bilgi/'+d['id']+'.md'
         for e in d.get('examples',[]):card+=f"\nÖrnek ({e['acceptance']}; {e['role']}): {e['path']}"
         for r in d.get('relations',[]):
             if r['target'] in valid_ids:card+=f"\nİlişki: {r['target']} — {r['reason']}"
             else:diagnostics.append(f"{d['id']}:relation_unverified:{r['target']}")
         if len('\n\n'.join(cards+[card]))>max(0,budget):continue
-        cards.append(card);selected.append(d);versions[f"bilgi/{d['id']}.md"]=digest(vault/'bilgi'/f"{d['id']}.md")
+        cards.append(card)
+        if transfer:transfers.append(dict(transfer,source_record=d))
+        else:selected.append(d)
+        versions[f"bilgi/{d['id']}.md"]=digest(vault/'bilgi'/f"{d['id']}.md")
         for s in d['sources']:versions[s['path']]=s['sha256']
         for e in d.get('examples',[]):versions[e['path']]=e['sha256']
     text='\n\n'.join(cards)
-    if requested and not selected:
+    if requested and not selected and not transfers:
         warning=('Eşleşen bilgi var, ancak bağlam bütçesine sığmadı.' if ranked else 'Bu iş alanı için doğrulanmış ve eşleşen tercih/örnek bulunamadı; başka alandaki beğeniler genellenmedi.')
         if len(warning)<=budget:text=warning
-    return dict(text=text,records=selected,source_versions=versions,diagnostics=diagnostics)
+    return dict(text=text,records=selected,transfers=transfers,source_versions=versions,diagnostics=diagnostics)
 
 
 def main():
