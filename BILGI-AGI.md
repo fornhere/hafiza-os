@@ -157,3 +157,11 @@ Bir özelliğin anılması onun beğenildiğini tek başına kanıtlamaz; kaynak
 olumsuzluk ve koşulları koru. Bahsedilmeyen görsel özellikleri çıkarma.
 Doğrudan alan eşleşmeleri önerilerden önce gelir; proje sınırı ve bütçe korunur.
 Mevcut köprü sunum ↔ site ile sınırlıdır; bütün alanlar birbirine açılmaz.
+
+
+## Kaynaklı konu sentezleri
+
+İncelenmiş kartlardan anlatım, görsel tasarım ve çalışma yöntemi için kaynaklı
+konu görünümü üretilebilir: [[KONU-SENTEZI]]. Açık konu özeti sorgularında görev
+bağlamı sentezi yeniden kurar; eski Markdown dökümü arama kaynağı değildir.
+Kullanıcı kapsamlı görünüm: [[bilgi/konu-sentezleri/user]].

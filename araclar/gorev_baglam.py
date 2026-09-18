@@ -217,7 +217,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     wants_reuse=any(requested_phrase(p) for p in ('yeniden kullan','yeniden kullanım','yeniden kullanabiliriz','yeniden kullanabilirim','başka nerede','hangi çıktıyı'))
     knowledge_data = None
     if (vault / 'bilgi').is_dir() and len(projects)<=1:
-        from bilgi_agi import retrieve as read_knowledge
+        from konu_sentezi import retrieve as read_knowledge
         knowledge_data=read_knowledge(vault,query,project_id=project['id'] if project else None,budget=min(1800,budget))
     decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
     if wants_decisions and len(projects)<=1:

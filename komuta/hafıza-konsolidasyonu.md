@@ -285,3 +285,14 @@ aday için kalıcı tercih kaydedildi deme. Arka plan yazımı daha sonra olduys
 önceki yanıtta yapılmış gibi söyleme. Mevcut bakımın anlamlı değişiklik sonucu
 bildirilebilir; kullanıcıdan ayrıca kayıt onayı veya puan istenmez. Sırları
 ve özel kaydetmeme kapsamını bildirimde de koru.
+
+
+## Konu sentezi görünümünü yenileme
+
+Bilgi ağı incelemesi sonunda `python3 araclar/konu_sentezi.py --vault . export
+--apply` çalıştır. İşlenen kayıtlarda proje kapsamı varsa aynı komutu ilgili
+`--project-id` ile de çalıştır. Yönetilen sayfa yalnız gerçek içerik değişince
+yenilenir; elle düzenleme engelini aşmak için dosyayı silme. Kaynak doğrulama
+hatası veya konu kaydı yokluğu yeni tercih yazma gerekçesi değildir.
+Bu, mevcut bakım turunun bir adımıdır; ayrıca zamanlayıcı eklenmez. Görev
+bağlamı sayfaların bakım zamanını beklemeden özgün kartları yeniden doğrular.

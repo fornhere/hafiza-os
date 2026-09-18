@@ -81,6 +81,10 @@
     {
       "path": "araclar/hafiza_gorunurluk.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/konu_sentezi.py",
+      "mode": "shared"
     }
   ]
 }
