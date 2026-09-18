@@ -53,6 +53,7 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(self.run_client(facets=['A','B'])['degraded']);self.assertFalse(self.calls)
         (self.vault/'komuta/jev.json').write_text('{bad')
         self.assertEqual(j.inspect_config(self.vault)['valid'],False)
+        self.assertIn('config_invalid',self.run_client()['diagnostics'])
     def test_endpoint_and_error_redaction(self):
         self.config(base_url='http://example.com')
         self.assertTrue(self.run_client()['degraded']);self.assertFalse(self.calls)
@@ -100,5 +101,82 @@ class ClientTests(unittest.TestCase):
         self.config(cache_ttl=1);self.run_client()
         path=next((self.vault/'.cache/jev').glob('*.json'));v=json.loads(path.read_text());v['created_at']=0;path.write_text(json.dumps(v))
         self.assertFalse(self.run_client()['cache_hit'])
+
+    def test_invalid_answer_diagnostics_preserve_usage_without_raw_content(self):
+        self.config()
+        variants = [
+            ({}, 'answer_keys_mismatch'),
+            ({'f0_c0':dict(type='choice',score=1)}, 'answer_type'),
+            ({'f0_c0':dict(type='score',score=True)}, 'score_range_or_type'),
+            ({'f0_c0':dict(type='score',score=1,probabilities={'bad':1})}, 'probability_keys'),
+            ({'f0_c0':dict(type='score',score=1,probabilities=[.5,.5])}, 'probability_shape'),
+            ({'f0_c0':dict(type='score',score=1,probabilities=[-.1,.1,1])}, 'probability_range_or_type'),
+            ({'f0_c0':dict(type='score',score=1,probabilities=[.33,.33,.33])}, 'probability_sum')]
+        for answers,issue in variants:
+            result=j.evaluate(self.vault,'q',self.cards,transport=lambda *a:dict(answers=answers,private='DO NOT LOG',usage={'input_tokens':5,'output_tokens':2}))
+            self.assertTrue(result['degraded']); self.assertEqual(result['answer_issue'],issue)
+            self.assertEqual(result['usage'],{'input_tokens':5,'output_tokens':2})
+            self.assertNotIn('DO NOT LOG',json.dumps(result))
+            self.assertEqual(result['scores'],{})
+        self.assertFalse(list((self.vault/'.cache/jev').glob('*.json')))
+
+    def test_purpose_profiles_and_cache_separation(self):
+        self.config()
+        for purpose in ('retrieval','memory_review','evidence_review'):
+            result=self.run_client(purpose=purpose,facets=['Requested relationship'])
+            self.assertFalse(result['degraded']);self.assertFalse(result['cache_hit'])
+            self.assertEqual(result['purpose'],purpose)
+            self.assertTrue(self.run_client(purpose=purpose,facets=['Requested relationship'])['cache_hit'])
+        self.assertEqual(len(self.calls),3)
+        self.assertEqual(self.calls[0]['questions']['f0_c0']['criteria'],j.CRITERIA)
+        self.assertEqual(self.calls[1]['questions']['f0_c0']['criteria'],j.REVIEW_CRITERIA)
+        self.assertIn('anchor reviewed record',self.calls[1]['questions']['f0_c0']['instructions'])
+        self.assertIn('exact evidence quotes',self.calls[2]['questions']['f0_c0']['instructions'])
+        self.assertNotEqual(self.calls[1]['questions'],self.calls[2]['questions'])
+
+    def test_unknown_purpose_rejected_before_network(self):
+        self.config()
+        for purpose in ('raw_prompt',None,[]):
+            result=self.run_client(purpose=purpose)
+            self.assertTrue(result['degraded']);self.assertIn('purpose_invalid',result['diagnostics'])
+        self.assertFalse(self.calls)
+
+    def test_http_status_only_no_response_body_or_retry(self):
+        import urllib.error
+        self.config();calls=[]
+        def fail(*args):
+            calls.append(1)
+            raise urllib.error.HTTPError('https://example.com/private',502,'PRIVATE error details',{},None)
+        result=j.evaluate(self.vault,'q',self.cards,transport=fail)
+        self.assertEqual(result['http_status'],502);self.assertEqual(calls,[1])
+        self.assertNotIn('PRIVATE',json.dumps(result));self.assertTrue(result['degraded'])
+
+    def test_captured_vercel_quantization_provider_only(self):
+        cases=[(.63,{'0':.4,'1':.56,'2':.03}),(.08,{'0':.93,'1':.05,'2':.01})]
+        for score,probabilities in cases:
+            raw={'answers':{'x':dict(type='score',score=score,probabilities=probabilities)}}
+            with self.assertRaises(ValueError):j._scores(raw,['x'])
+            count=[]
+            self.assertEqual(j._scores(raw,['x'],allow_quantized=True,quantized_counter=count),{'x':score})
+            self.assertEqual(count,['x'])
+        self.config(provider='vercel')
+        def response(*args):return dict(answers={'f0_c0':dict(type='score',score=.63,probabilities={'2':.03,'0':.4,'1':.56})})
+        result=j.evaluate(self.vault,'q',self.cards,transport=response)
+        self.assertFalse(result['degraded']);self.assertEqual(result['quantized_probability_count'],1)
+        self.assertIn('quantized_probability',result['diagnostics']);self.assertEqual(result['scores'],{'one':.63})
+        cached=j.evaluate(self.vault,'q',self.cards,transport=response)
+        self.assertTrue(cached['cache_hit']);self.assertEqual(cached['quantized_probability_count'],1)
+        self.config(provider='typesafe')
+        self.assertTrue(j.evaluate(self.vault,'q',self.cards,transport=response)['degraded'])
+
+    def test_quantization_rejects_infeasible_distribution_and_score(self):
+        for score,probabilities in [(1,[0,0,0]),(.63,[.4,.56,.0]),(1.2,[.4,.56,.03]),
+                                    (.63,[.401,.56,.03]),(.08,[.93,.05,.04]),
+                                    (1,[-.01,.5,.5]),(1,[True,.0,.0]),(1,['.4',.56,.03])]:
+            raw={'answers':{'x':dict(type='score',score=score,probabilities=probabilities)}}
+            with self.assertRaises(ValueError):j._scores(raw,['x'],allow_quantized=True)
+        # A sum above one can also be valid independent rounding, not normalization.
+        raw={'answers':{'x':dict(type='score',score=1,probabilities=[.34,.34,.33])}}
+        self.assertEqual(j._scores(raw,['x'],allow_quantized=True),{'x':1.0})
 
 if __name__=='__main__': unittest.main()

@@ -1,4 +1,5 @@
 """Optional semantic selection after local eligibility gates; never a memory writer."""
+import re
 from pathlib import Path
 import jev_client
 
@@ -11,12 +12,32 @@ def requested_domains(query):
     return [d for d, aliases in DOMAINS.items()
             if any(word_match(a, w) for a in aliases for w in words)]
 
-def facets(query):
+def facet_plan(query):
+    """Bounded evidence lenses, retaining the complete query as model state.
+
+    Domain mentions are not an exhaustive list of requested evidence. Separate
+    explicit evidence clauses can have an implicit domain. Ordinary task requests
+    keep their explicit domain guard; this is not a general Turkish parser.
+    """
+    evidence_request = bool(re.search(r'kaynak|notlar|ayrı\s+ayrı|geri\s+bildirim', query, re.I))
+    clauses = [part.strip() for part in re.split(r'\s+(?:ve|ile)\s+|;', query, flags=re.I) if part.strip()]
+    if evidence_request and 1 < len(clauses) <= 3:
+        # An explicit leading task frame applies to coordinated objects too:
+        # 'site için renk ve font kaynakları' does not open font to other domains.
+        frame = re.match(r'^\s*(\w+)\s+için\b', query, re.I)
+        inherited = requested_domains(frame.group(1)) if frame else []
+        return [dict(text=clause, domains=requested_domains(clause) or inherited) for clause in clauses]
     domains = requested_domains(query)
-    # Preserve the original question. These are bounded domain lenses, not a
-    # claim that arbitrary natural-language conjunctions were fully parsed.
-    return ([f'{query}\nYalnız {d} alanına ait istenen kanıtı değerlendir.' for d in domains]
-            if len(domains) > 1 else [query])
+    if len(domains) > 1:
+        # More than three clauses cannot safely be truncated. Domain lenses keep
+        # the whole query, including every remaining clause.
+        return [dict(text=f'{query}\nYalnız {d} alanına ait istenen kanıtı değerlendir.', domains=[d])
+                for d in domains]
+    return [dict(text=query, domains=domains)]
+
+
+def facets(query):
+    return [item['text'] for item in facet_plan(query)]
 
 def mode(vault):
     try: return jev_client.load_config(vault).get('mode', 'off')
@@ -39,15 +60,16 @@ def knowledge(vault, query, project_id, budget, local):
     if active == 'off': return local()
     vault = Path(vault)
     rows, diagnostics = b._rows(vault)
-    requested = set(requested_domains(query))
-    rows = [r for r in rows if r['scope'] in ('user', f'project:{project_id}')
-            and (not requested or 'all' in r['domains'] or requested.intersection(r['domains']))]
+    # Source/scope are hard eligibility gates. A lexical domain mention cannot
+    # exclude a second, implicit subject before semantic assessment.
+    rows = [r for r in rows if r['scope'] in ('user', f'project:{project_id}')]
+    plan = facet_plan(query)
     try: before = versions(vault, rows)
     except OSError:
         out = local(); out['jev'] = dict(mode=active, degraded=True, diagnostics=['source_changed_before_evaluation']); return out
     candidates = [{k: r[k] for k in ('id', 'title', 'statement', 'scope', 'domains')} for r in rows]
     result = jev_client.evaluate(vault, query, candidates, source_versions=before,
-                                 scope=f'project:{project_id}' if project_id else 'user', facets=facets(query))
+                                 scope=f'project:{project_id}' if project_id else 'user', facets=[f['text'] for f in plan])
     # Reject a response if source revisions changed during the network call.
     fresh, _ = b._rows(vault)
     fresh = [r for r in fresh if r['id'] in {d['id'] for d in rows}]
@@ -60,13 +82,16 @@ def knowledge(vault, query, project_id, budget, local):
     scores = result.get('scores', {})
     by_id = {r['id']: r for r in rows}
     per_facet = result.get('facet_scores') or {'0': scores}
-    domains = requested_domains(query)
-    if len(domains) > 1:
-        per_facet = {f: {i: score if 'all' in by_id[i]['domains'] or domains[int(f)] in by_id[i]['domains'] else 0
-                         for i, score in values.items() if i in by_id}
-                     for f, values in per_facet.items()}
-        scores = {i: max(v.get(i, 0) for v in per_facet.values()) for i in by_id}
-        result['facet_scores'] = per_facet; result['scores'] = scores
+    # Apply each explicit domain guard to its own clause. An implicit clause
+    # remains open to semantic support, never to inferred cross-domain approval.
+    per_facet = {f: {i: score if not plan[int(f)]['domains'] or 'all' in by_id[i]['domains']
+                        or set(plan[int(f)]['domains']).intersection(by_id[i]['domains']) else 0
+                     for i, score in values.items() if i in by_id}
+                 for f, values in per_facet.items()}
+    scores = {i: max((v.get(i, 0) for v in per_facet.values()), default=0) for i in by_id}
+    result['facet_scores'] = per_facet; result['scores'] = scores
+    result['routing'] = 'scoped_candidates_clause_domain_guards_v2'
+    result['facet_domains'] = [f['domains'] for f in plan]
     # Cover each supported facet first, then fill by score. No unqualified union.
     order = []
     for values in per_facet.values():

@@ -399,7 +399,7 @@ iş, olmamış iştir.
 ## İsteğe bağlı Jev entegrasyonu
 
 Kaynaklı bilgi ve görev bağlamı için kapalı/gölge/açık modlu anlamsal erişim
-katmanı eklendi. Varsayılan kapalıdır; kurulum, sınırlar ve geri dönüş için
+katmanı ve salt-okunur kaynak desteği/tekrar/çelişki/istisna incelemesi eklendi. Varsayılan kapalıdır; kurulum, sınırlar ve geri dönüş için
 [JEV.md](JEV.md) belgesine bakın.
 
 ## Lisans

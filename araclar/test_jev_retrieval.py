@@ -113,6 +113,39 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(result['jev']['coverage'], {'0': 'budget_exceeded'})
         self.assertEqual(result['omitted_record_ids'], ['short'])
 
+    # Frozen before the routing fix and before any new live call. The three
+    # validation failures are development regressions, not independent holdout.
+    MIXED_CASES = (
+        'Sözcük seçimindeki sadelik ile kapaktaki fazladan beden itirazımın kaynakları ne?',
+        'Cümleleri bağlamak ve eski kapak tarzına dönmek için hangi notlarım var?',
+        'Anlatımın mesafeli olmaması ile eldeki cismin küçültülmesi taleplerini ayrı ayrı bul.',
+        'Sözlerin anlaşılır olması ile kapak kimliğinin korunmasına dair kaynakları ayrı ayrı getir.',
+    )
+
+    def test_mixed_explicit_implicit_candidates_and_facets(self):
+        self.add(id='cover', domains=['thumbnail'], title='Kapak',statement='Kapakta büyük yazı kullan.')
+        self.config('on')
+        for query in self.MIXED_CASES:
+            with self.subTest(query=query), patch.object(jev_client,'evaluate',side_effect=self.high) as call:
+                out=b.retrieve(self.v,query,budget=3000)
+                self.assertEqual({r['id'] for r in call.call_args.args[2]}, {'short','cover'})
+                self.assertEqual(len(call.call_args.kwargs['facets']),2)
+                self.assertEqual({r['id'] for r in out['records']},{'short','cover'})
+                self.assertEqual(set(out['jev']['coverage'].values()),{'covered'})
+
+    def test_single_domain_stays_guarded_against_wrong_domain_score(self):
+        self.config('on')
+        for query in ('Site için renk ve font seç.', 'Sitedeki renkler için hangi notlarım var?', 'Site için renk ve font kaynaklarını bul.'):
+            with self.subTest(query=query),patch.object(jev_client,'evaluate',side_effect=self.high):
+                out=b.retrieve(self.v,query,budget=3000)
+                self.assertFalse(out['records'])
+
+    def test_facets_never_silently_drop_fourth_clause(self):
+        query='Sunum için notlar ve kapak için notlar ve site için notlar ve eski yöntem için kaynakları bul.'
+        plan=j.facet_plan(query)
+        self.assertLessEqual(len(plan),3)
+        self.assertTrue(any('eski yöntem' in f['text'] for f in plan))
+
     def catalog_row(self):
         statement = 'Sunumda kısa cümle kullan.'
         row = dict(memory_id='workflow', kind='semantic', scope='project:workflow',

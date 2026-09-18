@@ -93,6 +93,10 @@
     {
       "path": "araclar/jev_retrieval.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/jev_review.py",
+      "mode": "shared"
     }
   ]
 }

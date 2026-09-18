@@ -256,8 +256,13 @@ def main():
     reg=subs.add_parser('register');reg.add_argument('--input-json',type=Path,required=True);reg.add_argument('--apply',action='store_true')
     assess=subs.add_parser('assess-source');assess.add_argument('--input-json',type=Path,required=True);assess.add_argument('--apply',action='store_true')
     ctx=subs.add_parser('context');ctx.add_argument('query');ctx.add_argument('--project-id');ctx.add_argument('--budget',type=int,default=1800)
+    review=subs.add_parser('review');review.add_argument('--project-id');review.add_argument('--card-id',action='append');review.add_argument('--anchor-id')
     subs.add_parser('status');a=p.parse_args()
     try:
+        if a.command=='review':
+            from jev_review import audit
+            print(json.dumps(audit(a.vault,a.project_id,a.card_id,a.anchor_id),ensure_ascii=False,indent=2))
+            return
         result=(register if a.command=='register' else assess_source)(a.vault,json.loads(a.input_json.read_text()),a.apply) if a.command in {'register','assess-source'} else retrieve(a.vault,a.query,a.project_id,a.budget) if a.command=='context' else status(a.vault)
         print(json.dumps(result,ensure_ascii=False,indent=2))
     except (ValueError,OSError,KeyError,TypeError) as exc:p.exit(1,f'{exc}\n')
