@@ -111,6 +111,8 @@ class Hooks(unittest.TestCase):
             b=self.event('UserPromptSubmit','t2',prompt='aynı görev')
             c=self.event('UserPromptSubmit','t3',prompt='aynı görev')
             self.assertIn(package['text'],a['hookSpecificOutput']['additionalContext'])
+            self.assertIn('HAFIZA GÖRÜNÜRLÜĞÜ',a['hookSpecificOutput']['additionalContext'])
+            self.assertIn('kullanım kanıtı değildir',a['hookSpecificOutput']['additionalContext'])
             self.assertEqual({},b)
             self.assertIn(package['text'],c['hookSpecificOutput']['additionalContext'])
             package['source_versions']['karar.md']='v2'

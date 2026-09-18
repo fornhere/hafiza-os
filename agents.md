@@ -291,3 +291,21 @@ tamamlanmış sayılmaz; `baglanti-denetle.sh` bunu kapanışta yakalar.
 | `arşiv/` | Bitmiş ve soğumuş olan. Silmek yerine buraya taşınır. |
 
 Şüphedeysen `gelen-kutusu/`'na koy. Yanlış yere koymak, kaybetmekten iyidir.
+
+
+## 18 Eylül — Hafızanın görünür etkisi
+
+Rutin kapanış/kayıt zorlaması kapalı kalır. Kullanıcı, anlamlı hafıza kullanımının
+ve gerçek kayıt değişikliklerinin görünmesini istedi. Geçmiş bilgi somut bir
+seçimi etkilediyse tek kısa cümlede etkisini ve kaynak bağlantısını belirt.
+Bağlama gelmek kullanım değildir; kullanım beyanı ajanın açıklamasıdır, bağımsız
+nedensellik kanıtı değildir. Aynı kaynağı her yanıtta tekrarlama. Uyarlama
+önerisini hedef alanda kabul edilmiş tercih gibi sunma.
+
+Anlamlı yeni/değişmiş bilgi kaydı gerçekten yazılıp geri okunmuşsa, sohbet içinde
+en fazla bir kısa bildirimde değişen bilgiyi ve dosyayı göster. `bilgi_agi register`
+apply sonucu `notice` bunu destekler; dry-run/no-op bildirim üretmez. Bekleyen
+aday için kalıcı tercih kaydedildi deme. Arka plan yazımı daha sonra olduysa
+önceki yanıtta yapılmış gibi söyleme. Mevcut bakımın anlamlı değişiklik sonucu
+bildirilebilir; kullanıcıdan ayrıca kayıt onayı veya puan istenmez. Sırları
+ve özel kaydetmeme kapsamını bildirimde de koru.

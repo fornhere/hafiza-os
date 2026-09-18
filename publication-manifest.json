@@ -77,6 +77,10 @@
     {
       "path": "araclar/bilgi_agi.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/hafiza_gorunurluk.py",
+      "mode": "shared"
     }
   ]
 }

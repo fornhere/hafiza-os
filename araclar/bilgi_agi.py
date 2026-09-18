@@ -98,6 +98,7 @@ def _register(vault,data,apply=False):
     vault=Path(vault);d=_validate(vault,data);folder=vault/'bilgi'
     if folder.is_symlink():raise ValueError('unsafe_knowledge_folder')
     path=folder/f"{d['id']}.md";exists=path.exists()
+    before_hash=digest(path) if exists else None
     if path.is_symlink():raise ValueError('unsafe_note')
     if exists:
         old=_read(path)
@@ -113,7 +114,11 @@ def _register(vault,data,apply=False):
         index=folder/'README.md'
         index_text='<!-- bilgi-agi-index-v1 -->\n# Bilgi ağı\n\n'+''.join(f'- [[bilgi/{p.stem}]]\n' for p in sorted(folder.glob('*.md')) if p.name!='README.md')
         if not index.exists() or index.read_text().startswith('<!-- bilgi-agi-index-v1 -->\n'):_write(index,index_text)
-    return dict(changed=True,path=str(path),version=hashlib.sha256(text.encode()).hexdigest(),applied=apply)
+    result=dict(changed=True,path=str(path),version=hashlib.sha256(text.encode()).hexdigest(),applied=apply)
+    if apply:
+        from hafiza_gorunurluk import write_note
+        result['notice']=write_note(path,before_hash,result['version'],d['title']+' ('+d['status']+')')
+    return result
 
 
 def _rows(vault):

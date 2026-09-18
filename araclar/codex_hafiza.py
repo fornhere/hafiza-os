@@ -175,7 +175,10 @@ def hook(vault, data):
         if suppress: lesson_text = ''
         state['package_cache'] = {'hash': package_hash, 'suppressed': suppress}
         parts = ([opening_brief(vault)] if state['count'] == 1 else [])
-        if lesson_text: parts.append(lesson_text)
+        if lesson_text:
+            parts.append(lesson_text)
+            if package.get('source_versions'):
+                parts.append('HAFIZA GÖRÜNÜRLÜĞÜ: Bu bağlamın gelmesi kullanım kanıtı değildir. Geçmiş bilgi somut seçimini etkilediyse kısa bir cümlede neyi nasıl uyguladığını kaynak bağlantısıyla belirt; etkilemediyse kullanım iddiası üretme. Aynı bildirimi değişiklik yokken tekrarlama. Uyarlama önerisini yeni kullanıcı onayı sayma. Kayıt bildirimi yalnız başarılı yazma ve geri okuma kanıtından sonra; dry-run, bekleyen aday veya değişmeyen kayıt için kaydettim deme.')
         emitted = '\n\n'.join(parts)
         account_context(state, len(emitted), original_chars if suppress else 0)
         atomic(state_path, json.dumps(state))

@@ -9,6 +9,13 @@ class KnowledgeFlow(unittest.TestCase):
         (self.v/'gelen-kutusu').mkdir();self.source=self.v/'gelen-kutusu/tercih.md';self.source.write_text('Sunum metninde günlük Türkçe kullanılması tercih edilir.')
         self.record=dict(id='sunum-dil',title='Sunum dili',kind='preference',statement='Sunum metninde günlük Türkçe tercih edilir.',scope='user',domains=['sunum'],status='reviewed',sources=[dict(path='gelen-kutusu/tercih.md',sha256=hashlib.sha256(self.source.read_bytes()).hexdigest(),evidence=self.source.read_text())],reviewed_by='test-review',review_note='Sentetik kapsam kontrolü')
         register(self.v,self.record,True)
+    def test_write_notice_requires_applied_change(self):
+        unchanged=register(self.v,self.record,True)
+        self.assertNotIn('notice',unchanged)
+        changed=dict(self.record,id='sunum-dil-yeni',title='Yeni kaynaklı not')
+        self.assertNotIn('notice',register(self.v,changed,False))
+        result=register(self.v,changed,True)
+        self.assertEqual(result['notice']['kind'],'verified_write')
     def test_package_retrieves_without_explicit_memory_command(self):
         p=build_task_package(self.v,'Benim sevdiğim tarzda sunum metni hazırla')
         self.assertEqual(p['knowledge']['records'][0]['id'],'sunum-dil');self.assertIn('günlük Türkçe',p['text'])

@@ -1,3 +1,7 @@
+# 2026.09.18 — Hafızanın görünür etkisi
+
+Kaynaklı kullanım açıklaması ve geri okumayla doğrulanan değişiklik bildirimi eklendi. Bağlama gelme, ajan kullanım beyanı ve gerçek yazım ayrı tutulur. Yeni kapanış zorlaması yok.
+
 # 2026.09.18 — Alanlar arası gerekçeli uyarlama
 
 Sunum ve site tercihleri kaynak özellik üzerinden öneri olarak aktarılır; yeni alan onayı uydurulmaz.
