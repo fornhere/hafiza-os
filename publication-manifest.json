@@ -43,8 +43,8 @@
       "path": "araclar/konsolidasyon.py",
       "mode": "reviewed-variant",
       "reason": "Private historic exclusion, identity prefix and import start date versus generic defaults.",
-      "local_sha256": "1fff6e7077fa525baba5fedde0d7a3cc8a340e193fac3434c2d545ef20dd29a4",
-      "public_sha256": "b96af768f64162e14115ab3f197cda4c1f85e32d4be4f00f14deee3f2bef6a23"
+      "local_sha256": "42538e0e46cc9660967a006095fa1490a54c71d13b5e38e3e0095c6d1c644a1d",
+      "public_sha256": "0ab89cb89ae8afc410a108efb846c6aff1cbfe124a45b1a59b05c5ad1dd329e4"
     },
     {
       "path": "araclar/kullanim_kontrol.py",
@@ -72,6 +72,10 @@
     },
     {
       "path": "araclar/ogrenme_pilotu.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/bilgi_agi.py",
       "mode": "shared"
     }
   ]

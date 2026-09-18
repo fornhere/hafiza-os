@@ -215,6 +215,10 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                    for i in range(len(actual)-len(parts)+1))
     wants_decisions=any(requested_phrase(p) for p in ('karar geçmişi','eski karar','önceki karar','neden seçtik','neden seçmiştik'))
     wants_reuse=any(requested_phrase(p) for p in ('yeniden kullan','yeniden kullanım','yeniden kullanabiliriz','yeniden kullanabilirim','başka nerede','hangi çıktıyı'))
+    knowledge_data = None
+    if (vault / 'bilgi').is_dir() and len(projects)<=1:
+        from bilgi_agi import retrieve as read_knowledge
+        knowledge_data=read_knowledge(vault,query,project_id=project['id'] if project else None,budget=min(1800,budget))
     decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
     if wants_decisions and len(projects)<=1:
         from karar_gecmisi import history as read_decisions
@@ -230,7 +234,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     def add(ident, text):
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
-                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'decision-history':4, 'reuse':5}.get(ident, 10)
+                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'decision-history':4, 'knowledge':4, 'reuse':5}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
         if ident in task_ids: priority=4
         if ident.startswith('output:'): priority=5
@@ -309,6 +313,8 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     if decision_data and decision_data['text']:
         add('decision-history',decision_data['text'])
         source_versions.update(decision_data['source_versions'])
+    if knowledge_data and knowledge_data['text']:
+        add('knowledge',knowledge_data['text'])
     if reuse_data and reuse_data['text']:
         add('reuse',reuse_data['text'])
     for output in output_data['outputs'][:3]:
@@ -385,6 +391,9 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
         lines.append(text);selected.append(ident);used+=cost
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines)}
+    if knowledge_data and 'knowledge' in selected:
+        source_versions.update(knowledge_data.get('source_versions',{}))
+    result['knowledge']=knowledge_data if 'knowledge' in selected else None
     result['history']={'mode':history,'included':any(p in selected for p in (project or {}).get('episode_sources',[])), 'requested':use_history,'reason':history_reason,'topic_covered':covered}
     result['summary']={'record_ids':[r['memory_id'] for r in current_facts if r['memory_id'] in selected], 'task_ids':[t['id'] for t in current_tasks if t['id'] in selected], 'derived':True}
     visible_tasks = [t for t in current_tasks if t['id'] in selected][:3]

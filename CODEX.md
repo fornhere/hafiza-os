@@ -302,3 +302,20 @@ experiment ve success_criterion alanlarını içerir. Kaynak sürümü değişir
 reddedilir. Araç deneyi yürütmez, kişisel bilgi eksikliği veya öğrenme sonucu
 çıkarmaz; deney ayrıca uygulanıp ölçülür. Bu özellikler ek API çağrısı,
 abonelik veya zamanlayıcı eklemez. Dosya doğrulaması yerel disk okuması yapar.
+
+
+## Bağlantılı bilgi incelemesi
+
+Makbuz kaydı, konuşmadan işe yarar bilgi çıkarıldığını tek başına göstermez.
+Mevcut saatlik inceleme rolü artık [bağlantılı bilgi akışını](BILGI-AGI.md)
+da yürütür: tamamlanmış kaynakları inceler, kaynaklı tercih/karar/ders/örnekleri
+kapsamıyla kaydeder ve Obsidian'da kaynaklara bağlı Markdown görünümü üretir.
+Eski makbuzların varlığı bu incelemeyi atlatmaz; kaynak engelleri otomatik hash
+sabitlenerek çözülmez. Yeni otomasyon veya ek API kurulmaz.
+
+Yalnız dosyaları güncellemek zamanlanmış rolün çalıştığını kanıtlamaz.
+Kurulu otomasyonun `komuta/hafıza-konsolidasyonu.md` dosyasını her bakımda
+okuduğunu ve son çalışmanın bilgi incelemesi sonucunu ayrıca doğrula.
+Kayıt oluşturma, sorguda geri getirme ve gerçek görevde doğru uygulama ayrı
+başarı ölçütleridir. Bir sunum akışı tercihi, site görsel tasarımı tercihi
+olarak kullanılamaz; açık kapsam ve kaynak desteği gerekir.

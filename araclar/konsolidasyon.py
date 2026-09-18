@@ -147,6 +147,7 @@ def status(vault):
         'missing_receipts': len(list((vault / 'gelen-kutusu/codex-oturumları').glob('*.pending.json'))),
         'last_sync': last, 'catalog_count': len(h.load_catalog(vault)),
         'lesson_backlog': __import__('ders_baglam').backlog(vault),
+        'knowledge': __import__('bilgi_agi').status(vault),
         'operational_health': __import__('hafiza_saglik').snapshot(vault)}
 
 
@@ -168,6 +169,9 @@ def health(vault):
         f"| Eksik işaretli makbuz | {report['missing_receipts']} |",
         f"| Hook sayaç dosyası | {len(hook_states)} — sıfırsa canlı çalıştığı doğrulanmış değildir |",
         f"| Son uygulanan Mem0 senkronu | {report['last_sync']['at'] if report['last_sync'] else 'Yok'} |"]
+    lines += [f"| Kaynaklı bilgi notu | {report['knowledge']['eligible']} |",
+        f"| Bilgi incelemesi bekleyen kaynak | {len(report['knowledge']['unreviewed_sources'])} |",
+        f"| Ertelenen bilgi kaynağı | {len(report['knowledge']['deferred_sources'])} |"]
     for check in report['operational_health']['checks']:
         lines.append(f"| {check['name']} | {check['status']}: {check['reason']} |")
     if evaluation:

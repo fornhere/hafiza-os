@@ -1,0 +1,29 @@
+import hashlib,json,tempfile,unittest
+from pathlib import Path
+from bilgi_agi import register,assess_source,status
+from gorev_baglam import build_task_package
+
+class KnowledgeFlow(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.v=Path(self.tmp.name)
+        (self.v/'gelen-kutusu').mkdir();self.source=self.v/'gelen-kutusu/tercih.md';self.source.write_text('Sunum metninde günlük Türkçe kullanılması tercih edilir.')
+        self.record=dict(id='sunum-dil',title='Sunum dili',kind='preference',statement='Sunum metninde günlük Türkçe tercih edilir.',scope='user',domains=['sunum'],status='reviewed',sources=[dict(path='gelen-kutusu/tercih.md',sha256=hashlib.sha256(self.source.read_bytes()).hexdigest(),evidence=self.source.read_text())],reviewed_by='test-review',review_note='Sentetik kapsam kontrolü')
+        register(self.v,self.record,True)
+    def test_package_retrieves_without_explicit_memory_command(self):
+        p=build_task_package(self.v,'Benim sevdiğim tarzda sunum metni hazırla')
+        self.assertEqual(p['knowledge']['records'][0]['id'],'sunum-dil');self.assertIn('günlük Türkçe',p['text'])
+        self.assertIn('bilgi/sunum-dil.md',p['source_versions'])
+    def test_off_domain_never_claims_site_style(self):
+        p=build_task_package(self.v,'Benim sevdiğim tarzda site üret')
+        self.assertFalse(p['knowledge']['records']);self.assertNotIn('günlük Türkçe',p['text']);self.assertIn('genellenmedi',p['text'])
+    def test_changed_source_reopens_knowledge_backlog(self):
+        assess_source(self.v,dict(path='gelen-kutusu/tercih.md',sha256=self.record['sources'][0]['sha256'],outcome='linked',record_ids=['sunum-dil'],reason='Sentetik kaynak incelendi',reviewed_by='test-review'),True)
+        self.assertFalse(status(self.v)['unreviewed_sources'])
+        self.source.write_text('Tercih kaynağı sonradan değişti.')
+        p=build_task_package(self.v,'sunum metni hazırla')
+        self.assertFalse(p['knowledge']['records']);self.assertEqual(len(status(self.v)['unreviewed_sources']),1)
+    def test_budget_does_not_leak_undelivered_records(self):
+        p=build_task_package(self.v,'sunum metni hazırla',budget=10)
+        self.assertLessEqual(len(p['text']),10);self.assertIsNone(p['knowledge'])
+
+if __name__=='__main__':unittest.main()

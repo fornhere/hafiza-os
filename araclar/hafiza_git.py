@@ -1,5 +1,6 @@
 """Commit only reviewed memory data; never push or include unrelated edits."""
 import subprocess
+import re
 from pathlib import Path
 import hafiza as h
 
@@ -10,7 +11,7 @@ EXACT = {'gelen-kutusu/codex-oturumları/README.md',
 
 def allowed(name):
     p = Path(name)
-    return name in EXACT or (p.parent.as_posix() == 'gelen-kutusu/codex-oturumları'
+    return name in EXACT or name == 'bilgi/.reviews.jsonl' or (p.parent.as_posix() == 'bilgi' and p.suffix == '.md' and (p.name == 'README.md' or re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,100}', p.stem))) or (len(p.parts) == 4 and p.parts[:2] == ('bilgi', '.history') and re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,100}',p.parts[2]) and p.suffix == '.md' and re.fullmatch(r'[0-9a-f]{64}',p.stem)) or (p.parent.as_posix() == 'gelen-kutusu/codex-oturumları'
         and p.suffix == '.md' and len(p.stem) == 32
         and all(c in '0123456789abcdef' for c in p.stem))
 

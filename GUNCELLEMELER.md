@@ -1,3 +1,12 @@
+# 2026.09.18 — Geri bildirimden kaynaklı bilgi ağına
+
+- Kaynak alıntısı, sürüm, kapsam ve inceleme içeren Markdown bilgi notları.
+- Gerçek ilişkiler ve dosya sürümüne bağlı örnekler; görsel onay çıkarımı yok.
+- Görev paketinde alan/proje sınırlarıyla erişim; sunum tercihi siteye genellenmez.
+- Makbuzdan ayrı bilgi incelemesi kuyruğu; değişen kaynak yeniden beklemeye döner.
+- Mevcut konsolidasyon rolü ve yerel Git kaydıyla bütünleşme; yeni servis yok.
+- Ayrıntılar: [Bilgi ağı](BILGI-AGI.md).
+
 # 2026.09.18 — Kaynaklı çıktı ve karar takibi
 
 - Devam kapsülüne dosya ve kontrol sürümüne bağlı çıktı eklendi.
