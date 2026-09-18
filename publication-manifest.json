@@ -85,6 +85,14 @@
     {
       "path": "araclar/konu_sentezi.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/jev_client.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/jev_retrieval.py",
+      "mode": "shared"
     }
   ]
 }

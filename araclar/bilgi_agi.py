@@ -192,6 +192,12 @@ def status(vault):
 
 
 def retrieve(vault,query,project_id=None,budget=1800):
+    from jev_retrieval import knowledge
+    return knowledge(vault, query, project_id, budget,
+                     lambda: _retrieve_local(vault, query, project_id, budget))
+
+
+def _retrieve_local(vault,query,project_id=None,budget=1800):
     from gorev_baglam import content_words,word_match
     vault=Path(vault);rows,diagnostics=_rows(vault);terms=content_words(query)
     domain_aliases={'site':('site','web','website'),'sunum':('sunum','slayt','slideshow'),'thumbnail':('thumbnail','kapak')}

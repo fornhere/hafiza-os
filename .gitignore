@@ -29,3 +29,7 @@ service-account*.json
 !*.public.key
 .aws/
 .npmrc
+
+# Private semantic advisor config and derived scores
+.cache/jev/
+komuta/jev.json

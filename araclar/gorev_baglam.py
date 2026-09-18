@@ -262,7 +262,9 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
             continue
         eligible.append(row)
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
-    for row in rank_records(eligible, query):
+    from jev_retrieval import catalog as semantic_catalog
+    ranked_catalog, catalog_evaluation = semantic_catalog(vault, query, eligible, rank_records, scope)
+    for row in ranked_catalog:
         # A source-derived card requires a reviewed source revision, not a new
         # hash computed from an unreviewed legacy statement's current file.
         content = h.source_file(vault, row['source_path']).read_text()
@@ -394,6 +396,10 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     if knowledge_data and 'knowledge' in selected:
         source_versions.update(knowledge_data.get('source_versions',{}))
     result['knowledge']=knowledge_data if 'knowledge' in selected else None
+    if catalog_evaluation is not None or (knowledge_data and knowledge_data.get('jev')):
+        result['jev'] = {'catalog':catalog_evaluation,
+                         'knowledge':knowledge_data.get('jev') if knowledge_data else None,
+                         'knowledge_delivered':'knowledge' in selected}
     result['history']={'mode':history,'included':any(p in selected for p in (project or {}).get('episode_sources',[])), 'requested':use_history,'reason':history_reason,'topic_covered':covered}
     result['summary']={'record_ids':[r['memory_id'] for r in current_facts if r['memory_id'] in selected], 'task_ids':[t['id'] for t in current_tasks if t['id'] in selected], 'derived':True}
     visible_tasks = [t for t in current_tasks if t['id'] in selected][:3]
