@@ -9,6 +9,15 @@ from pathlib import Path
 import hafiza as h
 
 
+# Shared established topics; aliases do not broaden card scope or domains.
+DOMAIN_ALIASES = {'site':('site','web','website'),
+                  'sunum':('sunum','slayt','slideshow'),
+                  'thumbnail':('thumbnail','kapak'),
+                  'twitter':('twitter','tweet'),
+                  'proje':('proje','orvant'),
+                  'video':('video','youtube','çekim')}
+
+
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -200,7 +209,7 @@ def retrieve(vault,query,project_id=None,budget=1800):
 def _retrieve_local(vault,query,project_id=None,budget=1800):
     from gorev_baglam import content_words,word_match
     vault=Path(vault);rows,diagnostics=_rows(vault);terms=content_words(query)
-    domain_aliases={'site':('site','web','website'),'sunum':('sunum','slayt','slideshow'),'thumbnail':('thumbnail','kapak')}
+    domain_aliases=DOMAIN_ALIASES
     requested={domain for domain,aliases in domain_aliases.items() if any(word_match(alias,word) for alias in aliases for word in terms)}
     ranked=[]
     # These are candidate analogies, never new user preferences. Only features
@@ -257,8 +266,14 @@ def main():
     assess=subs.add_parser('assess-source');assess.add_argument('--input-json',type=Path,required=True);assess.add_argument('--apply',action='store_true')
     ctx=subs.add_parser('context');ctx.add_argument('query');ctx.add_argument('--project-id');ctx.add_argument('--budget',type=int,default=1800)
     review=subs.add_parser('review');review.add_argument('--project-id');review.add_argument('--card-id',action='append');review.add_argument('--anchor-id')
+    proposal=subs.add_parser('review-candidate');proposal.add_argument('--input-json',type=Path,required=True);proposal.add_argument('--project-id')
     subs.add_parser('status');a=p.parse_args()
     try:
+        if a.command=='review-candidate':
+            from jev_review import audit_proposed
+            if a.input_json.stat().st_size>100000: raise ValueError('candidate_budget_exceeded')
+            print(json.dumps(audit_proposed(a.vault,json.loads(a.input_json.read_text()),a.project_id),ensure_ascii=False,indent=2))
+            return
         if a.command=='review':
             from jev_review import audit
             print(json.dumps(audit(a.vault,a.project_id,a.card_id,a.anchor_id),ensure_ascii=False,indent=2))

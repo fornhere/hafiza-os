@@ -130,7 +130,8 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(len(self.calls),3)
         self.assertEqual(self.calls[0]['questions']['f0_c0']['criteria'],j.CRITERIA)
         self.assertEqual(self.calls[1]['questions']['f0_c0']['criteria'],j.REVIEW_CRITERIA)
-        self.assertIn('anchor reviewed record',self.calls[1]['questions']['f0_c0']['instructions'])
+        self.assertIn('anchor record',self.calls[1]['questions']['f0_c0']['instructions'])
+        self.assertIn('unapproved proposal',self.calls[1]['questions']['f0_c0']['instructions'])
         self.assertIn('exact evidence quotes',self.calls[2]['questions']['f0_c0']['instructions'])
         self.assertNotEqual(self.calls[1]['questions'],self.calls[2]['questions'])
 

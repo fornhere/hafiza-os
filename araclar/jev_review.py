@@ -96,6 +96,10 @@ def audit(vault, project_id=None, card_ids=None, anchor_id=None):
             result['support_checks'].append(dict(card_id=row['id'], verdict=verdict,
                 support_score=yes, contradiction_score=no, status='advisory'))
     if pairs:
+        if pairs.get('mode') == 'off' and not pairs.get('degraded'):
+            result['status'] = 'degraded'
+            result['diagnostics'].append('relations_disabled_during_evaluation')
+            return result
         if pairs.get('degraded'):
             result['status'] = 'degraded'; result['diagnostics'] += pairs.get('diagnostics', [])
         else:
@@ -105,4 +109,93 @@ def audit(vault, project_id=None, card_ids=None, anchor_id=None):
                 result['relation_candidates'].append(dict(source_id=row['id'], target_id=anchor_id,
                     relation=hits[0] if len(hits)==1 else 'uncertain', scores=scores,
                     status='proposed', reason='Model judgment requires source and contextual review.'))
+    return result
+
+
+def audit_proposed(vault, candidate, project_id=None):
+    """Check an unregistered proposal; validated advisory output cannot promote it.
+
+    Relations compare up to eight eligible same-scope/domain existing cards to
+    the proposed anchor. Remaining cards are explicitly counted, never implied
+    to have been checked. No candidate is registered, even temporarily.
+    """
+    import copy
+    vault=Path(vault)
+    if not isinstance(candidate,dict): raise ValueError('invalid_candidate')
+    candidate=copy.deepcopy(candidate)
+    try: encoded=json.dumps(candidate,ensure_ascii=False,allow_nan=False)
+    except (TypeError,ValueError): raise ValueError('invalid_candidate') from None
+    if len(encoded)>24000: raise ValueError('candidate_budget_exceeded')
+    if candidate.get('status')!='proposed': raise ValueError('candidate_must_be_proposed')
+    if candidate.get('scope') not in ('user',f'project:{project_id}' if project_id else 'user'):
+        raise ValueError('candidate_scope_mismatch')
+    if not isinstance(candidate.get('sources'),list) or not 1<=len(candidate['sources'])<=8:
+        raise ValueError('candidate_sources_invalid')
+    try: proposal=knowledge._validate(vault,candidate)
+    except (ValueError,OSError,TypeError,KeyError): raise ValueError('candidate_source_or_fields_invalid') from None
+    rows,diagnostics=knowledge._rows(vault)
+    # A new proposal may not impersonate any existing card identity.
+    if (vault/'bilgi'/f"{proposal['id']}.md").exists(): raise ValueError('candidate_id_exists')
+    eligible=[r for r in rows if r['scope']==proposal['scope'] and
+              ('all' in r['domains'] or 'all' in proposal['domains'] or set(r['domains']) & set(proposal['domains']))]
+    eligible.sort(key=lambda r:r['id'])
+    related=eligible[:8]
+    result=dict(status='advisory',candidate_id=proposal['id'],candidate_status='proposed',
+        canonical_writes=False,requires_review=True,support_checks=[],relation_candidates=[],
+        source_versions={},diagnostics=[],evaluations={},excluded_count=len(diagnostics),
+        relation_limit=8,omitted_relation_count=max(0,len(eligible)-8))
+    def snapshot():
+        # Re-run exact evidence/hash/field gates after every network call.
+        checked=knowledge._validate(vault,proposal)
+        current,_=knowledge._rows(vault)
+        lookup={r['id']:r for r in current}
+        if any(lookup.get(r['id'])!=r for r in related): raise ValueError('source_changed')
+        if (vault/'bilgi'/f"{proposal['id']}.md").exists(): raise ValueError('candidate_registered_during_evaluation')
+        versions_now=versions(vault,related)
+        for source in checked['sources']: versions_now[source['path']]=source['sha256']
+        for example in checked.get('examples',[]): versions_now[example['path']]=example['sha256']
+        return versions_now
+    def discard():
+        result.update(status='degraded',diagnostics=['source_changed_during_evaluation'],source_versions={},
+                      support_checks=[],relation_candidates=[])
+        for evaluation in result['evaluations'].values(): evaluation.update(scores={},facet_scores={},degraded=True)
+        return result
+    try: before=snapshot()
+    except (OSError,ValueError,TypeError,KeyError):
+        result.update(status='degraded',diagnostics=['source_changed_before_evaluation']);return result
+    checks=jev_client.evaluate(vault,'Assess the proposed claim against only its attached exact evidence quotes.',
+        [packet(proposal)],source_versions=before,scope=proposal['scope'],facets=SUPPORT,purpose='evidence_review')
+    result['evaluations']['support']=checks
+    try:
+        if snapshot()!=before:return discard()
+    except (OSError,ValueError,TypeError,KeyError):return discard()
+    result['source_versions']=before
+    if checks.get('degraded'):
+        result.update(status='degraded',diagnostics=checks.get('diagnostics',[]));return result
+    if checks.get('mode')=='off':result['status']='disabled';return result
+    def score(evaluation,facet,ident):
+        values=evaluation.get('facet_scores',{})
+        return (values.get(facet) or values.get(str(facet)) or {}).get(ident,0)
+    yes,no=score(checks,0,proposal['id']),score(checks,1,proposal['id'])
+    verdict=('uncertain' if yes>=1.5 and no>=1.5 else 'supported' if yes>=1.5 else 'contradicted' if no>=1.5 else 'insufficient')
+    result['support_checks']=[dict(card_id=proposal['id'],verdict=verdict,support_score=yes,
+        contradiction_score=no,status='advisory')]
+    if related:
+        pairs=jev_client.evaluate(vault,json.dumps(dict(anchor=packet(proposal)),ensure_ascii=False),
+            [packet(r) for r in related],source_versions=before,scope=proposal['scope'],
+            facets=RELATIONS,purpose='memory_review')
+        result['evaluations']['relations']=pairs
+        try:
+            if snapshot()!=before:return discard()
+        except (OSError,ValueError,TypeError,KeyError):return discard()
+        if pairs.get('mode')=='off' and not pairs.get('degraded'):
+            result.update(status='degraded',diagnostics=['relations_disabled_during_evaluation']);return result
+        if pairs.get('degraded'):
+            result.update(status='degraded',diagnostics=pairs.get('diagnostics',[]));return result
+        for row in related:
+            scores={label:score(pairs,i,row['id']) for i,label in enumerate(('same_claim','incompatible','narrows'))}
+            hits=[label for label,value in scores.items() if value>=1.5]
+            result['relation_candidates'].append(dict(source_id=row['id'],target_id=proposal['id'],
+                relation=hits[0] if len(hits)==1 else 'uncertain',scores=scores,status='proposed',
+                reason='Existing card compared toward proposed anchor; independent source review required.'))
     return result

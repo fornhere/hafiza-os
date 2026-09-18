@@ -20,6 +20,24 @@ class KnowledgeTests(unittest.TestCase):
         self.assertFalse(b.retrieve(self.v,'sevdiğim tarz')['records'])
         self.d['id']='project-note';self.d['scope']='project:one';b.register(self.v,self.d,True)
         self.assertEqual(len(b.retrieve(self.v,'sunum',project_id='two')['records']),1)
+    def test_established_topics_explicit_scope_and_no_generic_dump(self):
+        aliases={'twitter':('Twitter','tweet'), 'proje':('proje','Orvant'),
+                 'video':('video','YouTube','çekim')}
+        for domain,words in aliases.items():
+            for project in ('one','two'):
+                row=copy.deepcopy(self.d)
+                row.update(id=f'{domain}-{project}',domains=[domain],scope=f'project:{project}',
+                           title=' '.join(words),statement=' '.join(words)+' için kaynaklı yöntem.')
+                b.register(self.v,row,True)
+        for domain,words in aliases.items():
+            for word in words:
+                with self.subTest(word=word):
+                    result=b.retrieve(self.v,word+' yöntemi',project_id='one')
+                    self.assertEqual([r['id'] for r in result['records']],[domain+'-one'])
+                    self.assertFalse(b.retrieve(self.v,word,project_id='other')['records'])
+        self.assertFalse(b.retrieve(self.v,'sevdiğim yöntem',project_id='one')['records'])
+        self.assertFalse(b.retrieve(self.v,'x',project_id='one')['records'])
+
     def test_example_acceptance_explicit(self):
         p=self.v/'slide.html';p.write_text('slide')
         self.d['examples']=[dict(path=str(p),sha256=b.digest(p),role='Typography reference only',acceptance='accepted',evidence_source=0)]

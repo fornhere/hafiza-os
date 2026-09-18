@@ -147,6 +147,100 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(result['status'], 'degraded')
         self.assertIn('config_invalid', result['diagnostics'])
 
+    def proposal(self):
+        row=copy.deepcopy(self.row)
+        row.update(id='unregistered',status='proposed')
+        row.pop('reviewed_by');row.pop('review_note')
+        return row
+
+    def test_proposed_exact_quotes_not_registered_or_retrievable(self):
+        before=self.snapshot()
+        proposal=self.proposal()
+        with patch.object(jev_client,'evaluate',side_effect=self.fake) as call:
+            result=r.audit_proposed(self.v,proposal)
+        self.assertEqual(result['candidate_status'],'proposed')
+        self.assertEqual(result['support_checks'][0]['verdict'],'supported')
+        self.assertEqual(result['relation_candidates'][0]['target_id'],'unregistered')
+        payload=json.dumps([c.args for c in call.call_args_list],default=str)
+        self.assertNotIn('SURROUNDING_NOT_FOR_EXPORT',payload)
+        self.assertEqual(before,self.snapshot())
+        self.assertNotIn('unregistered',[row['id'] for row in b._rows(self.v)[0]])
+
+    def test_proposed_invalid_status_scope_quote_and_limits(self):
+        for changes in [dict(status='reviewed'),dict(scope='project:other'),dict(id='anchor'),
+                        dict(statement='x'*24001),dict(sources=[])]:
+            row=self.proposal();row.update(changes)
+            with self.subTest(changes=list(changes)),patch.object(jev_client,'evaluate') as call:
+                with self.assertRaises(ValueError):r.audit_proposed(self.v,row,'current')
+                call.assert_not_called()
+        row=self.proposal();row['sources'][0]['evidence']='This quote is not in the source.'
+        with self.assertRaises(ValueError):r.audit_proposed(self.v,row)
+
+    def test_proposed_disabled_and_provider_failure(self):
+        (self.v/'komuta/jev.json').write_text(json.dumps({'mode':'off'}))
+        with patch.object(jev_client,'_transport') as call:
+            result=r.audit_proposed(self.v,self.proposal())
+        call.assert_not_called();self.assertEqual(result['status'],'disabled')
+        with patch.object(jev_client,'evaluate',return_value=dict(mode='on',degraded=True,
+                diagnostics=['http_server_error'],scores={},facet_scores={})) as call:
+            result=r.audit_proposed(self.v,self.proposal())
+        self.assertEqual(call.call_count,1)
+        self.assertEqual(result['status'],'degraded');self.assertFalse(result['support_checks'])
+
+    def test_proposed_source_change_in_each_call_discards_results(self):
+        original=self.source.read_text()
+        for purpose in ('evidence_review','memory_review'):
+            self.source.write_text(original)
+            def mutate(vault,query,cards,**kw):
+                result=self.fake(vault,query,cards,**kw)
+                if kw['purpose']==purpose:self.source.write_text('changed')
+                return result
+            with self.subTest(purpose=purpose),patch.object(jev_client,'evaluate',side_effect=mutate):
+                result=r.audit_proposed(self.v,self.proposal())
+            self.assertEqual(result['status'],'degraded')
+            self.assertFalse(result['support_checks']);self.assertFalse(result['relation_candidates'])
+            self.assertFalse(result['source_versions'])
+
+    def test_proposed_relations_bounded_and_same_scope(self):
+        self.add(id='different',scope='project:other')
+        for i in range(10):self.add(id=f'card-{i}')
+        with patch.object(jev_client,'evaluate',side_effect=self.fake) as call:
+            result=r.audit_proposed(self.v,self.proposal())
+        self.assertEqual(len(result['relation_candidates']),8)
+        self.assertEqual(result['omitted_relation_count'],3)
+        self.assertNotIn('different',[c['id'] for c in call.call_args.args[2]])
+
+    def test_proposed_cli_disabled_does_not_persist(self):
+        import subprocess,sys
+        (self.v/'komuta/jev.json').write_text(json.dumps({'mode':'off'}))
+        path=self.v/'proposal.json';path.write_text(json.dumps(self.proposal()))
+        before=self.snapshot()
+        process=subprocess.run([sys.executable,str(Path(b.__file__)), '--vault',str(self.v),
+            'review-candidate','--input-json',str(path)],capture_output=True,text=True)
+        self.assertEqual(process.returncode,0,process.stderr)
+        self.assertEqual(json.loads(process.stdout)['status'],'disabled')
+        self.assertEqual(before,self.snapshot())
+
+    def test_relations_disabled_between_calls_preserves_support_only(self):
+        self.add(id='existing')
+        for proposed in (False,True):
+            (self.v/'komuta/jev.json').write_text(json.dumps({'mode':'on'}))
+            def switch(vault,query,cards,**kw):
+                if kw['purpose']=='evidence_review':
+                    result=self.fake(vault,query,cards,**kw)
+                    (self.v/'komuta/jev.json').write_text(json.dumps({'mode':'off'}))
+                    return result
+                return original(vault,query,cards,**kw)
+            original=jev_client.evaluate
+            with self.subTest(proposed=proposed),patch.object(jev_client,'evaluate',side_effect=switch),patch.object(jev_client,'_transport') as transport:
+                result=(r.audit_proposed(self.v,self.proposal()) if proposed else
+                        r.audit(self.v,card_ids=['existing'],anchor_id='anchor'))
+            transport.assert_not_called()
+            self.assertEqual(result['status'],'degraded')
+            self.assertIn('relations_disabled_during_evaluation',result['diagnostics'])
+            self.assertEqual(result['support_checks'][0]['verdict'],'supported')
+            self.assertEqual(result['relation_candidates'],[])
+
 
 if __name__ == '__main__':
     unittest.main()

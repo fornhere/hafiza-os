@@ -62,3 +62,15 @@ Kaynak/kart sürümleri iki aşama arasında ve sonda kontrol edilir. İlk aşam
 Bu güncelleme daha fazla gerçek bilgi kaydettiği veya çelişkileri otomatik çözdüğü iddiası değildir. İnsan/ajan kaynak incelemesine ek bir kontrol sağlar; model etiketleri hatalı olabilir.
 
 Vercel uyumluluğu: yalnız `provider: vercel` için, toplamı 1 olmayan iki ondalıklı olasılıklar kontrollü olarak ele alınır. Her olasılığın ±0,005 yuvarlama aralığında toplamı 1 olan bir dağılım bulunmalı ve bunun beklenen skoru, bildirilen skorun ±0,005 aralığıyla kesişmelidir. Sağlayıcının skoru değiştirilmez. Bu koşulu karşılayan yanıt `quantized_probability_count` ve tanı koduyla görünür; salt “toplam yakın” olması yeterli değildir. TypeSafe doğrudan sağlayıcı kontrolü katı kalır. Önbellek adaptör sürümünü de içerir.
+
+## Henüz kaydedilmemiş bilgi adayını inceleme
+
+```sh
+python3 araclar/bilgi_agi.py --vault /path/to/vault review-candidate --input-json /path/to/proposal.json --project-id example
+```
+
+Girdi mevcut bilgi kartı şemasında, `status: proposed` olmalıdır. Kaynağı ve birebir alıntısı önceden mevcut olmalı; aynı kimlikle kart bulunmamalıdır. Araç adayı geçici olarak bile kaydetmez. Kaynak desteği ve en fazla sekiz güncel, aynı kapsam ve örtüşen alandaki mevcut kartla ilişki önerisi üretir; incelenmeyen kart sayısı ayrıca görünür. Bu sınırlı karşılaştırma bütün katalogda anlamsal tekrar kontrolünün yerine geçmez.
+
+Aday JSON'u en fazla24000 karakter, kaynak sayısı en fazla8; istemci sınırları ayrıca geçerlidir. Kaynaklar her aşamadan sonra doğrulanır. Destek ve ilişki çağrıları arasında yapılandırma kapanırsa doğrulanmış destek sonucu korunur, değerlendirilmemiş ilişki üretilmez. Yeni aday retrieval'a dahil olmaz; kayıt ve terfi ayrı kaynak incelemesi gerektirir.
+
+Kaynak öğrenme sırası: tamamlanmış kaynak → önerilen kart → mevcut hafızayla ayrı inceleme → gerekçeli kayıt/tekrar/erteleme → önceden dondurulmuş görev sorularıyla teslim kontrolü. Kaynak sayısını veya kart sayısını artırmak tek başına başarı ölçüsü değildir. API erişimi yoksa kaynak incelemesi yapılabilir; Jev değerlendirmesi yapılmış gibi raporlanmaz.

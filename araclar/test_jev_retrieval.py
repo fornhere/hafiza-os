@@ -146,6 +146,23 @@ class RetrievalTests(unittest.TestCase):
         self.assertLessEqual(len(plan),3)
         self.assertTrue(any('eski yöntem' in f['text'] for f in plan))
 
+    def test_new_domain_guards_and_four_domains_single_full_facet(self):
+        for domain,aliases in {'twitter':['Twitter','tweet'],'proje':['proje','Orvant'],
+                              'video':['video','YouTube','çekim']}.items():
+            for alias in aliases:self.assertIn(domain,j.requested_domains(alias))
+        self.assertFalse(j.requested_domains('x'))
+        query='Sunum, kapak, Twitter ve video kaynaklarını bul.'
+        plan=j.facet_plan(query)
+        self.assertEqual(len(plan),1)
+        self.assertEqual(plan[0]['text'],query)
+        self.assertEqual(set(plan[0]['domains']),{'sunum','thumbnail','twitter','video'})
+        self.add(id='tweet-one',domains=['twitter'],scope='project:one')
+        self.add(id='tweet-two',domains=['twitter'],scope='project:two')
+        self.config('on')
+        with patch.object(jev_client,'evaluate',side_effect=self.high):
+            out=b.retrieve(self.v,'Twitter kaynakları',project_id='one')
+        self.assertEqual([r['id'] for r in out['records']],['tweet-one'])
+
     def catalog_row(self):
         statement = 'Sunumda kısa cümle kullan.'
         row = dict(memory_id='workflow', kind='semantic', scope='project:workflow',

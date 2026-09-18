@@ -3,8 +3,9 @@ import re
 from pathlib import Path
 import jev_client
 
-DOMAINS = {'sunum': ('sunum', 'slayt', 'anlatım', 'konuşma'),
-           'thumbnail': ('thumbnail', 'kapak'), 'site': ('site', 'web', 'website')}
+from bilgi_agi import DOMAIN_ALIASES
+
+DOMAINS = dict(DOMAIN_ALIASES, sunum=DOMAIN_ALIASES['sunum'] + ('anlatım', 'konuşma'))
 
 def requested_domains(query):
     from gorev_baglam import content_words, word_match
@@ -19,6 +20,9 @@ def facet_plan(query):
     explicit evidence clauses can have an implicit domain. Ordinary task requests
     keep their explicit domain guard; this is not a general Turkish parser.
     """
+    all_domains = requested_domains(query)
+    if len(all_domains) > 3:
+        return [dict(text=query, domains=all_domains)]
     evidence_request = bool(re.search(r'kaynak|notlar|ayrı\s+ayrı|geri\s+bildirim', query, re.I))
     clauses = [part.strip() for part in re.split(r'\s+(?:ve|ile)\s+|;', query, flags=re.I) if part.strip()]
     if evidence_request and 1 < len(clauses) <= 3:
