@@ -63,13 +63,14 @@ def instruction_block(vault):
     context = command([sys.executable, '-X', 'utf8', vault / 'araclar/hafiza.py', '--vault', vault,
                        'context', 'göreve ilişkin soru', '--limit', '5', '--char-budget', '1200'], windows)
     language = 'powershell' if windows else 'sh'
-    access = f"""Yeni ana oturumda kasanın agents.md, zihin/ruh.md ve zihin/hafıza-sistemi.md
-kurallarını oku. Yalnız en yeni tarihli oturum bölümünü bütçeli getir:
+    access = f"""Yeni ana oturumda kasanın kısa agents.md ve zihin/ruh.md kurallarını bir kez oku.
+Bağlamda zaten bulunan içeriği tekrar okuma. Yalnız en yeni oturum bölümünü getir:
 ```{language}
 {latest}
 ```
 Bu komut en fazla 2500 karakter getirir. Geçmiş özet güncel durum kanıtı değildir.
-Gerektiğinde zihin/açık-işler.md ve komuta/bu-hafta.md içinden ilgili işi oku.
+Diğer dosyaları agents.md görev tablosuna göre gerektiğinde oku; toplu açılış okuması yapma.
+Selam/gündemde hook özeti yeterliyse açık işler ve haftalık listeyi yeniden okuma.
 Göreve özgü geçmiş tercih/karar gerektiğinde soru metnini değiştirerek çalıştır:
 ```{language}
 {context}

@@ -246,10 +246,16 @@ def privacy_ambiguous(prompt):
     Instruction-vs-quotation and final scope still require reviewer judgment.
     """
     text = privacy_text(prompt)
+    # A whole-session instruction remains blocking inside a mixed request.
+    if any(privacy_command(clause) for clause in re.split(r'[.!?;\n]+', text)):
+        return True
     negative = r'(?:kaydetme(?:yin|yiniz|meni|ni|k|yelim)?|saklama(?:yın|manı|yalım)?|hatırlama(?:manı)?|unut|alma(?:yın|yalım)?|alınmasın|kalmasın|tutma|yazma|etmeyelim)'
     # Names of commands/errors are discussion, not imperatives. No blanket
     # exemption for a word such as "örnek" anywhere else in the request.
     text = re.sub(r'\b(?:kaydetme|hatırlama|saklama) (?:hatasını|hatası|komutu|komutunu|komutunun|işlemini|işlemi)\b', '', text)
+    # This exact acceptance qualifier restricts attribution, not storage. Remove
+    # only that clause; any separate privacy instruction still reaches the gate.
+    text = re.sub(r'\bbunu benim kabul ettiğim karar olarak kaydetme\b(?=[.!?;\n]|$)', '', text)
     patterns = (
         r'\b(?:bunu|bunları|şunu|şunları|bu bilgiyi|şu bilgiyi|anlattığımı|söylediğimi|konuştuklarımızı)\b[^.!?\n]{0,90}\b'+negative+r'\b',
         r'\b(?:hafızaya|hafızanda|belleğe|bellekte|kayıt altına|not olarak)\b[^.!?\n]{0,50}\b'+negative+r'\b',

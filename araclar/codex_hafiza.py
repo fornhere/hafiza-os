@@ -213,15 +213,15 @@ def hook(vault, data):
         state.pop('package_cache', None)
         queue = vault / INBOX
         missing = len(list(queue.glob('*.pending.json')))
-        latest = sorted(queue.glob('*.md'), key=lambda p: p.stat().st_mtime, reverse=True)
-        recent = '\n'.join(str(p) for p in latest if p.name != 'README.md')[:1800]
+        receipt_count = sum(p.name != 'README.md' for p in queue.glob('*.md'))
         from hafiza_saglik import notice
         health_notice = notice(vault)
         context = (f'Hafıza kasası: {vault}. Önce {vault}/agents.md ve '
             f'{vault}/zihin/son-oturum.md dosyasının yalnız en yeni bölümünü oku. '
             f'Bütçeli okuma ({"PowerShell" if os.name == "nt" else "POSIX shell"}):\n'
             f'{latest_session_command(vault)}\n'
-            f'Diğer ajan açılış yönergeleri geçerlidir. Yeni Codex görev makbuzları: {recent or "yok"}. '
+            f'Kısa agents.md açılış sözleşmesi geçerlidir; ayrıntılar yalnız gerektiğinde okunur. '
+            f'Gelen kutusunda {receipt_count} görev makbuzu var; listeyi başlangıçta okuma. '
             f'Eksik makbuz sayısı: {missing}. Makbuzlar gelen kutusundadır, kanonik gerçek değildir. '
             f'Bu oturumda sayılan kullanıcı mesajı: {state["count"]}. '
             'Hafıza kaydı arka plan konsolidasyonunda yapılır; cevap sonunda makbuz '

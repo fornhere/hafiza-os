@@ -89,6 +89,19 @@ class Hooks(unittest.TestCase):
         self.assertEqual(self.event('UserPromptSubmit', 't2', prompt='devam'), {})
         self.assertEqual(self.event('Stop', 't2'), {})
 
+    def test_opening_size_does_not_grow_with_receipt_history(self):
+        queue = self.vault / h.INBOX
+        queue.mkdir(parents=True)
+        before = self.event('SessionStart')['hookSpecificOutput']['additionalContext']
+        for n in range(200):
+            (queue / f'private-session-{n}.md').write_text('private note')
+        after = self.event('SessionStart')['hookSpecificOutput']['additionalContext']
+        self.assertLess(abs(len(after) - len(before)), 10)
+        self.assertNotIn('private-session-', after)
+        self.assertNotIn('private note', after)
+        self.assertIn('200 görev makbuzu', after)
+        self.assertIn('latest-session', after)
+
     def test_missing_priorities_do_not_invent_work(self):
         out = self.event('SessionStart')['hookSpecificOutput']['additionalContext']
         self.assertIn('eski işi kendiliğinden açma', out)
@@ -141,7 +154,7 @@ class Hooks(unittest.TestCase):
         self.assertIn('Kesildi',text)
         opening=self.event('SessionStart')['hookSpecificOutput']['additionalContext']
         self.assertIn('latest-session',opening)
-        self.assertIn('Diğer ajan açılış yönergeleri geçerlidir',opening)
+        self.assertIn('Kısa agents.md açılış sözleşmesi geçerlidir',opening)
 
 if __name__ == '__main__':
     unittest.main()

@@ -340,3 +340,16 @@ Bu kontroller model cevabının kalitesi veya kullanıcı zaman kazancının kan
 - Engelli/çoklu/konu dışı görev için otomatik sonraki adım önerilmez.
 - Kaynak sürümü incelenmemiş eski kayıtlar yeni bilgi kartı sayılmaz.
 - Ek API, ayrı önbellek veya arka plan otomasyonu olmadan mevcut hook'a bağlı.
+
+
+## 20 Eylül 2026 — Kısa açılış ve kaynak uzlaştırma
+
+- Açılışta kısa çalışma sözleşmesi, ruh ve bütçeli son oturum okunur; işletim
+  ayrıntıları `komuta/ajan-isletimi.md` üzerinden göreve göre açılır.
+- Başlangıç hook'u tüm makbuz yolları yerine sayıyı bildirir; geçmiş büyüdükçe
+  açılış metni büyümez. Ortak istemci köprüsü aynı okuma sınırını uygular.
+- Kaynak tarafından bütünü desteklenmeyen legacy kayıtlar bağımsız reviewer
+  ile daraltılabilir veya karantinaya alınabilir; eski/yeni sürüm audit ile
+  korunur. Yeni kullanıcı onayı varsayılmaz. Bkz. KAYIT-UZLASTIRMA.md.
+- Kabul edilmiş karar olarak kaydetmeme kısıtı genel oturum yasağından ayrılır;
+  ek bir kaydetmeme talimatı varsa kayıt kapısı kapalı kalır.

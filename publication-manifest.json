@@ -136,6 +136,10 @@
     {
       "path": "araclar/jev_answer.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/kayit_uzlastir.py",
+      "mode": "shared"
     }
   ]
 }

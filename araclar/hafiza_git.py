@@ -5,7 +5,7 @@ from pathlib import Path
 import hafiza as h
 
 EXACT = {'gelen-kutusu/codex-oturumları/README.md',
- 'gelen-kutusu/hafıza-adayları.jsonl', 'günlük/hafıza-olayları.jsonl',
+ 'gelen-kutusu/hafıza-adayları.jsonl', 'günlük/hafıza-olayları.jsonl', 'günlük/kayit-uzlastirma.jsonl',
  'zihin/fayda-gozlemleri.jsonl', 'zihin/kaynak-surumleri.jsonl', 'zihin/hafıza-kataloğu.jsonl', 'zihin/is-durumu.jsonl', 'zihin/ders-durumu.jsonl',
  'zihin/açık-işler.md', 'komuta/bu-hafta.md', 'komuta/hafıza-sagligi.md'}
 
