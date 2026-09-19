@@ -34,11 +34,12 @@ okuma, kaynaklı geri çağırma ve oturum kaydı farklı katmanlardır.
 | Antigravity CLI (`agy`) | `~/.gemini/GEMINI.md` | PreInvocation/Stop, sessiz episodik aday |
 | Diğer ajanlar | Seçilen Markdown | Yalnız yönerge aktarımı |
 
-Linux yerel çekirdek kanıtı vardır; yeni değişikliğin kabulü bekliyor.
-macOS/Windows yerel Python CI matrisi eklendi, koşum sonucu ve canlı istemci
-kanıtı bekliyor. agy 1.1.27 altı insan girdisi ve başarılı Stop gözlendi;
-Claude model denemesi 403 ile engellendi. Bunlar bütün istemcilerin her işletim
-sisteminde doğrulandığı anlamına gelmez. [Ayrıntılı kurulum matrisi](ENTEGRASYONLAR.md).
+Linux, macOS ve Windows'ta **360 testlik paket başarılı**: [gerçek OS koşumu](https://github.com/fornhere/hafiza-os/actions/runs/35442868256).
+İşletim sistemine özgü bir test diğer platformda atlanır. Antigravity CLI 1.1.27
+ile Linux'ta gerçek hook → inceleme → farklı oturumda hatırlama zinciri doğrulandı.
+Claude Code 2.1.261 için adaptör testleri geçti; canlı model denemesi hesap
+erişimindeki 403 nedeniyle tamamlanamadı. macOS/Windows'taki uygulama oturumları
+ayrıca canlı doğrulanmış değildir. [Kurulum ve destek matrisi](ENTEGRASYONLAR.md).
 
 ## Hızlı başlangıç
 
@@ -63,6 +64,8 @@ Kişisel profil şablonlarını kendin doldur; kurucu bunları güncellemez.
 
 ## Son eklenenler
 
+- **19 Eylül, 2026.09.19.1:** yerel Windows/macOS/Linux motoru; Claude/Antigravity
+  oturum adaptörleri, ortak makbuz erişimi, güvenli hook kurulum/geçişi ve üç OS testi.
 - **19 Eylül:** üç istemci için ortak yönerge kurucusu ve genel Markdown aktarımı.
 - **18 Eylül:** kaynaklı konu dosyaları, isteğe bağlı Jev danışmanı, bilgi ağı,
   karar/çıktı takibi ve hafızanın görünür kullanım bilgisi.

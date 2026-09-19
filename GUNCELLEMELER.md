@@ -1,3 +1,21 @@
+# 2026.09.19.1 — Taşınabilir motor ve yerel ajan adaptörleri
+
+- Linux/macOS/Windows için standart kütüphaneli süreç kilidi; UTF-8, satır sonu ve
+  kaynak yolu tutarlılığı. [Üç gerçek OS koşumunda 360 testlik paket başarılı](https://github.com/fornhere/hafiza-os/actions/runs/35442868256).
+- Claude Code ve Antigravity için özgün transcript'e bağlı sessiz aday kuyruğu;
+  kaynak hash'i, ilk beş mesaj, gizlilik ve ayrı anlamlılık incelemesi korunur.
+- Ortak incelenmiş makbuz erişimi; Codex mevcut kayıt/konsolidasyon yolunu korur.
+- `ajan_kur.py --with-hooks`: yedekli, tekrar çalıştırılabilir kurulum/kaldırma,
+  yalnız sahip olunan eski hook'ların geçişi; ilgisiz ayarlar ve trust korunur.
+- Linux/agy ile gerçek kayıt → model incelemesi → farklı oturumda hatırlama geçti.
+  Claude canlı model testi hesap erişimindeki 403 nedeniyle açık. Windows/macOS
+  uygulama oturumları ayrıca doğrulanmış değildir.
+- Reviewer ayrıca yapılandırılır; otomatik zamanlayıcı, tam sohbet senkronu veya
+  yeni adaptörlerde otomatik kanonik terfi kurulmaz. [Kurulum](ENTEGRASYONLAR.md).
+
+Aşağıdaki aynı günün ilk köprü sürümündeki Windows/adaptör sınırları bu paketle
+kısmen aşılmıştır; güncel destek matrisi yukarıdaki rehberdedir.
+
 # 19 Eylül 2026 — Ajanlar için ortak kasa köprüsü
 
 - Claude Code, Codex ve Antigravity global yönergelerini aynı kasaya yönlendiren

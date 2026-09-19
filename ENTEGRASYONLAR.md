@@ -13,11 +13,15 @@ Reviewer sağlayıcısı ayrıca ve açıkça yapılandırılır; hook model ça
 
 | İşletim sistemi | Python motoru | Canlı istemci kanıtı |
 |---|---|---|
-| Linux | Yerel çekirdek daha önce yerel olarak denendi; bu değişikliğin kabulü bekliyor | agy 1.1.27: altı açık insan girdisi ve başarılı Stop gözlendi; altı başarılı model cevabı iddiası yok. Claude 2.1.261 model denemesi 403 nedeniyle tamamlanamadı |
-| macOS | Yerel Python yolu; CI matrisi eklendi, koşum sonucu bekliyor | Canlı istemci doğrulaması bekliyor |
-| Windows | Yerel Python ve platform kilidi; CI matrisi eklendi, koşum sonucu bekliyor | Canlı istemci/kabuk doğrulaması bekliyor |
+| Linux | 360 testlik paket başarılı | agy 1.1.27: gerçek Stop → ayrı model incelemesi → farklı oturumda doğru geri çağırma. Claude 2.1.261 model erişimi 403 ile engellendi |
+| macOS | 360 testlik paket başarılı | Gerçek uygulama oturumu doğrulaması bekliyor |
+| Windows | 360 testlik paket başarılı; native kilit, UTF-8 ve cmd hook çalıştırma dahil | Gerçek uygulama oturumu ve uygulamanın seçtiği kabuk ayrıca doğrulanmalı |
 
-CI yapılandırması sonuç kanıtı değildir. Python 3.10+ gerekir; CI 3.12 kullanır.
+[Üç işletim sisteminin CI sonucu](https://github.com/fornhere/hafiza-os/actions/runs/35442868256) — 19 Eylül 2026.
+Her koşumda karşı işletim sistemine özgü bir test atlanır; örneğin junction testi
+Windows'ta, POSIX flock uyumu macOS/Linux'ta çalışır. Bu testler model hesabı
+veya GUI istemci desteği iddiası değildir. Python 3.10+ gerekir; CI 3.12 kullanır.
+
 Modern kurucu jq veya bash gerektirmez. İstemcinin bulunması, hook desteği ve
 komut kabuğu işletim sistemi desteğinden ayrı koşullardır.
 
@@ -105,6 +109,15 @@ py -3 -X utf8 .\araclar\client_review.py --vault 'C:\Hafıza' --reviewer-argv-js
 py -3 -X utf8 .\araclar\client_review.py --vault 'C:\Hafıza' --reviewer-argv-json '["C:\\Tools\\your-reviewer.exe"]' --apply
 py -3 -X utf8 .\araclar\client_sessions.py --vault 'C:\Hafıza' recall
 ```
+
+Antigravity CLI ile Linux'ta canlı denenmiş inceleyici örneği (CLI oturumu açık olmalı):
+
+```sh
+python3 -X utf8 araclar/client_review.py --vault "$PWD" --reviewer-argv-json '["agy","--mode","plan","--print-timeout","60s","--output-format","text","--print","Araç kullanma; yalnız verilen paketi JSON sözleşmesine göre incele. {prompt}"]' --timeout 80 --apply
+```
+
+Bu tek seferlik çalıştırmadır; düzenli inceleme istenirse kendi zamanlayıcına
+bağlanır. Kurucu kendiliğinden arka plan zamanlayıcısı kurmaz.
 
 Reviewer varsayılan olarak istemi stdin'den okur, stdout'a sözleşmedeki JSON
 kararını yazar. İstenirse argv'de tek `{prompt}` kullanılabilir; Windows toplam

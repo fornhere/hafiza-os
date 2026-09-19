@@ -2,8 +2,8 @@
 
 [Birleşik yerel kurucu](ENTEGRASYONLAR.md) varsayılan olarak yalnız yönerge,
 `--with-hooks` ile mevcut Codex adaptörünü kurar. Güven ayarını değiştirmez.
-Python 3.10+ gerekir; macOS/Windows native CI ve canlı istemci sonuçları henüz
-bekliyor. Windows string hook kabuğunu ayrıca doğrulamak gerekir.
+Python 3.10+ gerekir. Linux/macOS/Windows [360 testlik CI paketi geçti](https://github.com/fornhere/hafiza-os/actions/runs/35442868256).
+Canlı uygulama oturumu desteği ayrıdır; Windows string hook kabuğunu ayrıca doğrula.
 
 ```sh
 python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent codex --with-hooks
