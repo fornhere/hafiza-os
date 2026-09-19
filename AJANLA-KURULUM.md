@@ -7,9 +7,12 @@ kurulum sözleşmesidir; bu belge ek bir otomasyon veya gizli giriş arayüzü k
 1. İşletim sistemini, Python 3.10+ erişimini ve mevcut kasa klasörünü kontrol et.
    Kullanıcının mevcut kasasını veya ajan ayarlarını silme. Hedef zaten varsa
    yeni klasör seçimini kullanıcıyla netleştir; mevcut kasaya sıfırdan kurucu çalıştırma.
-2. Kullanılan ajanı belirle: Codex, Claude Code veya Antigravity. Kullanıcı
-   Codex içindeyse varsayılan Codex olabilir. Kurulumun kasa dosyalarını ve
-   ajan yönerge bağlantısını hazırlayacağını açıkla.
+2. Kullanılan ajanı mevcut uygulamadan belirle; belirsizse kullanıcıya sor.
+   Hazır kurucu Claude Code, Codex ve Antigravity bağlantılarını destekler.
+   Başka bir uygulamayı bunlardan biriymiş gibi seçme: README’deki manuel
+   indirme yolunu ve ajan_kur.py --agent generic --export desteğini incele.
+   Genel Markdown aktarımı otomatik kayıt adaptörü değildir. Kurulumun kasa
+   dosyalarını ve ajan yönerge bağlantısını hazırlayacağını açıkla.
 3. Sohbette önce Mem0, sonra Jev için kullan / şimdilik atla seçimini sor.
    Kullanacaksa anahtarının olup olmadığını sor; değerini sohbet içinde isteme.
    İki hizmet bağımsız ve isteğe bağlıdır. Yerel hafıza anahtarsız kullanılabilir.

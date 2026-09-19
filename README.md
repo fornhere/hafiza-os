@@ -43,9 +43,10 @@ ile Linux'ta gerçek hook → inceleme → farklı oturumda hatırlama zinciri d
 Claude Code 2.1.261 için adaptör testleri geçti.
 [Kurulum ve destek matrisi](ENTEGRASYONLAR.md).
 
-## Codex’e yapıştırarak kur
+## Yapay zekâ ajanına yapıştırarak kur
 
-Dosya ve terminal erişimi olan Codex’e aşağıdaki mesajı yapıştır:
+Dosya ve terminal erişimi olan yapay zekâ ajanına aşağıdaki mesajı yapıştır.
+Örneğin Claude Code, Codex veya Antigravity kullanabilirsin:
 
 ```text
 https://github.com/fornhere/hafiza-os adresindeki hafıza sistemini bilgisayarıma kur.
@@ -58,11 +59,13 @@ Bu hizmetleri atlayarak da kurulumu tamamlayabileyim.
 Sonunda ne kurulduğunu, neyin atlandığını ve benim yapacağım son adımı açıkla.
 ```
 
-Codex kurulumu yürütür ve seçimlerde yardımcı olur. Mevcut kurucu anahtarları
+Kullandığın ajan kurulumu yürütür ve seçimlerde yardımcı olur. Mevcut kurucu anahtarları
 **terminalde** alır; bunlar sohbet içinde otomatik açılan bir form değildir.
-Codex kullanıcıya açık bir terminal sağlayamıyorsa gizli giriş adımını senin
+Ajan kullanıcıya açık bir terminal sağlayamıyorsa gizli giriş adımını senin
 terminalinde tamamlaman için komutu verir. Yalnız sohbet erişimi olan bir
-uygulama bilgisayarına doğrudan kurulum yapamaz.
+uygulama bilgisayarına doğrudan kurulum yapamaz. Hazır kurulum bağlantıları
+Claude Code, Codex ve Antigravity içindir; diğer ajanlara Markdown yönergesi
+aktarılabilir, ancak aynı otomatik kayıt desteği varsayılmaz.
 
 ## Tek komutla kur
 
