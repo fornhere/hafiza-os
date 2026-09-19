@@ -43,6 +43,27 @@ ile Linux'ta gerçek hook → inceleme → farklı oturumda hatırlama zinciri d
 Claude Code 2.1.261 için adaptör testleri geçti.
 [Kurulum ve destek matrisi](ENTEGRASYONLAR.md).
 
+## Codex’e yapıştırarak kur
+
+Dosya ve terminal erişimi olan Codex’e aşağıdaki mesajı yapıştır:
+
+```text
+https://github.com/fornhere/hafiza-os adresindeki hafıza sistemini bilgisayarıma kur.
+Önce depodaki AJANLA-KURULUM.md yönergesini oku ve uygula.
+İşletim sistemimi ve mevcut kurulumu kontrol et; kişisel dosyalarımın üzerine yazma.
+Mem0 ve Jev kullanmak isteyip istemediğimi sohbet içinde tek tek sor.
+Anahtarım yoksa resmi anahtar sayfasını açıp almama yardımcı ol.
+API anahtarını sohbete isteme; benim erişebildiğim terminalde gizli giriş kullandır.
+Bu hizmetleri atlayarak da kurulumu tamamlayabileyim.
+Sonunda ne kurulduğunu, neyin atlandığını ve benim yapacağım son adımı açıkla.
+```
+
+Codex kurulumu yürütür ve seçimlerde yardımcı olur. Mevcut kurucu anahtarları
+**terminalde** alır; bunlar sohbet içinde otomatik açılan bir form değildir.
+Codex kullanıcıya açık bir terminal sağlayamıyorsa gizli giriş adımını senin
+terminalinde tamamlaman için komutu verir. Yalnız sohbet erişimi olan bir
+uygulama bilgisayarına doğrudan kurulum yapamaz.
+
 ## Tek komutla kur
 
 Python 3.10+ kurulu olsun. **Linux / macOS** terminaline yapıştır:
