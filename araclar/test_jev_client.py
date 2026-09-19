@@ -200,7 +200,8 @@ class ClientTests(unittest.TestCase):
             count=[]
             self.assertEqual(j._scores(raw,['x'],allow_quantized=True,quantized_counter=count),{'x':score})
             self.assertEqual(count,['x'])
-        self.config(provider='vercel')
+        self.config(provider='vercel',base_url='https://ai-gateway.vercel.sh/typesafe')
+        os.environ['AI_GATEWAY_API_KEY']='test-gateway-key'
         def response(*args):return dict(answers={'f0_c0':dict(type='score',score=.63,probabilities={'2':.03,'0':.4,'1':.56})})
         result=j.evaluate(self.vault,'q',self.cards,transport=response)
         self.assertFalse(result['degraded']);self.assertEqual(result['quantized_probability_count'],1)

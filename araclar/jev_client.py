@@ -91,12 +91,13 @@ def _environment(config):
         if not path.is_absolute() or path.is_symlink() or not path.is_file():
             raise ValueError('env_file_invalid')
         data = json.loads(path.read_text(encoding='utf-8'))
-        if not isinstance(data, dict) or set(data) != {'TYPESAFE_API_KEY'}:
+        key_name = 'AI_GATEWAY_API_KEY' if config.get('provider') == 'vercel' else 'TYPESAFE_API_KEY'
+        if not isinstance(data, dict) or set(data) != {key_name}:
             raise ValueError('env_file_invalid')
-        key = data['TYPESAFE_API_KEY']
+        key = data[key_name]
         if not isinstance(key, str) or not key or any(c.isspace() for c in key):
             raise ValueError('env_file_invalid')
-        values['TYPESAFE_API_KEY'] = key
+        values[key_name] = key
     if config.get('env_file'):
         path = Path(config['env_file'])
         if not path.is_absolute() or not path.is_file():
@@ -108,7 +109,9 @@ def _environment(config):
                 if len(value)>=2 and value[0]==value[-1] and value[0] in "\"'":
                     value=value[1:-1]
                 values[match[1]]=value
-    for name in ('TYPESAFE_API_KEY','TYPESAFE_BASE_URL'):
+    names = ('AI_GATEWAY_API_KEY',) if config.get('provider') == 'vercel' else ('TYPESAFE_API_KEY', 'TYPESAFE_BASE_URL')
+    # Eski env_file köprüleri desteklenir; Vercel anahtarı TypeSafe ortam değeriyle ezilmez.
+    for name in names:
         if name in os.environ: values[name]=os.environ[name]
     return values
 
@@ -271,7 +274,7 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
                     return result
         except (OSError,ValueError,KeyError,TypeError):
             result['diagnostics'].append('cache_unavailable')
-        key=env.get('TYPESAFE_API_KEY')
+        key=(env.get('AI_GATEWAY_API_KEY') or env.get('TYPESAFE_API_KEY')) if config['provider']=='vercel' else env.get('TYPESAFE_API_KEY')
         if not key: raise ValueError('credentials_missing')
         remaining=config['timeout']-(time.monotonic()-started)
         if remaining<=0: raise ValueError('deadline_exceeded')

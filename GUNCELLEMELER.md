@@ -1,3 +1,9 @@
+## 19 Eylül 2026 — Yönlendirmeli API kurulumu
+
+- Mem0 ve Jev için mevcut anahtar / birlikte alalım / atla seçenekleri.
+- Yeni anahtar için resmi sayfaları açan ve terminale dönüşü anlatan adımlar.
+- Vercel AI Gateway ile Jev bağlantısı; TypeSafe doğrudan anahtar desteği korunur.
+
 # 19 Eylül 2026 — Tek komutla kurulum
 
 - Linux/macOS ve Windows için tek komutlu depo indirme girişleri; Git gerekmez.

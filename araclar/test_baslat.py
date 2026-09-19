@@ -63,7 +63,7 @@ class SetupTests(unittest.TestCase):
 
     def test_keys_saved_outside_vault_and_used_by_actual_clients(self):
         vault=Path(self.args.vault);vault.mkdir();config=self.root/'secrets'
-        with patch.object(b,'secret',side_effect=['dummy-mem0','dummy-jev']), patch('builtins.input',return_value='tester'):
+        with patch.object(b,'ask_mem0',return_value=('dummy-mem0','tester')), patch.object(b,'ask_jev',return_value=('dummy-jev','typesafe')):
             status=b.optional_services(vault,config)
         self.assertEqual(status['jev'],'configured_unverified')
         with patch.dict(os.environ,{},clear=True):
@@ -79,10 +79,46 @@ class SetupTests(unittest.TestCase):
     def test_each_service_can_be_skipped_independently(self):
         for i,keys in enumerate([['',''],['dummy-mem0',''],['','dummy-jev']]):
             vault=self.root/str(i);vault.mkdir()
-            with patch.object(b,'secret',side_effect=keys),patch('builtins.input',return_value='tester'):
+            with patch.object(b,'ask_mem0',return_value=(keys[0],'tester')),patch.object(b,'ask_jev',return_value=(keys[1],'typesafe')):
                 b.optional_services(vault,self.root/'secrets')
             self.assertEqual((vault/'komuta/mem0.json').exists(),bool(keys[0]))
             self.assertEqual((vault/'komuta/jev.json').exists(),bool(keys[1]))
+
+    def test_get_keys_opens_official_pages_and_returns_to_hidden_input(self):
+        with patch('builtins.input',side_effect=['2','tester','2']), patch.object(b,'secret',side_effect=['dummy-mem0','dummy-jev']), patch.object(b,'open_site') as opened:
+            self.assertEqual(b.ask_mem0(),('dummy-mem0','tester'))
+            self.assertEqual(b.ask_jev(),('dummy-jev','vercel'))
+        self.assertEqual([c.args[0] for c in opened.call_args_list],[b.MEM0_KEYS_URL,b.VERCEL_FREE_URL,b.VERCEL_KEYS_URL])
+
+    def test_skip_never_opens_browser_or_asks_secret(self):
+        with patch('builtins.input',return_value=''), patch.object(b,'secret') as secret, patch.object(b,'open_site') as opened:
+            self.assertEqual(b.ask_mem0(),('',None))
+            self.assertEqual(b.ask_jev(),('',None))
+            secret.assert_not_called(); opened.assert_not_called()
+
+    def test_existing_provider_selection_and_invalid_menu(self):
+        for inputs,provider in [(['invalid','1',''],'vercel'),(['1','2'],'typesafe')]:
+            with patch('builtins.input',side_effect=inputs), patch.object(b,'secret',return_value='dummy'), patch.object(b,'open_site') as opened:
+                self.assertEqual(b.ask_jev(),('dummy',provider)); opened.assert_not_called()
+
+    def test_browser_failure_keeps_manual_url(self):
+        output=io.StringIO()
+        with patch.object(b.webbrowser,'open_new_tab',side_effect=OSError), contextlib.redirect_stdout(output):
+            b.open_site(b.MEM0_KEYS_URL)
+        self.assertIn(b.MEM0_KEYS_URL,output.getvalue())
+
+    def test_vercel_credentials_reach_only_vercel_endpoint(self):
+        vault=self.root/'vercel';vault.mkdir()
+        with patch.object(b,'ask_mem0',return_value=('',None)), patch.object(b,'ask_jev',return_value=('dummy-vercel','vercel')):
+            b.optional_services(vault,self.root/'secrets')
+        calls=[]
+        def transport(url,body,key,timeout):
+            calls.append((url,body['model'],key))
+            return {'answers':{q:{'type':'score','score':1.8} for q in body['questions']}}
+        with patch.dict(os.environ,{'TYPESAFE_API_KEY':'wrong-provider'},clear=True):
+            result=jev_client.evaluate(vault,'q',[{'id':'one','title':'A','statement':'B','scope':'user','domains':['all']}],transport=transport)
+        self.assertFalse(result['degraded'])
+        self.assertEqual(calls,[('https://ai-gateway.vercel.sh/typesafe/v1/systemone','typesafe-ai/jev','dummy-vercel')])
 
     def test_source_traversal_and_untrusted_symlink_rejected(self):
         for i,name in enumerate(['repo/../../escape','repo/evil']):

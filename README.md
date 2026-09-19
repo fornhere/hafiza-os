@@ -65,14 +65,23 @@ Kurucu sırayla:
 3. Obsidian kurulu değilse resmi masaüstü paketini indirir ve SHA256 değerini
    doğrular. Linux'ta AppImage çalıştırılabilir hazırlanır; Windows/macOS'ta
    indirilen kurucuyu açıp uygulamanın kurulumunu tamamla.
-4. **Mem0 API anahtarını** sorar. İstemiyorsan **Enter** ile geç.
-5. **Jev / TypeSafe API anahtarını** sorar. İstemiyorsan **Enter** ile geç.
+4. **“Mem0 API anahtarın var mı?”** diye sorar: var / birlikte alalım / atla.
+   “Birlikte alalım” seçilirse resmi Mem0 anahtar sayfasını açar; giriş yapıp
+   API Keys bölümünden anahtarı kopyalayarak terminale dönmeni anlatır.
+5. **“Jev için API anahtarın var mı?”** diye sorar: var / Vercel’den alalım / atla.
+   Yeni anahtar için Vercel model listesini ve API Keys sayfasını açar;
+   hesap/takım seçimi → Create key → kopyala → terminale dön adımlarını gösterir.
+   Mevcut anahtarın varsa Vercel veya TypeSafe sağlayıcısını seçersin.
+   Her iki soruda da **Enter** ile atlayabilirsin.
 6. Ajanın kasa yönerge bağlantısını kurar ve sıradaki adımı gösterir.
 
 API anahtarları gizli girişle alınır; kasanın ve Git'in dışında saklanır.
 Mem0 girersen kullanıcı kimliği de sorulur ve uzak arama etkinleştirilir.
-Jev girersen TypeSafe doğrudan bağlantısı `on` olarak ayarlanır. Vercel/OpenRouter
-anahtarını TypeSafe alanına girme; bu sihirbaz doğrudan TypeSafe anahtarı içindir.
+Jev girersen seçtiğin sağlayıcının bağlantısı `on` olarak ayarlanır. Vercel
+anahtarı Vercel AI Gateway’e, TypeSafe anahtarı doğrudan TypeSafe’e gider.
+19 Eylül 2026 kontrolünde [Vercel model listesinde](https://vercel.com/ai-gateway/models?freeTier=true)
+Jev **Free** görünüyordu; güncel fiyat ve hesap kotasını açılan sayfada kontrol et.
+Tarayıcı açılamazsa kurucu bağlantıyı terminalde gösterir.
 Anahtarlar kurulumda canlı API isteğiyle doğrulanmaz; yanlış anahtar hizmeti
 çalıştırmaz. Anahtarsız yerel hafıza kullanılabilir. Otomatik sohbet kaydı ve
 arka plan incelemesi ayrı kurulur: [kullanım rehberi](KULLANIM.md).

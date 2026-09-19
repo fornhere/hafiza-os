@@ -85,9 +85,19 @@ veya otomatik kanonik onay değildir; off/shadow/on sınırları korunur.
 
 ## Kurulum sihirbazı
 
-README'deki tek komut TypeSafe doğrudan API anahtarını gizli girişle alabilir.
-Enter ile geçilirse Jev kapalı kalır. Girilirse `komuta/jev.json` mode=on,
-model=jev-latest ve kasa dışındaki `credentials_file` yoluyla oluşturulur.
-JSON anahtar dosyası yalnız TYPESAFE_API_KEY içerir; değer loga yazılmaz.
-Eski env_file ve ortam değişkeni desteği sürer; ortam değişkenleri önceliklidir.
-Bu kurucu Vercel/OpenRouter anahtarlarını TypeSafe'e dönüştürmez.
+README'deki tek komut “anahtarın var mı?” sorusuyla mevcut anahtar, yeni
+Vercel anahtarı veya atlama seçeneklerini sunar. Yeni anahtar yolunda resmi
+Vercel model ve API Keys sayfaları açılır; kullanıcı adım adım yönlendirilir.
+Enter ile geçilirse Jev kapalı kalır. Anahtar gizli girişle alınır ve kasa
+dışındaki `credentials_file` dosyasına kaydedilir; loga yazılmaz.
+
+| Sağlayıcı | Model | Base URL | Anahtar alanı |
+| --- | --- | --- | --- |
+| Vercel | typesafe-ai/jev | https://ai-gateway.vercel.sh/typesafe | AI_GATEWAY_API_KEY |
+| TypeSafe | jev-latest | https://api.typesafe.ai | TYPESAFE_API_KEY |
+
+Vercel bağlantısı [resmi TypeSafe uyumlu API](https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe)
+kullanır. Her iki sağlayıcıda da `/v1/systemone` çağrısı yapılır.
+Sağlayıcıya ait ortam değişkeni özel dosyadan önceliklidir; TypeSafe ortam
+anahtarı Vercel kurulumunu değiştirmez. Eski `env_file` desteği sürer.
+Anahtarın geçerliliği kurulumda canlı istekle sınanmaz.

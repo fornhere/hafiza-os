@@ -16,6 +16,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import warnings
+import webbrowser
 import zipfile
 
 API = 'https://api.github.com/repos/fornhere/hafiza-os'
@@ -177,16 +178,82 @@ def secret(prompt):
     return value
 
 
-def optional_services(vault, config_home):
-    print('\nİsteğe bağlı bağlantılar — boş bırakıp Enter ile geçebilirsin.')
-    print('Anahtar girersen ilgili hizmete sorgu içeriği gönderilebilir. Anahtarlar ekranda görünmez.')
-    mem0 = secret('Mem0 API anahtarı [Enter: atla]: ')
-    uid = None
-    if mem0:
+MEM0_KEYS_URL = 'https://app.mem0.ai/dashboard/settings?subtab=configuration&tab=api-keys'
+VERCEL_KEYS_URL = 'https://vercel.com/d?title=AI+Gateway+API+Keys&to=%2F%5Bteam%5D%2F~%2Fai-gateway%2Fapi-keys'
+VERCEL_FREE_URL = 'https://vercel.com/ai-gateway/models?freeTier=true'
+
+
+def choose(title, options, default):
+    print('\n' + title)
+    for key, label in options.items():
+        print(f'  {key}) {label}')
+    while True:
+        answer = input(f'Seçim [Enter: {default}]: ').strip() or default
+        if answer in options:
+            return answer
+        print('Listeden bir numara yaz; Enter ile varsayılanı seçebilirsin.')
+
+
+def open_site(url):
+    print('Açılacak sayfa: ' + url)
+    try:
+        opened = webbrowser.open_new_tab(url)
+    except (webbrowser.Error, OSError):
+        opened = False
+    if not opened:
+        print('Tarayıcı açılamadı; yukarıdaki bağlantıyı kendin açabilirsin.')
+
+
+def ask_mem0():
+    print('\n[3/5] Mem0 — isteğe bağlı hafıza araması')
+    action = choose('Mem0 API anahtarın var mı?',
+                    {'1': 'Var, gireceğim', '2': 'Yok, birlikte alalım', '3': 'Şimdilik atla'}, '3')
+    if action == '3':
+        return '', None
+    if action == '2':
+        open_site(MEM0_KEYS_URL)
+        print('1. Mem0 hesabına giriş yap veya hesap oluştur.')
+        print('2. API Keys bölümünde yeni anahtar oluştur ve kopyala.')
+        print('3. Bu terminale dönüp aşağıya yapıştır. Hazır değilsen Enter ile atla.')
+    key = secret('Mem0 anahtarını yapıştır [Enter: atla]: ')
+    if not key:
+        return '', None
+    while True:
         uid = input('Mem0 kullanıcı kimliği [ben]: ').strip() or 'ben'
-        if not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', uid):
-            raise ValueError('Mem0 kimliğinde yalnız harf, rakam, nokta, tire ve alt çizgi kullan.')
-    jev = secret('Jev / TypeSafe API anahtarı [Enter: atla]: ')
+        if re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', uid):
+            return key, uid
+        print('Kimlikte yalnız harf, rakam, nokta, tire ve alt çizgi kullan.')
+
+
+def ask_jev():
+    print('\n[4/5] Jev — isteğe bağlı bilgi değerlendirmesi')
+    action = choose('Jev için API anahtarın var mı?',
+                    {'1': 'Var, gireceğim', '2': 'Yok, Vercel’den alalım', '3': 'Şimdilik atla'}, '3')
+    if action == '3':
+        return '', None
+    provider = 'vercel'
+    if action == '1':
+        selected = choose('Anahtarı nereden aldın?', {'1': 'Vercel AI Gateway', '2': 'TypeSafe'}, '1')
+        provider = 'vercel' if selected == '1' else 'typesafe'
+    else:
+        print('19 Eylül 2026 kontrolünde Jev, Vercel model listesinde Free olarak görünüyor.')
+        print('Güncel fiyatı ve hesabının kotasını açılan sayfada kontrol et; koşullar değişebilir.')
+        open_site(VERCEL_FREE_URL)
+        open_site(VERCEL_KEYS_URL)
+        print('1. Vercel’e giriş yap veya hesap oluştur; kullanacağın hesabı/takımı seç.')
+        print('2. AI Gateway → API Keys → Create key yolunu izle.')
+        print('3. Anahtara Hafiza-OS gibi bir ad ver, oluştur ve değerini hemen kopyala.')
+        print('4. Bu terminale dönüp aşağıya yapıştır. Hazır değilsen Enter ile atla.')
+    label = 'Vercel AI Gateway' if provider == 'vercel' else 'TypeSafe'
+    key = secret(label + ' anahtarını yapıştır [Enter: atla]: ')
+    return key, provider if key else None
+
+
+def optional_services(vault, config_home):
+    print('\nİki bağlantı da isteğe bağlı. Anahtarlar ekranda görünmez.')
+    print('Etkinleştirdiğin hizmete sorgu içeriği gönderilebilir.')
+    mem0, uid = ask_mem0()
+    jev, provider = ask_jev()
     if not mem0 and not jev:
         return {'mem0': 'skipped', 'jev': 'skipped'}
     ident = hashlib.sha256(str(vault).encode()).hexdigest()[:16]
@@ -197,9 +264,11 @@ def optional_services(vault, config_home):
         private_json(vault / 'komuta/mem0.json', {'enabled': True, 'user_id': uid, 'credentials_file': str(path)})
     if jev:
         path = keys_dir / 'jev.json'
-        private_json(path, {'TYPESAFE_API_KEY': jev})
-        private_json(vault / 'komuta/jev.json', {'mode': 'on', 'model': 'jev-latest', 'provider': 'typesafe',
-                     'base_url': 'https://api.typesafe.ai', 'credentials_file': str(path)})
+        vercel = provider == 'vercel'
+        private_json(path, {'AI_GATEWAY_API_KEY' if vercel else 'TYPESAFE_API_KEY': jev})
+        private_json(vault / 'komuta/jev.json', {'mode': 'on', 'model': 'typesafe-ai/jev' if vercel else 'jev-latest',
+                     'provider': provider, 'base_url': 'https://ai-gateway.vercel.sh/typesafe' if vercel else 'https://api.typesafe.ai',
+                     'credentials_file': str(path)})
     return {'mem0': 'configured_unverified' if mem0 else 'skipped',
             'jev': 'configured_unverified' if jev else 'skipped'}
 
@@ -225,7 +294,7 @@ def run(args):
     revision = args.revision or get_json(API + '/commits/main')['sha']
     if not re.fullmatch('[a-f0-9]{40}', revision):
         raise ValueError('Kaynak sürümü geçersiz.')
-    print('Hafıza dosyaları indiriliyor…', flush=True)
+    print('[1/5] Hafıza dosyaları indiriliyor…', flush=True)
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.hafiza-indir-', dir=target.parent) as tmp:
         temporary = Path(tmp)
@@ -235,6 +304,7 @@ def run(args):
         target.mkdir(mode=0o700)
         for child in source.iterdir():
             shutil.move(str(child), str(target / child.name))
+    print('[2/5] Obsidian kontrol ediliyor…', flush=True)
     obsidian = {'status': 'skipped'}
     if not args.skip_obsidian:
         try:
@@ -248,7 +318,7 @@ def run(args):
         command += ['--home', str(home)]
         if agent == 'codex':
             command += ['--codex-home', str(home / '.codex')]
-    print('Ajan bağlantısı kuruluyor…', flush=True)
+    print('[5/5] Ajan bağlantısı kuruluyor…', flush=True)
     subprocess.run(command, check=True, capture_output=True, text=True)
     subprocess.run(command + ['--apply'], check=True, capture_output=True, text=True)
     report = {'source_revision': revision, 'agent': agent, 'obsidian': obsidian, 'services': services}
