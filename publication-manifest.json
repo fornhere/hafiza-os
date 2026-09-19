@@ -25,8 +25,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Private default identity versus configurable public default only.",
-      "local_sha256": "a6245720edd6f6b2108962d0aff0342865dd41cbeb0c624e2521e7a69a95ace4",
-      "public_sha256": "4a57c046998cecce5568ae0231c6a260dacee2077574807be17d218fd7878a5b"
+      "local_sha256": "4cda7843caa36565b543307a6392c1004b782fe71c9c1093c023ec867246b666",
+      "public_sha256": "63daf24e257737712c761b429f0d392b4be76607c7ea9da5ef3dbede564fba0c"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -47,8 +47,8 @@
       "path": "araclar/konsolidasyon.py",
       "mode": "reviewed-variant",
       "reason": "Private historic exclusion, identity prefix and import start date versus generic defaults.",
-      "local_sha256": "42538e0e46cc9660967a006095fa1490a54c71d13b5e38e3e0095c6d1c644a1d",
-      "public_sha256": "0ab89cb89ae8afc410a108efb846c6aff1cbfe124a45b1a59b05c5ad1dd329e4"
+      "local_sha256": "cd6db23c8adee2dff613fb411e1a235ac4da57d7e36d602ce657b8284da92411",
+      "public_sha256": "0bbc352dd9a053a7d25a82bad1952d3bb6b0588c9e3fc72ab4dad8108dae8b4e"
     },
     {
       "path": "araclar/kullanim_kontrol.py",
@@ -124,6 +124,14 @@
     },
     {
       "path": "araclar/client_review.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/hafiza_dongusu.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/jev_answer.py",
       "mode": "shared"
     }
   ]

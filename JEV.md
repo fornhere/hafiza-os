@@ -74,3 +74,11 @@ Girdi mevcut bilgi kartı şemasında, `status: proposed` olmalıdır. Kaynağı
 Aday JSON'u en fazla24000 karakter, kaynak sayısı en fazla8; istemci sınırları ayrıca geçerlidir. Kaynaklar her aşamadan sonra doğrulanır. Destek ve ilişki çağrıları arasında yapılandırma kapanırsa doğrulanmış destek sonucu korunur, değerlendirilmemiş ilişki üretilmez. Yeni aday retrieval'a dahil olmaz; kayıt ve terfi ayrı kaynak incelemesi gerektirir.
 
 Kaynak öğrenme sırası: tamamlanmış kaynak → önerilen kart → mevcut hafızayla ayrı inceleme → gerekçeli kayıt/tekrar/erteleme → önceden dondurulmuş görev sorularıyla teslim kontrolü. Kaynak sayısını veya kart sayısını artırmak tek başına başarı ölçüsü değildir. API erişimi yoksa kaynak incelemesi yapılabilir; Jev değerlendirmesi yapılmış gibi raporlanmaz.
+
+## Bütünleşik hafıza döngüsü
+
+Bekleyen aday incelemesi, kaynaklı karar koşulları, doğrulanmış sonuçtan ders,
+görev bağlamı ve cevap atıf kontrolü için [HAFIZA-DONGUSU.md](HAFIZA-DONGUSU.md).
+Tek giriş `araclar/hafiza_dongusu.py`; bakım reviewer'ı ayrıca
+`konsolidasyon.py review-pending` kullanabilir. Bunlar semantik kalite kanıtı
+veya otomatik kanonik onay değildir; off/shadow/on sınırları korunur.

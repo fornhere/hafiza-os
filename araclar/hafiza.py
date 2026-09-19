@@ -142,6 +142,8 @@ def add_candidate(
     proposed_by: str,
     evidence: str | None = None,
     evidence_source: dict | None = None,
+    rationale: str | None = None,
+    conditions: str | None = None,
 ) -> dict[str, Any]:
     if contains_secret(statement):
         raise ValueError("aday gizli bilgi içeriyor")
@@ -157,6 +159,9 @@ def add_candidate(
     if evidence_source is not None:
         from capture_source import validate_candidate_evidence
         validate_candidate_evidence(vault, evidence_source.get("session_id"), evidence_source, evidence_source, evidence)
+    for name, value in (("rationale", rationale), ("conditions", conditions)):
+        if value is not None and (not isinstance(value, str) or len(value.strip()) < 10 or value not in source_file(vault, source_path).read_text(encoding="utf-8") or contains_secret(value)):
+            raise ValueError(name + " kaynakta aynen bulunmalı")
     normalized = " ".join(statement.casefold().split())
     for existing in load_jsonl(vault / CANDIDATE_PATH):
         if " ".join(str(existing.get("statement", "")).casefold().split()) == normalized:
@@ -177,6 +182,8 @@ def add_candidate(
         "created_at": now,
         "schema_version": 1,
     }
+    for name, value in (("rationale", rationale), ("conditions", conditions)):
+        if value is not None: candidate[name] = value
     if evidence is not None:
         candidate["evidence"] = evidence
         candidate["evidence_hash"] = statement_hash(evidence)
@@ -258,6 +265,10 @@ def promote_candidate(
             raise ValueError("kaynak kanıtı değişmiş veya kayıp")
     if candidate.get("source_content_hash") and statement_hash(source.read_text(encoding="utf-8")) != candidate["source_content_hash"]:
         raise ValueError("adayın kaynak sürümü değişmiş; yeniden incele")
+    for field in ("rationale", "conditions"):
+        value = candidate.get(field)
+        if value is not None and (not isinstance(value,str) or len(value.strip())<10 or value not in source.read_text(encoding="utf-8") or contains_secret(value)):
+            raise ValueError("karar gerekçesi veya koşulu kaynakla eşleşmiyor")
     if candidate.get("evidence_source"):
         from capture_source import validate_candidate_evidence
         origin = candidate["evidence_source"]
@@ -295,7 +306,7 @@ def promote_candidate(
         "schema_version": 1,
     }
     record["source_content_hash"] = statement_hash(source.read_text(encoding="utf-8"))
-    for field in ("evidence", "evidence_hash", "evidence_source"):
+    for field in ("evidence", "evidence_hash", "evidence_source", "rationale", "conditions"):
         if field in candidate: record[field] = candidate[field]
     if not apply:
         return {"result": "planned", "record": record}
@@ -894,6 +905,9 @@ def _build_parser() -> argparse.ArgumentParser:
     candidate.add_argument("--proposed-by", required=True)
     candidate.add_argument("--evidence", help="Kaynak dosyada aynen bulunan kısa kullanıcı beyanı")
 
+    candidate.add_argument("--rationale")
+    candidate.add_argument("--conditions")
+
     assess = sub.add_parser("candidate-assess")
     assess.add_argument("candidate_id")
 
@@ -950,7 +964,7 @@ def main(argv: list[str] | None = None) -> int:
             confidence=args.confidence,
             sensitivity=args.sensitivity,
             proposed_by=args.proposed_by,
-            evidence=args.evidence,
+            evidence=args.evidence, rationale=args.rationale, conditions=args.conditions,
         )
         _json_print(result)
         return 0

@@ -274,7 +274,8 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
             omitted.append(row['memory_id']+':card_limit'); continue
         if pinned: card_facts.append(row)
         prefix = 'Bilgi kartı: ' if resume and pinned else 'Güncel kayıt: '
-        if add(row['memory_id'],prefix+row['statement']+' (kaynak: '+row['source_path']+')'):
+        details = ''.join(' '+label+': '+row[key] for key,label in (('rationale','Gerekçe'),('conditions','Geçerlilik koşulu')) if isinstance(row.get(key),str) and row[key] in content and not h.contains_secret(row[key]))
+        if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+row['source_path']+')'):
             current_facts.append(row)
             priority,sequence,ident,text=candidates[-1]
             candidates[-1]=(4,sequence,ident,text)
@@ -422,6 +423,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     latest_output=(delivered_outputs[0] if delivered_outputs and
                    delivered_outputs[0]==output_data['outputs'][0] and
                    sum(o['verified_at']==delivered_outputs[0]['verified_at'] for o in output_data['outputs'])==1 else None)
+    result['answer_verification'] = {'command':'python3 araclar/hafiza_dongusu.py --vault <vault> verify-answer --input-json <claims.json>', 'citation_fields':['card_id or memory_id','path','sha256','quote'], 'requires_current_reviewed_card':True, 'on_failure':'Qualify or omit unsupported memory attribution; never invent a citation.'}
     result['decision_history']=(decision_data if 'decision-history' in selected else None)
     result['reuse']=(reuse_data if 'reuse' in selected else None)
     result['capsule'] = dict(enabled=resume, derived=True, project_id=result['project_id'],

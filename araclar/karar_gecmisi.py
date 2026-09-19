@@ -60,7 +60,7 @@ def history(vault, query, scope='user', limit=5, budget=1800):
         entry = dict(id=ident, scope=row['scope'], subject_key=row['subject_key'], statement=row['statement'],
                      status=row['status'], current=current, override_reason=overrides.get(ident), supersedes=row.get('supersedes'),
                      observed_at=row.get('observed_at'), valid_from=row.get('valid_from'), valid_to=row.get('valid_to'),
-                     rationale=rationale, source_path=row['source_path'], source_sha256=hashlib.sha256(raw).hexdigest())
+                     rationale=rationale, conditions=(row.get('conditions') if isinstance(row.get('conditions'),str) and row['conditions'] in content and not h.contains_secret(row['conditions']) else None), source_path=row['source_path'], source_sha256=hashlib.sha256(raw).hexdigest())
         valid.append(entry)
     if diagnostics:
         notice = 'Karar geçmişi uyarısı: çelişkili veya doğrulanamayan kayıtlar var; güncel karar varsayma.'
@@ -70,6 +70,7 @@ def history(vault, query, scope='user', limit=5, budget=1800):
         text = (f"Karar geçmişi [{label}; {entry['status']}]: {entry['statement']} "
                 f"(kayıt: {entry['id']}; tarih: {entry['observed_at'] or 'bilinmiyor'}; kaynak: {entry['source_path']}). "
                 + ('Gerekçe: '+entry['rationale'] if entry['rationale'] else 'Gerekçe kayıtlı değil.'))
+        if entry['conditions']: text += ' Koşul: '+entry['conditions']
         if len(entries) >= limit: continue
         if len('\n'.join(lines+[text])) > budget: continue
         entries.append(entry); lines.append(text); versions[entry['source_path']] = entry['source_sha256']

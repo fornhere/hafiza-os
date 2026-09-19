@@ -144,3 +144,12 @@ Aynı `--vault`, istemci/ev ve kabuk seçeneklerine `--remove --with-hooks` ekle
 planı incele, sonra `--apply` ekle. Yalnız sahip olunan birebir girdiler çıkarılır;
 kullanıcı ayarları ve trust korunur. Yalnız yönerge kaldırmak için `--with-hooks`
 kullanma. Kasayı taşımadan önce eski konumdan kaldır, yeni konumda yeniden kur.
+
+## İstemciler arasında ortak öğrenme döngüsü
+
+Claude, Codex ve Antigravity aynı kasa araçlarını kullanır. Senkron hook model
+çağrısı eklemeden, mevcut kaynak inceleme görevi sonunda
+`konsolidasyon.py --vault KASA review-pending --limit 5 --apply` çalıştırılır.
+Proje adayları için `--project-id` verilir. Yeni kurulumda ayrıca bakım görevi
+ayarlanmalıdır; komutun kurulması zamanlayıcının çalıştığını kanıtlamaz.
+Sonuçtan ders ve cevap atıf doğrulama sözleşmeleri [HAFIZA-DONGUSU.md](HAFIZA-DONGUSU.md).

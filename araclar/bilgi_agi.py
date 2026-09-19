@@ -33,7 +33,7 @@ def _safe(vault, relative):
 def _validate(vault, data):
     d=dict(data);d.pop('expected_version',None)
     required={'id','title','kind','statement','scope','domains','status','sources'}
-    allowed=required|{'examples','relations','reviewed_by','review_note'}
+    allowed=required|{'examples','relations','reviewed_by','review_note','rationale','conditions','exceptions'}
     if not required<=d.keys() or d.keys()-allowed: raise ValueError('invalid_fields')
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,100}',d['id']): raise ValueError('invalid_id')
     for k in ('title','statement','scope'):
@@ -52,6 +52,9 @@ def _validate(vault, data):
         if digest(path)!=s['sha256']:raise ValueError('source_changed')
         if not isinstance(s['evidence'],str) or len(s['evidence'].strip())<10 or s['evidence'] not in text:raise ValueError('evidence_missing')
         contents.append(text)
+    for key in ('rationale','conditions','exceptions'):
+        if key in d and (not isinstance(d[key],str) or len(d[key].strip())<10 or not any(d[key] in text for text in contents)):
+            raise ValueError('unbacked_'+key)
     for e in d.get('examples',[]):
         if set(e)-{'path','sha256','role','acceptance','evidence_source','acceptance_evidence'}:raise ValueError('invalid_example')
         p=Path(e['path']);idx=e['evidence_source']
@@ -71,6 +74,8 @@ def _validate(vault, data):
 
 def _body(d):
     lines=[f"# {d['title']}",'',d['statement'],'',f"Durum: {d['status']} | Alan: {', '.join(d['domains'])} | Kapsam: {d['scope']}",'','## Kaynaklar']
+    for key,label in (('rationale','Gerekçe'),('conditions','Koşul'),('exceptions','İstisna')):
+        if d.get(key): lines.append(label+': '+d[key])
     for s in d['sources']:lines.extend([f"- [[{s['path']}]]",f"  Kanıt: {s['evidence']}"])
     for e in d.get('examples',[]):lines.append(f"- Örnek: [{e['role']}](<{e['path']}>) — kabul: {e['acceptance']}")
     if d.get('relations'):
@@ -240,6 +245,8 @@ def _retrieve_local(vault,query,project_id=None,budget=1800):
     selected=[];transfers=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
     for _,d,transfer in ranked:
         card=f"Bilgi [{d['kind']}; {', '.join(d['domains'])}]: {d['statement']}\nKaynak: bilgi/{d['id']}.md"
+        for key,label in (('rationale','Gerekçe'),('conditions','Koşul'),('exceptions','İstisna')):
+            if d.get(key): card+='\n'+label+': '+d[key]
         if transfer:
             card='Uyarlama önerisi ['+', '.join(d['domains'])+' → '+', '.join(transfer['target_domains'])+']: '+d['statement']+'\nAktarılabilecek özellik: '+', '.join(transfer['aspects'])+'. '+transfer['reason']+' Yeni alanda kullanıcı onayı değildir; renk/font gibi belirtilmeyen özellikleri çıkarma.\nKaynak: bilgi/'+d['id']+'.md'
         for e in d.get('examples',[]):card+=f"\nÖrnek ({e['acceptance']}; {e['role']}): {e['path']}"

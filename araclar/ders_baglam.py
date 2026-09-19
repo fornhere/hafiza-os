@@ -17,6 +17,13 @@ def context(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
     text=prompt.casefold(); output=[]; used=len(header)
     for ident,row in sorted(latest(vault,'lesson').items()):
         if row['status']=='rejected': continue
+        if row.get('outcome_id') and row['status']!='verified': continue
+        if row.get('verification_hash'):
+            from bilgi_agi import digest
+            try:
+                verification=source_file(vault,row['verification_path'])
+                if digest(verification)!=row['verification_hash']: continue
+            except (ValueError,OSError,KeyError): continue
         allowed={project_id, *workflow_ids} - {None}
         owner=row.get('project_id')
         scope=row.get('scope', 'global' if not owner else 'project:'+owner)
@@ -37,6 +44,9 @@ def context(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
         expected=row.get('implementation_hash') or row.get('target_hash')
         if not expected or statement_hash(path.read_text()) != expected: continue
         block=f"Ders: {row['title']} — {row['status']}\n"+path.read_text()+f"\nKaynak: {row['source_path']}\n"
+        if row.get('observed_result'): block+='Gözlenen sonuç: '+row['observed_result']+' (genel başarı iddiası değildir).\n'
+        if row.get('conditions'): block+='Koşul: '+row['conditions']+'\n'
+        if row.get('proposal'): block+='Doğrulanmış ders: '+row['proposal']+'\n'
         if used+len(block)+(1 if output else 0)>budget: continue
         used+=len(block)+(1 if output else 0);output.append(block)
     return (header+'\n'.join(output)) if output else ''

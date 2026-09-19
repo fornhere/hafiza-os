@@ -270,3 +270,19 @@ aday için kalıcı tercih kaydedildi deme. Arka plan yazımı daha sonra olduys
 önceki yanıtta yapılmış gibi söyleme. Mevcut bakımın anlamlı değişiklik sonucu
 bildirilebilir; kullanıcıdan ayrıca kayıt onayı veya puan istenmez. Sırları
 ve özel kaydetmeme kapsamını bildirimde de koru.
+
+## Kaynaklı öğrenme ve cevap atıfları
+
+Normal görevde `gorev_baglam` paketindeki karar koşullarını, istisnaları ve
+doğrulanmış dersleri kullan; başarısız sonuçtan çıkan uyarıyı başarılı yöntem
+sayma. Hafızaya dayalı önemli iddiaları cevap öncesi `hafiza_dongusu.py
+verify-answer` ile yapılandırılmış kaynak atıfları üzerinden denetle.
+`degraded`/`uncertain` onay değildir; kaynağı doğrudan incele veya iddiayı daralt.
+Tam komutlar ve JSON sözleşmeleri HAFIZA-DONGUSU.md içindedir.
+
+Arka plan reviewer normal kaynak/politika kontrollerinden sonra sınırlı
+`konsolidasyon.py review-pending --limit 5 --apply` turu çalıştırır; görev
+ajanı otomatik terfi yapmaz. Gerçek iş sonucu varsa `outcome` ders adayı
+oluşturur, bağımsız reviewer `review-lesson` ile kapsamı ve sonucu doğrular.
+İlk beş mesaj/kaydetmeme/sır kuralları sürer; bu akış sohbet sonunda kayıt
+isteme veya senkron hook içinde model çağırma gerekçesi değildir.

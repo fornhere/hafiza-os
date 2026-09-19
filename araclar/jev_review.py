@@ -20,6 +20,7 @@ def packet(row):
     """Only exact validated quotes; never surrounding source text or example files."""
     return dict(id=row['id'], title=row['title'], scope=row['scope'], domains=row['domains'],
                 statement=json.dumps(dict(stored_claim=row['statement'], kind=row['kind'],
+                    applicability={key:row[key] for key in ('rationale','conditions','exceptions') if key in row},
                     evidence=[dict(quote=s['evidence'], source_sha256=s['sha256'])
                               for s in row['sources']]), ensure_ascii=False))
 
@@ -112,7 +113,7 @@ def audit(vault, project_id=None, card_ids=None, anchor_id=None):
     return result
 
 
-def audit_proposed(vault, candidate, project_id=None):
+def audit_proposed(vault, candidate, project_id=None, allow_registered=False):
     """Check an unregistered proposal; validated advisory output cannot promote it.
 
     Relations compare up to eight eligible same-scope/domain existing cards to
@@ -135,7 +136,8 @@ def audit_proposed(vault, candidate, project_id=None):
     except (ValueError,OSError,TypeError,KeyError): raise ValueError('candidate_source_or_fields_invalid') from None
     rows,diagnostics=knowledge._rows(vault)
     # A new proposal may not impersonate any existing card identity.
-    if (vault/'bilgi'/f"{proposal['id']}.md").exists(): raise ValueError('candidate_id_exists')
+    registered=vault/'bilgi'/f"{proposal['id']}.md"
+    if registered.exists() and (not allow_registered or knowledge._read(registered)!=proposal): raise ValueError('candidate_id_exists')
     eligible=[r for r in rows if r['scope']==proposal['scope'] and
               ('all' in r['domains'] or 'all' in proposal['domains'] or set(r['domains']) & set(proposal['domains']))]
     eligible.sort(key=lambda r:r['id'])
@@ -150,7 +152,8 @@ def audit_proposed(vault, candidate, project_id=None):
         current,_=knowledge._rows(vault)
         lookup={r['id']:r for r in current}
         if any(lookup.get(r['id'])!=r for r in related): raise ValueError('source_changed')
-        if (vault/'bilgi'/f"{proposal['id']}.md").exists(): raise ValueError('candidate_registered_during_evaluation')
+        if registered.exists() and (not allow_registered or knowledge._read(registered)!=proposal): raise ValueError('candidate_registered_during_evaluation')
+        if allow_registered and not registered.exists(): raise ValueError('candidate_disappeared')
         versions_now=versions(vault,related)
         for source in checked['sources']: versions_now[source['path']]=source['sha256']
         for example in checked.get('examples',[]): versions_now[example['path']]=example['sha256']

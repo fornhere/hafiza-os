@@ -144,3 +144,10 @@ python3 araclar/hafiza.py --vault . context 'ilgili karar' --limit 5 --char-budg
 ## Lisans
 
 MIT.
+
+### Kaynaklı öğrenme döngüsü
+
+[Hafıza döngüsü](HAFIZA-DONGUSU.md): sınırlı aday incelemesi, gerekçe/koşul
+saklama, doğrulanmış iş sonucundan ders, görev bağlamı ve cevap atıf kontrolü.
+`araclar/hafiza_dongusu.py --help` ile tek giriş; semantik danışmanlık mevcut
+Jev off/shadow/on ayarını kullanır. Arka plan reviewer turu ayrıca yapılandırılır.

@@ -107,6 +107,8 @@ def knowledge(vault, query, project_id, budget, local):
     for ident in order:
         r = by_id[ident]
         card = f"Bilgi [{r['kind']}; {', '.join(r['domains'])}; {r['scope']}]: {r['statement']}\nKaynak: bilgi/{ident}.md"
+        for key,label in (('rationale','Gerekçe'),('conditions','Koşul'),('exceptions','İstisna')):
+            if r.get(key): card+='\n'+label+': '+r[key]
         for e in r.get('examples', []):
             card += f"\nÖrnek ({e['acceptance']}; {e['role']}): {e['path']}"
         if len('\n\n'.join(cards + [card])) > max(0, budget): omitted.append(ident); continue
