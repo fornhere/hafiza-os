@@ -133,4 +133,22 @@ class KnowledgeTests(unittest.TestCase):
             b.assess_source(self.v,dict(entry,path=source_id.replace('/','\\')))
 
 
+    def test_transfer_delivers_conditions_exceptions_and_rationale_within_budget(self):
+        self.d.update(rationale='Okunabilirliği artırdığı için.',conditions='Yalnız sunum için geçerlidir.',exceptions='Web sitesinde uygulanmaz.')
+        quote=' '.join([self.d['sources'][0]['evidence'],self.d['rationale'],self.d['conditions'],self.d['exceptions']])
+        self.source.write_text(quote)
+        self.d['sources'][0].update(sha256=b.digest(self.source),evidence=quote)
+        self.register()
+        full=b.retrieve(self.v,'site tipografisi',budget=5000)
+        self.assertEqual(len(full['transfers']),1)
+        self.assertIn('Uyarlama önerisi',full['text'])
+        for key,label in (('rationale','Gerekçe'),('conditions','Koşul'),('exceptions','İstisna')):
+            self.assertIn(label+': '+self.d[key],full['text'])
+        exact=b.retrieve(self.v,'site tipografisi',budget=len(full['text']))
+        self.assertEqual(exact['text'],full['text'])
+        short=b.retrieve(self.v,'site tipografisi',budget=len(full['text'])-1)
+        self.assertFalse(short['transfers'])
+        self.assertNotIn(self.d['statement'],short['text'])
+        self.assertLessEqual(len(short['text']),len(full['text'])-1)
+
 if __name__=='__main__':unittest.main()

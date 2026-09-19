@@ -39,7 +39,7 @@ def verify(vault, claims, project_id=None):
                     used_memories[record['memory_id']]=record
                     evidence.append(dict(path=cite['path'],sha256=cite['sha256'],evidence=quote))
                     watched[cite['path']]=cite['sha256']
-                    watched[str(h.CATALOG_PATH)]=b.digest(vault/h.CATALOG_PATH)
+                    watched[h.CATALOG_PATH.as_posix()]=b.digest(vault/h.CATALOG_PATH)
                     continue
                 except (ValueError,OSError):reason='citation_source_unavailable';break
             row = rows.get(cite.get('card_id'))

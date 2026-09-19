@@ -245,10 +245,10 @@ def _retrieve_local(vault,query,project_id=None,budget=1800):
     selected=[];transfers=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
     for _,d,transfer in ranked:
         card=f"Bilgi [{d['kind']}; {', '.join(d['domains'])}]: {d['statement']}\nKaynak: bilgi/{d['id']}.md"
-        for key,label in (('rationale','Gerekçe'),('conditions','Koşul'),('exceptions','İstisna')):
-            if d.get(key): card+='\n'+label+': '+d[key]
         if transfer:
             card='Uyarlama önerisi ['+', '.join(d['domains'])+' → '+', '.join(transfer['target_domains'])+']: '+d['statement']+'\nAktarılabilecek özellik: '+', '.join(transfer['aspects'])+'. '+transfer['reason']+' Yeni alanda kullanıcı onayı değildir; renk/font gibi belirtilmeyen özellikleri çıkarma.\nKaynak: bilgi/'+d['id']+'.md'
+        for key,label in (('rationale','Gerekçe'),('conditions','Koşul'),('exceptions','İstisna')):
+            if d.get(key): card+='\n'+label+': '+d[key]
         for e in d.get('examples',[]):card+=f"\nÖrnek ({e['acceptance']}; {e['role']}): {e['path']}"
         for r in d.get('relations',[]):
             if r['target'] in valid_ids:card+=f"\nİlişki: {r['target']} — {r['reason']}"

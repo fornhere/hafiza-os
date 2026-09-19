@@ -1,3 +1,12 @@
+# 19 Eylül 2026 — Kaynaklı öğrenme döngüsü ve taşınabilirlik düzeltmeleri
+
+- Bekleyen hafıza adaylarına sınırlı kaynak/tekrar/çelişki incelemesi; kayıt terfisi ayrı incelemede kalır.
+- Karar gerekçesi, uygulanma koşulu ve istisnaları görev bağlamına taşınır.
+- Doğrulanmış olumlu/olumsuz iş sonuçlarından incelemeli dersler ve kaynaklı cevap atfı kontrolü.
+- Windows katalog yolu normalizasyonu: ilişki incelemesi ve `memory_id` cevap doğrulaması aynı güvenli yol sözleşmesini kullanır.
+- Alanlar arası uyarlama metninde gerekçe, koşul ve istisnaların kaybolması düzeltildi; bunlar bağlam bütçesine dahildir.
+- [Komutlar ve sınırlar](HAFIZA-DONGUSU.md). Jev off/shadow/on davranışı korunur; test başarısı genel semantik kalite üstünlüğü değildir.
+
 # 2026.09.19.1 — Taşınabilir motor ve yerel ajan adaptörleri
 
 - Linux/macOS/Windows için standart kütüphaneli süreç kilidi; UTF-8, satır sonu ve

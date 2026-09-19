@@ -51,7 +51,7 @@ def catalog_relations(vault, candidate, proposal):
     omitted=max(0,len(peers)-8);peers=peers[:8]
     result=dict(comparisons=[],omitted_count=omitted,checked_count=0,status='not_needed')
     if not peers:return result
-    versions={str(h.CATALOG_PATH):catalog_before}
+    versions={h.CATALOG_PATH.as_posix():catalog_before}
     for row in peers+[proposal]:versions.update({r['path']:r['sha256'] for r in row['sources']})
     try:unchanged=all(b.digest(b._safe(vault,path))==sha for path,sha in versions.items())
     except (ValueError,OSError):unchanged=False
@@ -90,8 +90,8 @@ def review_pending(vault, project_id=None, limit=5, apply=False):
     done={r['receipt_id'] for r in prior if r.get('status') not in ('degraded','disabled')}
     results=[]; skipped=0
     # Config and comparison corpus invalidate previous advice, as do source revisions.
-    corpus={str(p.relative_to(vault)):b.digest(p) for p in sorted((vault/'bilgi').glob('*.md'))}
-    if (vault/h.CATALOG_PATH).exists():corpus[str(h.CATALOG_PATH)]=b.digest(vault/h.CATALOG_PATH)
+    corpus={p.relative_to(vault).as_posix():b.digest(p) for p in sorted((vault/'bilgi').glob('*.md'))}
+    if (vault/h.CATALOG_PATH).exists():corpus[h.CATALOG_PATH.as_posix()]=b.digest(vault/h.CATALOG_PATH)
     # Peer eligibility depends on source files too, not only stored pinned hashes.
     peer_paths=set()
     for path in sorted((vault/'bilgi').glob('*.md')):

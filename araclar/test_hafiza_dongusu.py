@@ -3,7 +3,7 @@ import io
 import json
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest.mock import patch
 import bilgi_agi as b
 import hafiza as h
@@ -72,7 +72,9 @@ class Lifecycle(unittest.TestCase):
         h.add_candidate(self.v,statement='Sunum için uzun cümle kullan.',**args)
         def fake(v,q,cards,**kw):
             return dict(mode='on',degraded=False,facet_scores={i:{c['id']:2 if i==(1 if kw['purpose']=='memory_review' else 0) else 0 for c in cards} for i in range(len(kw['facets']))})
-        with patch.object(jev_client,'evaluate',side_effect=fake) as call:
+        class WindowsSpelling(PureWindowsPath):
+            def __fspath__(self): return self.as_posix()
+        with patch.object(h,'CATALOG_PATH',WindowsSpelling(h.CATALOG_PATH.as_posix())), patch.object(jev_client,'evaluate',side_effect=fake) as call:
             result=d.review_pending(self.v,'p',apply=True)
         row=result['reviews'][0]['row']
         self.assertEqual(row['deterministic_assessment']['result'],'conflict')

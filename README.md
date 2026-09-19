@@ -24,6 +24,9 @@ okuma, kaynaklı geri çağırma ve oturum kaydı farklı katmanlardır.
 - **İstersen erişimi genişlet:** [Mem0](zihin/hafıza-sistemi.md) isteğe bağlı
   indeks, [Jev](JEV.md) varsayılan kapalı erişim/inceleme danışmanıdır.
   Kanonik kaynak yine yerel kasadır.
+- **Deneyimi sonraki işe taşı:** [öğrenme döngüsü](HAFIZA-DONGUSU.md) ile
+  sonuçlardan incelemeli dersler çıkar; karar koşullarını ve istisnaları koru,
+  hafızaya dayalı cevapların kaynaklarını kontrol et.
 
 ## Hangi ajanla?
 
@@ -34,7 +37,7 @@ okuma, kaynaklı geri çağırma ve oturum kaydı farklı katmanlardır.
 | Antigravity CLI (`agy`) | `~/.gemini/GEMINI.md` | PreInvocation/Stop, sessiz episodik aday |
 | Diğer ajanlar | Seçilen Markdown | Yalnız yönerge aktarımı |
 
-Linux, macOS ve Windows'ta **360 testlik paket başarılı**: [gerçek OS koşumu](https://github.com/fornhere/hafiza-os/actions/runs/35442868256).
+2026.09.19.1 sürümünün **360 testlik paketi Linux, macOS ve Windows’ta başarılı**: [gerçek OS koşumu](https://github.com/fornhere/hafiza-os/actions/runs/35442868256).
 İşletim sistemine özgü bir test diğer platformda atlanır. Antigravity CLI 1.1.27
 ile Linux'ta gerçek hook → inceleme → farklı oturumda hatırlama zinciri doğrulandı.
 Claude Code 2.1.261 için adaptör testleri geçti.
@@ -98,6 +101,9 @@ bu kamu deposuna yükleme.
 
 ## Son eklenenler
 
+- **19 Eylül:** [kaynaklı öğrenme döngüsü](HAFIZA-DONGUSU.md): aday incelemesi,
+  karar gerekçeleri ve koşulları, doğrulanmış sonuçlardan ders çıkarma ve cevap atıf kontrolü.
+
 - **19 Eylül, 2026.09.19.1:** yerel Windows/macOS/Linux motoru; Claude/Antigravity
   oturum adaptörleri, ortak makbuz erişimi, güvenli hook kurulum/geçişi ve üç OS testi.
 - **19 Eylül:** üç istemci için ortak yönerge kurucusu ve genel Markdown aktarımı.
@@ -144,10 +150,3 @@ python3 araclar/hafiza.py --vault . context 'ilgili karar' --limit 5 --char-budg
 ## Lisans
 
 MIT.
-
-### Kaynaklı öğrenme döngüsü
-
-[Hafıza döngüsü](HAFIZA-DONGUSU.md): sınırlı aday incelemesi, gerekçe/koşul
-saklama, doğrulanmış iş sonucundan ders, görev bağlamı ve cevap atıf kontrolü.
-`araclar/hafiza_dongusu.py --help` ile tek giriş; semantik danışmanlık mevcut
-Jev off/shadow/on ayarını kullanır. Arka plan reviewer turu ayrıca yapılandırılır.
