@@ -1,7 +1,7 @@
 import json
 import os
 import tempfile
-import time
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -70,10 +70,49 @@ class ClientTests(unittest.TestCase):
         self.assertFalse((self.vault/'nope').exists())
     def test_deadline(self):
         self.config(timeout=0.02)
-        def slow(*args): time.sleep(0.1); return {}
-        start=time.monotonic()
-        result=j.evaluate(self.vault,'q',self.cards,transport=slow)
-        self.assertLess(time.monotonic()-start,0.09)
+        entered=threading.Event()
+        release=threading.Event()
+        returned=threading.Event()
+        transport_threads=[]
+        timeouts=[]
+        results=[]
+        errors=[]
+        guard=10  # Deadlock guard, not a caller-latency performance assertion.
+        def stalled(endpoint,body,key,timeout):
+            transport_threads.append(threading.current_thread())
+            timeouts.append(timeout)
+            entered.set()
+            release.wait()
+            return {}
+        def call():
+            try:
+                results.append(j.evaluate(self.vault,'q',self.cards,transport=stalled))
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                returned.set()
+        caller=threading.Thread(target=call,daemon=True)
+        # Freeze elapsed-time bookkeeping so slow setup cannot exhaust the budget
+        # before transport starts. Queue.get still uses its real timed wait.
+        with patch.object(j.time,'monotonic',return_value=0):
+            caller.start()
+            try:
+                self.assertTrue(entered.wait(guard),'transport did not start')
+                self.assertTrue(returned.wait(guard),'caller waited for stalled transport')
+                self.assertFalse(release.is_set())
+                self.assertTrue(transport_threads[0].is_alive())
+            finally:
+                release.set()
+                caller.join(guard)
+                for worker in transport_threads:
+                    worker.join(guard)
+        self.assertFalse(caller.is_alive(),'caller did not stop during cleanup')
+        self.assertTrue(all(not worker.is_alive() for worker in transport_threads))
+        self.assertEqual(errors,[])
+        self.assertEqual(timeouts,[0.02])
+        self.assertEqual(len(results),1)
+        result=results[0]
+        self.assertTrue(result['degraded'])
         self.assertIn('deadline_exceeded',result['diagnostics'])
     def test_bad_distribution(self):
         self.config()
