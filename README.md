@@ -37,9 +37,8 @@ okuma, kaynaklı geri çağırma ve oturum kaydı farklı katmanlardır.
 Linux, macOS ve Windows'ta **360 testlik paket başarılı**: [gerçek OS koşumu](https://github.com/fornhere/hafiza-os/actions/runs/35442868256).
 İşletim sistemine özgü bir test diğer platformda atlanır. Antigravity CLI 1.1.27
 ile Linux'ta gerçek hook → inceleme → farklı oturumda hatırlama zinciri doğrulandı.
-Claude Code 2.1.261 için adaptör testleri geçti; canlı model denemesi hesap
-erişimindeki 403 nedeniyle tamamlanamadı. macOS/Windows'taki uygulama oturumları
-ayrıca canlı doğrulanmış değildir. [Kurulum ve destek matrisi](ENTEGRASYONLAR.md).
+Claude Code 2.1.261 için adaptör testleri geçti.
+[Kurulum ve destek matrisi](ENTEGRASYONLAR.md).
 
 ## Hızlı başlangıç
 

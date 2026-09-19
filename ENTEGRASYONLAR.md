@@ -11,11 +11,14 @@ Reviewer sağlayıcısı ayrıca ve açıkça yapılandırılır; hook model ça
 | Antigravity CLI (`agy`) | `~/.gemini/GEMINI.md` | `config/hooks.json`: `hafiza-os` grubunda doğrudan PreInvocation ve Stop dizileri |
 | generic | `--export` Markdown | Yok; hook seçeneği reddedilir |
 
-| İşletim sistemi | Python motoru | Canlı istemci kanıtı |
-|---|---|---|
-| Linux | 360 testlik paket başarılı | agy 1.1.27: gerçek Stop → ayrı model incelemesi → farklı oturumda doğru geri çağırma. Claude 2.1.261 model erişimi 403 ile engellendi |
-| macOS | 360 testlik paket başarılı | Gerçek uygulama oturumu doğrulaması bekliyor |
-| Windows | 360 testlik paket başarılı; native kilit, UTF-8 ve cmd hook çalıştırma dahil | Gerçek uygulama oturumu ve uygulamanın seçtiği kabuk ayrıca doğrulanmalı |
+| İşletim sistemi | Python motoru |
+|---|---|
+| Linux | 360 testlik paket başarılı |
+| macOS | 360 testlik paket başarılı |
+| Windows | 360 testlik paket başarılı; native kilit, UTF-8 ve cmd hook çalıştırma dahil |
+
+Linux'ta agy 1.1.27 ile gerçek Stop → ayrı model incelemesi → farklı oturumda
+doğru geri çağırma zinciri doğrulandı.
 
 [Üç işletim sisteminin CI sonucu](https://github.com/fornhere/hafiza-os/actions/runs/35442868256) — 19 Eylül 2026.
 Her koşumda karşı işletim sistemine özgü bir test atlanır; örneğin junction testi

@@ -8,8 +8,6 @@
 - `ajan_kur.py --with-hooks`: yedekli, tekrar çalıştırılabilir kurulum/kaldırma,
   yalnız sahip olunan eski hook'ların geçişi; ilgisiz ayarlar ve trust korunur.
 - Linux/agy ile gerçek kayıt → model incelemesi → farklı oturumda hatırlama geçti.
-  Claude canlı model testi hesap erişimindeki 403 nedeniyle açık. Windows/macOS
-  uygulama oturumları ayrıca doğrulanmış değildir.
 - Reviewer ayrıca yapılandırılır; otomatik zamanlayıcı, tam sohbet senkronu veya
   yeni adaptörlerde otomatik kanonik terfi kurulmaz. [Kurulum](ENTEGRASYONLAR.md).
 
