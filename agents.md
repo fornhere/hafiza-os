@@ -1,11 +1,25 @@
 # AGENTS.md — Anayasa
 
 Bu dosya bu hafızanın anayasasıdır. Her oturumun ilk okuduğu şey budur.
-Buradaki kurallar, o an aklına daha iyi gelen her şeyin üstündedir.
+Bu yerel sözleşme, istemcinin sistem/geliştirici talimatlarını veya kullanıcının
+açık görev kapsamını geçersiz kılmaz.
 
 > Kurulumdan sonra bu dosya **senindir.** Aşağıdaki maddeler bir başlangıç
 > noktasıdır, kutsal metin değil. Kendi çalışma biçimine uymayan maddeyi
 > değiştir — ama boş bırakma. Anayasası olmayan hafıza, hafıza değil klasördür.
+
+## Bu depoda geliştirme yapıyorsan
+
+Bu kamu deposu kişisel hafıza değil, paylaşılabilir kod ve kasa şablonudur.
+Kod, test veya dokümantasyon görevinde önce [CONTRIBUTING.md](CONTRIBUTING.md)
+rehberini oku. Şablon kimlik/öncelik dosyalarını gerçek kullanıcı bilgisi sayma;
+görev sonucunu bu şablonlara veya kişisel kasaya otomatik yazma. Aşağıdaki
+kasa açılış ve bakım akışı kişisel kullanım içindir. Devredilmiş geliştirme
+ajanı yeni bir kişisel ana oturum başlatmaz.
+
+Komut örnekleri Linux/macOS içindir. Windows PowerShell'de `python3` yerine
+`py -3 -X utf8` kullan; POSIX `export` yerine `$env:AD = "değer"` yaz.
+Çalışma kökünü ve `--vault` hedefini her zaman doğrula.
 
 ---
 
@@ -104,7 +118,8 @@ Eski zorunlu shell kapanış protokolü modern native kurulum için geçerli de�
 - `komuta/bu-hafta.md` — iş bitince, iş eklenince, öncelik değişince.
 - `komuta/ajan-briefingi.md` — yeni bir konu türü doğduğunda.
 
-Güncelleme bir commit'tir. "Güncelledim" demek güncellemek değildir.
+Güncellemeyi dosyadan geri okuyarak doğrula. Commit yalnız çalışma kapsamı
+gerektiriyorsa atılır; her hafıza bakımı için commit zorunlu değildir.
 
 ---
 
