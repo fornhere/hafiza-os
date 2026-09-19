@@ -2,6 +2,10 @@
   "version": 1,
   "files": [
     {
+      "path": "araclar/ajan_kur.py",
+      "mode": "shared"
+    },
+    {
       "path": "araclar/capture_source.py",
       "mode": "shared"
     },

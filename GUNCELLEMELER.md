@@ -1,3 +1,30 @@
+# 19 Eylül 2026 — Ajanlar için ortak kasa köprüsü
+
+- Claude Code, Codex ve Antigravity global yönergelerini aynı kasaya yönlendiren
+  standart kütüphaneli `ajan_kur.py`; diğer ajanlar için açık Markdown aktarımı.
+- Varsayılan dry-run, yalnız değişimde yedek, yönetilen blok, kaldırma ve
+  yazmadan önce bozuk işaret/sembolik bağlantı kontrolleri.
+- Hook, güven ayarı, otomasyon veya transcript aktarımı kurulmaz. Mevcut
+  Claude/Codex kurulumları ayrı kalır; Antigravity/generic transcript adaptörü yoktur.
+- Yerel Windows bloğu yalnız manuel, bütçeli dosya okuması sunar; kaynak
+  doğrulamalı CLI erişimi iddiası veya çalışmayan Python erişim komutu üretmez.
+  Erişim/konsolidasyon araçları POSIX `fcntl` nedeniyle yerel Windows'ta
+  desteklenmez. Tam motor ve hook'lar WSL içinde, WSL'den görünen yollarla
+  ayrı kurulum gerektirir. macOS canlı denenmedi; Windows canlı kabulü yoktur.
+- README yenilendi; platform sınırları ve canlı smoke adımları
+  [entegrasyon rehberinde](ENTEGRASYONLAR.md). Yeni köprünün kabulü ayrıca doğrulanır.
+
+# 18 Eylül 2026 — Jev danışmanı ve kaynaklı konu dosyaları
+
+- [Jev](JEV.md): varsayılan kapalı, gölge/açık modlu isteğe bağlı erişim
+  sıralaması; kaynak desteği, tekrar ve çelişki için salt-okunur inceleme.
+  Model sonucu öneridir; kanonik yazım veya kullanıcı onayı üretmez.
+- [Konu sentezi](KONU-SENTEZI.md): incelenmiş bilgi kartlarını kaynak ve kapsamla
+  birleştiren, Obsidian'a aktarılabilen türetilmiş konu dosyaları. Kaynak sürümü
+  yeniden denetlenir; dışa aktarım anlık görüntüdür.
+- Bu özellikler otomatik bilgi doğruluğu, bütün doğal dil sorularında başarı
+  veya ölçülmüş zaman kazancı iddiası değildir.
+
 # 2026.09.18 — Hafızanın görünür etkisi
 
 Kaynaklı kullanım açıklaması ve geri okumayla doğrulanan değişiklik bildirimi eklendi. Bağlama gelme, ajan kullanım beyanı ve gerçek yazım ayrı tutulur. Yeni kapanış zorlaması yok.

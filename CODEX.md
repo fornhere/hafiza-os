@@ -1,6 +1,12 @@
 # Codex ve düzenli hafıza incelemesi
 
-Gereksinimler: Linux/macOS, Python 3.10+ ve hook desteği olan Codex.
+Yalnız ortak kasa yönergesi için [ajan entegrasyonları](ENTEGRASYONLAR.md)
+rehberindeki `ajan_kur.py` yeterlidir; aşağıdaki mevcut akış hook ve ayrı
+konsolidasyon kurulumu içindir. Köprü bu davranışı değiştirmez.
+
+Gereksinimler: Python 3.10+, POSIX araçları ve hook desteği olan Codex.
+Linux mevcut test platformudur; macOS/Windows canlı denenmiş sayılmaz.
+Windows tam shell akışı için WSL gerekir.
 Bu komutları hafıza kasasının kökünde çalıştır. Mevcut Claude kurulumu için
 `kur.sh` kullanılmaya devam eder.
 
