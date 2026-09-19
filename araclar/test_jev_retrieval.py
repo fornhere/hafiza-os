@@ -75,6 +75,21 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(result['jev']['facet_scores'][1]['short'], 0)
         self.assertIn('eksikliği varsayımla doldurma', result['text'])
 
+    def test_video_umbrella_keeps_narration_and_assist_only_suggests(self):
+        self.config('on')
+        with patch.object(jev_client, 'evaluate', side_effect=self.high):
+            result = b.retrieve(self.v, 'Video için anlatı kaynağı')
+        self.assertIn('short', [r['id'] for r in result['records']])
+        config=json.loads((self.v/'komuta/jev.json').read_text())
+        config.update(mode='shadow',retrieval_mode='assist')
+        (self.v/'komuta/jev.json').write_text(json.dumps(config))
+        with patch.object(jev_client, 'evaluate', side_effect=self.high):
+            result=b.retrieve(self.v,'İfadelerin bağlantısını hatırlat')
+        self.assertEqual(result['records'],[])
+        self.assertIn('short',result['suggested_ids'])
+        self.assertIn('okumadan tercih/onay sayma',result['text'])
+        self.assertLessEqual(len(result['text']),1800)
+
     def test_scope_proposed_and_stale_rows_never_sent(self):
         self.add(id='private', scope='project:other')
         self.add(id='proposed', status='proposed')

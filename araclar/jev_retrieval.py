@@ -44,7 +44,7 @@ def facets(query):
     return [item['text'] for item in facet_plan(query)]
 
 def mode(vault):
-    try: return jev_client.load_config(vault).get('mode', 'off')
+    try: return jev_client.purpose_mode(jev_client.load_config(vault), 'retrieval')
     except (ValueError, OSError): return 'invalid'
 
 def versions(vault, rows):
@@ -86,15 +86,19 @@ def knowledge(vault, query, project_id, budget, local):
     scores = result.get('scores', {})
     by_id = {r['id']: r for r in rows}
     per_facet = result.get('facet_scores') or {'0': scores}
+    # Video is a workflow umbrella: narration and cover evidence remain in their
+    # original domains. Project/source gates still run before the model.
+    guarded_domains = [set(f['domains']) | ({'sunum', 'thumbnail'} if 'video' in f['domains'] else set())
+                       | ({d for r in rows for d in r['domains']} if 'proje' in f['domains'] else set()) for f in plan]
     # Apply each explicit domain guard to its own clause. An implicit clause
     # remains open to semantic support, never to inferred cross-domain approval.
     per_facet = {f: {i: score if not plan[int(f)]['domains'] or 'all' in by_id[i]['domains']
-                        or set(plan[int(f)]['domains']).intersection(by_id[i]['domains']) else 0
+                        or guarded_domains[int(f)].intersection(by_id[i]['domains']) else 0
                      for i, score in values.items() if i in by_id}
                  for f, values in per_facet.items()}
     scores = {i: max((v.get(i, 0) for v in per_facet.values()), default=0) for i in by_id}
     result['facet_scores'] = per_facet; result['scores'] = scores
-    result['routing'] = 'scoped_candidates_clause_domain_guards_v2'
+    result['routing'] = 'scoped_candidates_clause_domain_guards_v3'
     result['facet_domains'] = [f['domains'] for f in plan]
     # Cover each supported facet first, then fill by score. No unqualified union.
     order = []
@@ -119,6 +123,21 @@ def knowledge(vault, query, project_id, budget, local):
                          else 'unresolved') for f, v in per_facet.items()}
     result['proposed_ids'] = sorted(delivered)
     result['facet_count'] = len(facets(query))
+    if active == 'assist':
+        # Extra reading candidates, never promoted to delivered user preferences.
+        out=local(); existing={r['id'] for r in out.get('records',[])}
+        suggestions=[]; added=[]
+        for r in selected:
+            if r['id'] in existing or len(suggestions)>=2: continue
+            path=f"bilgi/{r['id']}.md"
+            line=f"Jev kaynak adayı (okumadan tercih/onay sayma): {r['title']} — {path}"
+            if len(out['text'])+sum(len(x)+1 for x in added)+len(line)+1>max(0,budget): continue
+            added.append(line);suggestions.append(r['id'])
+            out.setdefault('source_versions',{}).update({k:v for k,v in before.items() if k==path or k in [s['path'] for s in r['sources']] + [e['path'] for e in r.get('examples',[])]})
+        if added: out['text']='\n'.join([out['text'],*added]).strip()
+        result['suggested_ids']=suggestions;out['jev']=result
+        out['suggested_ids']=suggestions
+        return out
     if active == 'shadow':
         out = local(); out['jev'] = result; return out
     # On mode delivers direct evidence only when candidates exist. Shadow/off
@@ -152,6 +171,11 @@ def catalog(vault, query, eligible, local_rank, scope):
         except OSError: pass
     if len(still_valid) != len(eligible):
         result = dict(result, degraded=True, diagnostics=result.get('diagnostics', []) + ['source_changed_during_evaluation'])
+    if active == 'assist' and not result.get('degraded'):
+        local=local_rank(still_valid,query); present={r['memory_id'] for r in local}
+        result['suggested_ids']=[r['memory_id'] for r in sorted(still_valid,key=lambda r:-result.get('scores',{}).get(r['memory_id'],0))
+            if r['memory_id'] not in present and result.get('scores',{}).get(r['memory_id'],0)>=1.5][:2]
+        return local,result
     if active != 'on' or result.get('degraded'): return local_rank(still_valid, query), result
     scores = result.get('scores', {})
     selected = sorted([r for r in still_valid if scores.get(r['memory_id'], 0) >= 1.5],

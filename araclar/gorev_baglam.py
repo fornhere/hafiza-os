@@ -234,13 +234,16 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     def add(ident, text):
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
-                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'decision-history':4, 'knowledge':4, 'reuse':5}.get(ident, 10)
+                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'decision-history':4, 'knowledge':4, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
         if ident in task_ids: priority=4
         if ident.startswith('output:'): priority=5
         candidates.append((priority, len(candidates), ident, text))
         return True
     task_ids=set()
+    from jev_procedures import route as route_procedures
+    procedure_data = route_procedures(vault, query, budget=min(1000,budget))
+    if procedure_data['text']: add('procedure-reading', procedure_data['text'])
     qwords=query_words(query)
     deictic=any(w in qwords for w in ('dünkü','o','şu','önceki'))
     task_reference=any(inflected(base,word) for base in ('kapak','video','proje','çıktı') for word in qwords) or any(w in qwords for w in ('iş','işi','işe','işin'))
@@ -264,6 +267,13 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
     from jev_retrieval import catalog as semantic_catalog
     ranked_catalog, catalog_evaluation = semantic_catalog(vault, query, eligible, rank_records, scope)
+    if catalog_evaluation and catalog_evaluation.get('suggested_ids'):
+        suggested=set(catalog_evaluation['suggested_ids'])
+        for row in eligible:
+            if row['memory_id'] not in suggested:continue
+            add('jev-reading:'+row['memory_id'], 'Jev kaynak adayı (okumadan tercih/onay sayma): '+row['subject_key']+' — '+str(vault/row['source_path']))
+            source_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
+
     for row in ranked_catalog:
         # A source-derived card requires a reviewed source revision, not a new
         # hash computed from an unreviewed legacy statement's current file.
@@ -396,11 +406,15 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines)}
     if knowledge_data and 'knowledge' in selected:
         source_versions.update(knowledge_data.get('source_versions',{}))
+    if 'procedure-reading' in selected:
+        source_versions.update(procedure_data['source_versions'])
+    result['procedure_reading'] = dict(paths=procedure_data['paths'] if 'procedure-reading' in selected else [], delivered='procedure-reading' in selected, advisory=True, diagnostics=procedure_data.get('diagnostics',[]))
     result['knowledge']=knowledge_data if 'knowledge' in selected else None
-    if catalog_evaluation is not None or (knowledge_data and knowledge_data.get('jev')):
+    if catalog_evaluation is not None or (knowledge_data and knowledge_data.get('jev')) or procedure_data.get('jev'):
         result['jev'] = {'catalog':catalog_evaluation,
                          'knowledge':knowledge_data.get('jev') if knowledge_data else None,
-                         'knowledge_delivered':'knowledge' in selected}
+                         'knowledge_delivered':'knowledge' in selected,
+                         'procedures':procedure_data.get('jev')}
     result['history']={'mode':history,'included':any(p in selected for p in (project or {}).get('episode_sources',[])), 'requested':use_history,'reason':history_reason,'topic_covered':covered}
     result['summary']={'record_ids':[r['memory_id'] for r in current_facts if r['memory_id'] in selected], 'task_ids':[t['id'] for t in current_tasks if t['id'] in selected], 'derived':True}
     visible_tasks = [t for t in current_tasks if t['id'] in selected][:3]

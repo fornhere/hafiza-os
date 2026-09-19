@@ -1,3 +1,11 @@
+## 20 Eylül 2026 — Jev için bağımsız prosedür ve kaynak adaylığı
+
+- Prosedür seçimi: incelenmiş, mevcut yerel dosyalardan bütçeli okuma önerisi.
+- `retrieval_mode: assist`: mevcut seçimi koruyarak eksik semantik kaynak adayları.
+- Kaynak/ilişki incelemesi, erişim ve prosedür modları bağımsız; ana `off` tümünü kapatır.
+- Video/proje alan yönlendirmesi ve kaynak sürümü/bütçe/geri dönüş kontrolleri.
+- Öneriler kullanıcı kararı veya kaynak doğrulaması değildir. [Ayarlar](JEV.md).
+
 ## 19 Eylül 2026 — Yönlendirmeli API kurulumu
 
 - Mem0 ve Jev için mevcut anahtar / birlikte alalım / atla seçenekleri.

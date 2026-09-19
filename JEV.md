@@ -36,7 +36,7 @@ Aday havuzu kaynak ve proje kapsamıyla sınırlandırılır; açık alan sözc�
 
 ## Sınırlar ve hata davranışı
 
-Her erişim yüzeyi tek istek yapar; otomatik tekrar yoktur. Varsayılan üst sınır 32 aday, 96 soru ve 24000 girdi karakteridir. Bunlar token veya günlük harcama sınırı değildir. Görev paketi bilgi ve katalog için en fazla iki istek yapabilir; varsayılan bekleme toplamı yaklaşık 6 saniyeye kadar çıkar, buna yerel işlem süresi eklenir. Timeout olmuş uzak istek sağlayıcıda tamamlanıp ücretlenebilir. Sağlayıcıda ayrıca harcama sınırı belirlenmelidir.
+Her erişim yüzeyi tek istek yapar; otomatik tekrar yoktur. Varsayılan üst sınır 32 aday, 96 soru ve 24000 girdi karakteridir. Bunlar token veya günlük harcama sınırı değildir. Görev paketi bilgi, katalog ve isteğe bağlı prosedür seçimi için en fazla üç istek yapabilir; varsayılan bekleme toplamı yaklaşık 9 saniyeye kadar çıkar, buna yerel işlem süresi eklenir. Timeout olmuş uzak istek sağlayıcıda tamamlanıp ücretlenebilir. Sağlayıcıda ayrıca harcama sınırı belirlenmelidir.
 
 Timeout, 401/403/429/5xx, bozuk yanıt, aday/girdi sınırı ve kaynak değişimi yerel geri dönüşle `degraded` olarak görünür; bunlar “kanıt yok” sayılmaz. Geçersiz kaynak geri dönüşte de teslim edilmez. `confidence` seçim veya izin için kullanılmaz.
 
@@ -101,3 +101,40 @@ kullanır. Her iki sağlayıcıda da `/v1/systemone` çağrısı yapılır.
 Sağlayıcıya ait ortam değişkeni özel dosyadan önceliklidir; TypeSafe ortam
 anahtarı Vercel kurulumunu değiştirmez. Eski `env_file` desteği sürer.
 Anahtarın geçerliliği kurulumda canlı istekle sınanmaz.
+
+## Bağımsız görevler ve yardımcı erişim
+
+Mevcut kurulumda görevleri ayrı etkinleştirmek için `komuta/jev.json` içine:
+
+```json
+{
+  "mode": "shadow",
+  "retrieval_mode": "assist",
+  "procedure_mode": "on"
+}
+```
+
+Diğer bağlantı alanlarını koruyun. `retrieval_mode` varsayılanı `inherit`;
+`off`, `shadow`, `assist`, `on` seçenekleri yalnız erişimi değiştirir.
+`procedure_mode` varsayılanı `off`; `shadow` ve `on` desteklenir.
+Ana `mode: off` bütün görevleri kapatır. Yukarıdaki ayarda mevcut kaynak ve
+ilişki incelemeleri gölge modunda kalır.
+
+`assist`, yerel bilgi/katalog seçimini korur; her yüzeyde en fazla iki eksik
+Jev kaynak adayını kalan karakter bütçesinde gösterir. Aday yolu bir tercih,
+kabul veya doğrulanmış cevap değildir; ajan ilgili kaynağı okumalıdır.
+Video kapsamı anlatı ve kapak kanıtlarını, proje bağlamı kendi yetkili
+adaylarının alanlarını dışlamaz. Kaynak güncelliği ve proje yetkisi önce
+kodla kontrol edilir; model bunları genişletemez.
+
+Prosedür yönlendirmesi yalnız yedi incelenmiş yerel dosya için kısa sabit
+açıklamaları puanlar. Model dosya yolu üretemez. Mevcut dosyalardan en fazla
+üçü, toplam 1000 karakter içinde okuma önerisi olur. Dosya içerikleri API'ye
+gönderilmez. Eksik/değişen kaynak, bozuk ayar ve ağ hatasında öneri verilmez;
+temel kurallar aynen geçerlidir. Yeni zorunlu açılış okuması oluşturmaz.
+
+Bu seçenekler iş başına API gecikmesi ekler; basit sorularda da yapılandırılmış
+yüzeyler çağrılabilir. Her yüzey en fazla bir çağrı yapar, otomatik tekrar yoktur.
+Puanlar ve token kullanımı tanı verisidir; fatura tutarı değildir.
+`on` ile tek seçiciye geçiş ayrıca yeni sorularla geri çağırma, yanlış aday,
+karakter bütçesi, son paket teslimi ve gecikme ölçümü gerektirir.

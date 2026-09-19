@@ -93,9 +93,9 @@
     {
       "path": "araclar/jev_client.py",
       "mode": "reviewed-variant",
-      "reason": "Public installer supports external private JSON credentials and provider-specific Vercel AI_GATEWAY_API_KEY routing; legacy env_file remains supported; private runtime unchanged.",
-      "local_sha256": "a3fb77a2e50bc61ca9549fe7aa4738501f58d0967fe775558bce1d692acb03c0",
-      "public_sha256": "162418e2845e2edb9d5dacf520ee6ed97b5d7fae241aef632b03224238f57925"
+      "reason": "Public credential file and provider-specific environment routing versus installed legacy credential reader; purpose modes and procedure rubric are identical.",
+      "local_sha256": "7fe8ef6e2cc43a90e12200a9530a0417ab85bd6fdd42d96514f652501709f280",
+      "public_sha256": "552fd9ca75e2f978693e976b26a1b48d554e5e934d8b5beb38c037ea3d7a3ae1"
     },
     {
       "path": "araclar/jev_retrieval.py",
@@ -139,6 +139,10 @@
     },
     {
       "path": "araclar/kayit_uzlastir.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/jev_procedures.py",
       "mode": "shared"
     }
   ]
