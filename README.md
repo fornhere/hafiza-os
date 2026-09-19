@@ -40,26 +40,61 @@ ile Linux'ta gerçek hook → inceleme → farklı oturumda hatırlama zinciri d
 Claude Code 2.1.261 için adaptör testleri geçti.
 [Kurulum ve destek matrisi](ENTEGRASYONLAR.md).
 
-## Hızlı başlangıç
+## İlk kez kullanıyorsan
 
-Python 3.10+ ile kasa kökünde, Linux/macOS:
+1. Bu sayfanın üstündeki **Code → Download ZIP** ile indir ve arşivi aç.
+   Klasörü kalıcı tutacağın bir yere taşı; örneğin kullanıcı klasöründe `Hafiza`.
+   Bu klasör senin **kasan**: notların ve ayarların burada duracak.
+2. Bilgisayarında **Python 3.10+** ve dosya/terminal erişimi olan bir ajan
+   (Claude Code, Codex veya Antigravity CLI) olsun. Obsidian isteğe bağlıdır;
+   kullanıyorsan bu klasörü **Open folder as vault** ile aç.
+3. Terminali çıkardığın klasörde aç. İçinde `agents.md`, `araclar` ve `zihin`
+   klasörlerini görmelisin. Aşağıdaki komutlarda `claude` yerine kullandığın
+   ajana göre `codex` veya `antigravity` yaz.
+
+**Linux / macOS:**
 
 ```sh
-python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent all
-python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent all --apply
+python3 --version
+python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent claude
+python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent claude --apply
 ```
 
-Varsayılan yalnız yönerge köprüsüdür. Kayıt adaptörleri için `--with-hooks` ekle.
-Eski aynı-kasa hook'larından geçiş ayrıca `--migrate-legacy` gerektirir. Kurucu
-ilgisiz ayar ve trust değerlerini korur; jq/bash gerektirmez. Windows PowerShell,
-istemci kabuğu, kaldırma ve yeniden başlatma: [entegrasyon rehberi](ENTEGRASYONLAR.md).
+**Windows PowerShell:**
 
-Yönerge köprüsü kayıt değildir; hook yakalaması da incelenmiş hafıza değildir.
-Reviewer sağlayıcısını ayrıca yapılandır ve tek seferlik incelemeyi açıkça çalıştır.
-İlk beş mesaj, kaydetmeme ve sır koruması sürer. Yeni native adaptörler yalnız
-episodik aday üretir; kanonik terfi ve Codex konsolidasyonu ayrı süreçtir.
-Paylaşılan kasadan kaynaklı recall, tam transcript senkronu değildir.
-Kişisel profil şablonlarını kendin doldur; kurucu bunları güncellemez.
+```powershell
+py -3 --version
+py -3 -X utf8 .\araclarjan_kur.py --vault "$($PWD.Path)" --agent claude
+py -3 -X utf8 .\araclarjan_kur.py --vault "$($PWD.Path)" --agent claude --apply
+```
+
+İlk kurulum komutu yapılacakları gösterir; `--apply` olan komut uygular.
+Ajanı yeniden başlat ve kasa klasörünü aç. İlk mesaj olarak şunu gönder:
+
+> Bu klasör benim hafıza kasam. Önce agents.md dosyasını oku ve oradaki
+> açılış sırasını izle. Sonra zihin/çekirdek.md için bana kısa bir mülakat yap;
+> soruları tek tek sor. Cevaplarımdan bir profil taslağı çıkar, onayladığım
+> bilgileri dosyaya yaz. Boş alanları tahmin ederek doldurma.
+
+Bu başlangıç ajana kasanın yerini ve çalışma yönergelerini tanıtır.
+Sohbetlerin arka planda kaydı ayrıca kurulur.
+**[Adım adım kullanım rehberi →](KULLANIM.md)**: günlük mesaj örnekleri,
+yeni sohbette hatırlama denemesi ve isteğe bağlı kayıt kurulumu.
+
+## Günlük kullanım
+
+Ajana normal konuşarak ne yapmak istediğini söyle:
+
+- **Kaldığın yerden devam:** “Bu projede son kararımız neydi? Kaynağını bul,
+  açık kalan işi söyle ve oradan devam edelim.”
+- **Tercihini kullan:** “Metni yazmadan önce kasadaki anlatım tercihlerimi oku.”
+- **Bilgiyi düzelt:** “Bu not artık geçerli değil. Kaynağını bul ve değişiklik
+  taslağını göster.”
+- **Kayıt dışında tut:** “Bu konuşmayı hafızaya alma.”
+
+Ajanın verdiği dosya yolunu açarak sonucu kontrol et. İlk kullanımda geçmiş
+bilgi bulunmaması normaldir; kasa senin notlarınla dolacak. Kişisel kasanı
+bu kamu deposuna yükleme.
 
 ## Son eklenenler
 
