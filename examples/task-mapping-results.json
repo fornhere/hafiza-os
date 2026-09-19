@@ -1,0 +1,152 @@
+{
+  "summary": {
+    "lexical": {
+      "exact": 6,
+      "missed": 6,
+      "extra": 2
+    },
+    "jev": {
+      "exact": 11,
+      "missed": 0,
+      "extra": 1
+    }
+  },
+  "cases": [
+    {
+      "query": "Kalıcı hafıza kayıtlarındaki etkinlik durumlarını kontrol et.",
+      "expected": [
+        "catalog"
+      ],
+      "lexical": [
+        "catalog"
+      ],
+      "jev": [
+        "catalog"
+      ]
+    },
+    {
+      "query": "İnceleme kuyruğundaki bilgi adaylarını listele.",
+      "expected": [
+        "queue"
+      ],
+      "lexical": [
+        "catalog",
+        "queue"
+      ],
+      "jev": [
+        "queue"
+      ]
+    },
+    {
+      "query": "Video altyazısının zamanlamasını düzelt.",
+      "expected": [
+        "video"
+      ],
+      "lexical": [
+        "video"
+      ],
+      "jev": [
+        "video"
+      ]
+    },
+    {
+      "query": "Model yanıt önbelleğinin anahtarını incele.",
+      "expected": [
+        "jev"
+      ],
+      "lexical": [
+        "jev"
+      ],
+      "jev": [
+        "jev"
+      ]
+    },
+    {
+      "query": "İki süreç aynı anda dosyaya giriyor; karşılıklı dışlama neden bozuluyor?",
+      "expected": [
+        "locks"
+      ],
+      "lexical": [
+        "catalog"
+      ],
+      "jev": [
+        "sync",
+        "locks"
+      ]
+    },
+    {
+      "query": "Onay bekleyen önerilerin hangileri hâlâ ele alınmamış?",
+      "expected": [
+        "queue"
+      ],
+      "lexical": [],
+      "jev": [
+        "queue"
+      ]
+    },
+    {
+      "query": "Uzak aramada yeni kabul ettiğimiz not görünmüyor; aktarım kodunu incele.",
+      "expected": [
+        "sync"
+      ],
+      "lexical": [
+        "sync"
+      ],
+      "jev": [
+        "sync"
+      ]
+    },
+    {
+      "query": "Dönen olasılıkların toplamı bir etmiyor; adaptör kontrolünü düzelt.",
+      "expected": [
+        "jev"
+      ],
+      "lexical": [],
+      "jev": [
+        "jev"
+      ]
+    },
+    {
+      "query": "Bekleyen öneri onaylanınca kalıcı kayda geçerken iki defa işlenmesini engelle.",
+      "expected": [
+        "queue",
+        "catalog",
+        "locks"
+      ],
+      "lexical": [
+        "catalog"
+      ],
+      "jev": [
+        "catalog",
+        "queue",
+        "locks"
+      ]
+    },
+    {
+      "query": "Uzak indekse gönderim sürerken başka yazıcıyı durduran mekanizmayı incele.",
+      "expected": [
+        "sync",
+        "locks"
+      ],
+      "lexical": [
+        "sync"
+      ],
+      "jev": [
+        "sync",
+        "locks"
+      ]
+    },
+    {
+      "query": "Bana kahve tarifi anlat.",
+      "expected": [],
+      "lexical": [],
+      "jev": []
+    },
+    {
+      "query": "Bugün hava nasıl?",
+      "expected": [],
+      "lexical": [],
+      "jev": []
+    }
+  ]
+}

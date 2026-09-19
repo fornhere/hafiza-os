@@ -141,3 +141,7 @@ karakter bütçesi, son paket teslimi ve gecikme ölçümü gerektirir.
 
 Paralellik, tekil çağrı paylaşımı, kapasite, kaynak snapshot ve görevler arası
 ayrım için [mimari sözleşmesi](MIMARI.md).
+
+Görevlerin bilinen kaynaklarla eşleştirilmesi için ayrı, varsayılan kapalı
+`task_mapping_mode: shadow` danışmanı eklendi. Okuma/yazma kümeleri veya
+çalışma izinleri modelden türetilmez. Kullanım ve sınırlar: [GOREV-PLANI.md](GOREV-PLANI.md).

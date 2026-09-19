@@ -1,0 +1,64 @@
+{
+  "scope": "project:memory",
+  "resources": [
+    {
+      "id": "catalog",
+      "key": "vault/catalog",
+      "description": "Kalıcı hafıza kataloğu"
+    },
+    {
+      "id": "sync",
+      "key": "code/sync",
+      "description": "Uzak indekse aktarım kodu"
+    },
+    {
+      "id": "video",
+      "key": "media/video",
+      "description": "Video montaj dosyaları"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "catalog-review",
+      "description": "Katalog kayıtlarını oku",
+      "reads": [
+        "catalog"
+      ],
+      "writes": [],
+      "after": [],
+      "complete": true
+    },
+    {
+      "id": "sync-fix",
+      "description": "Aktarım kodunu katalog yapısına göre düzelt",
+      "reads": [
+        "catalog"
+      ],
+      "writes": [
+        "sync"
+      ],
+      "after": [],
+      "complete": true
+    },
+    {
+      "id": "catalog-update",
+      "description": "Katalog yapısını güncelle",
+      "reads": [],
+      "writes": [
+        "catalog"
+      ],
+      "after": [],
+      "complete": true
+    },
+    {
+      "id": "video-edit",
+      "description": "Videoyu düzenle",
+      "reads": [],
+      "writes": [
+        "video"
+      ],
+      "after": [],
+      "complete": true
+    }
+  ]
+}

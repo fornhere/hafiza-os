@@ -94,8 +94,8 @@
       "path": "araclar/jev_client.py",
       "mode": "reviewed-variant",
       "reason": "Public credential file and provider-specific environment routing versus installed legacy credential reader; purpose modes and procedure rubric are identical.",
-      "local_sha256": "bbfcef958c74c4de9a3e6776f4d9b192f29872ae1b37bf2258a8f756e5f22455",
-      "public_sha256": "4582dda07919a5c5466db05f1b711a44352b19806c55bcd0b098da8bbb82bc55"
+      "local_sha256": "62849d12cf5d076a604e5e199f059219340cd342fda297c8ab5338b571416f4c",
+      "public_sha256": "8faaad44f6d4e36389179592eaa74b28c333360383c0f242d9d2ee40ea2ed081"
     },
     {
       "path": "araclar/jev_retrieval.py",
@@ -147,6 +147,10 @@
     },
     {
       "path": "araclar/jev_runtime.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/gorev_plani.py",
       "mode": "shared"
     }
   ]

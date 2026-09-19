@@ -372,3 +372,10 @@ Bu kontroller model cevabının kalitesi veya kullanıcı zaman kazancının kan
   korunur. Yeni kullanıcı onayı varsayılmaz. Bkz. KAYIT-UZLASTIRMA.md.
 - Kabul edilmiş karar olarak kaydetmeme kısıtı genel oturum yasağından ayrılır;
   ek bir kaydetmeme talimatı varsa kayıt kapısı kapalı kalır.
+
+## 2026-09-20 — Deneysel görev çakışma danışmanı
+
+Beyan edilmiş okuma/yazma alanları ve bağımlılıklardan çalışma grupları
+üreten salt okunur CLI eklendi. Eksik deklarasyonlar ve bağımlıları plan
+ dışında tutulur. İsteğe bağlı Jev kaynak eşleştirmesi tek çağrıda üç görevi
+puanlar; yürütme veya izin kararı vermez. Ayrıntılar GOREV-PLANI.md içinde.

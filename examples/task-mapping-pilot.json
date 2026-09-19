@@ -1,0 +1,107 @@
+{
+  "resources": [
+    {
+      "id": "catalog",
+      "key": "vault/catalog",
+      "description": "İncelenmiş kalıcı hafıza kayıtları, kaynak kimlikleri ve etkinlik durumları."
+    },
+    {
+      "id": "queue",
+      "key": "vault/queue",
+      "description": "Henüz onaylanmamış bilgi adayları ve inceleme kuyruğu."
+    },
+    {
+      "id": "sync",
+      "key": "runtime/sync",
+      "description": "Yerel kayıtları uzak arama indeksine gönderen eşitleme kodu."
+    },
+    {
+      "id": "locks",
+      "key": "runtime/locks",
+      "description": "Eşzamanlı işlemler için kilitler ve ortak kaynak erişimini sınırlayan kod."
+    },
+    {
+      "id": "jev",
+      "key": "runtime/jev",
+      "description": "Model çağrıları, zaman aşımı, yanıt önbelleği ve olasılık doğrulama kodu."
+    },
+    {
+      "id": "video",
+      "key": "media/video",
+      "description": "Video çekimi, montaj, ses ve altyazı dosyaları."
+    }
+  ],
+  "cases": [
+    [
+      "Kalıcı hafıza kayıtlarındaki etkinlik durumlarını kontrol et.",
+      [
+        "catalog"
+      ]
+    ],
+    [
+      "İnceleme kuyruğundaki bilgi adaylarını listele.",
+      [
+        "queue"
+      ]
+    ],
+    [
+      "Video altyazısının zamanlamasını düzelt.",
+      [
+        "video"
+      ]
+    ],
+    [
+      "Model yanıt önbelleğinin anahtarını incele.",
+      [
+        "jev"
+      ]
+    ],
+    [
+      "İki süreç aynı anda dosyaya giriyor; karşılıklı dışlama neden bozuluyor?",
+      [
+        "locks"
+      ]
+    ],
+    [
+      "Onay bekleyen önerilerin hangileri hâlâ ele alınmamış?",
+      [
+        "queue"
+      ]
+    ],
+    [
+      "Uzak aramada yeni kabul ettiğimiz not görünmüyor; aktarım kodunu incele.",
+      [
+        "sync"
+      ]
+    ],
+    [
+      "Dönen olasılıkların toplamı bir etmiyor; adaptör kontrolünü düzelt.",
+      [
+        "jev"
+      ]
+    ],
+    [
+      "Bekleyen öneri onaylanınca kalıcı kayda geçerken iki defa işlenmesini engelle.",
+      [
+        "queue",
+        "catalog",
+        "locks"
+      ]
+    ],
+    [
+      "Uzak indekse gönderim sürerken başka yazıcıyı durduran mekanizmayı incele.",
+      [
+        "sync",
+        "locks"
+      ]
+    ],
+    [
+      "Bana kahve tarifi anlat.",
+      []
+    ],
+    [
+      "Bugün hava nasıl?",
+      []
+    ]
+  ]
+}
