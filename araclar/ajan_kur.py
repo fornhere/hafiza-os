@@ -26,7 +26,12 @@ def safe_path(value):
         raise ValueError('Yolda .. kullanmayın; açık bir yol verin')
     path = Path(os.path.abspath(path))
     for part in (*reversed(path.parents), path):
-        if part.is_symlink():
+        try:
+            attributes = getattr(part.lstat(), 'st_file_attributes', 0)
+        except FileNotFoundError:
+            attributes = 0
+        if (part.is_symlink() or getattr(part, 'is_junction', lambda: False)()
+                or attributes & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)):
             raise ValueError(f'Sembolik bağlantı reddedildi: {part}')
         if part != path and part.exists() and not part.is_dir():
             raise ValueError(f'Üst yol klasör değil: {part}')

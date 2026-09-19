@@ -46,7 +46,9 @@ class Expansion(unittest.TestCase):
     def test_new_optional_content_does_not_displace_asset_guard(self):
         from test_gorev_baglam import Package
         f=Package();f.setUp();self.addCleanup(f.doCleanups)
-        p=build_task_package(f.v,'kapak devam',budget=610)
+        # Keep the original tight budget, adjusted for the native absolute path.
+        budget=610 + max(0, len(str(f.v))-len('/tmp/tmp12345678'))
+        p=build_task_package(f.v,'kapak devam',budget=budget)
         self.assertIn('input-check',p['selected_ids'])
 
 

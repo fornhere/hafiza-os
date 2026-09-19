@@ -12,6 +12,17 @@ class KnowledgeTests(unittest.TestCase):
         self.source=self.v/'gelen-kutusu/source.md';self.source.write_text('Kullanıcı: Bu sunumun tipografisini beğendim ve koruyalım.')
         self.d=dict(id='sunum-tercihi',title='Sunum tipografisi',kind='preference',statement='Sunum tipografisini koru.',scope='user',domains=['sunum'],status='reviewed',sources=[dict(path='gelen-kutusu/source.md',sha256=b.digest(self.source),evidence='Bu sunumun tipografisini beğendim ve koruyalım.')],reviewed_by='review-agent',review_note='Exact user feedback reviewed.')
     def register(self):return b.register(self.v,self.d,True)
+    def test_writer_persists_exact_utf8_lf_bytes_and_declared_version(self):
+        target=self.v/'exact.md'
+        text='Türkçe bilgi ağı\nİkinci satır\n'
+        b._write(target,text)
+        self.assertEqual(target.read_bytes(),text.encode('utf-8'))
+        planned=b.register(self.v,self.d)
+        result=self.register()
+        self.assertEqual(result['version'],planned['version'])
+        self.assertEqual(result['version'],b.digest(Path(result['path'])))
+        self.assertNotIn(b'\r\n',Path(result['path']).read_bytes())
+
     def test_source_change_excluded(self):
         self.register();self.assertEqual(len(b.retrieve(self.v,'sunum tipografisi')['records']),1)
         self.source.write_text('Changed');self.assertFalse(b.retrieve(self.v,'sunum')['records'])

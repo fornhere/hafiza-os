@@ -1,6 +1,7 @@
 """Isolated native installer contracts; never change the real home."""
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -94,6 +95,58 @@ class Hooks(unittest.TestCase):
         config = json.loads(path.read_text(encoding='utf-8'))
         self.assertEqual(len(config['hooks']['Stop']), 1)
         self.assertNotEqual(config['hooks']['Stop'][0]['hooks'][0]['command'], command)
+
+    def test_quoted_claude_legacy_all_events_preserve_wrappers_and_settings(self):
+        path = self.home / '.claude/settings.json'
+        path.parent.mkdir(parents=True)
+        hooks = {}
+        for event, name in [('SessionStart', 'oturum-basla.sh'), ('UserPromptSubmit', 'mesaj-say.sh'),
+                            ('Stop', 'hafiza-kontrol.sh'), ('PreCompact', 'hafiza-kontrol.sh'),
+                            ('SessionEnd', 'oturum-bitir.sh')]:
+            command = shlex.quote(str(self.vault / '.claude/hooks' / name))
+            hooks[event] = [{'hooks': [{'type': 'command', 'command': command},
+                                       {'type': 'command', 'command': 'bash ' + command}]}]
+        original = {'permissions': {'allow': ['Read']}, 'hooks': hooks}
+        path.write_text(json.dumps(original), encoding='utf-8')
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, 'migrate-legacy'):
+            self.install(apply=True)
+        self.assertEqual(before, self.snapshot())
+        self.install(migrate_legacy=True, apply=True)
+        config = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(config['permissions'], original['permissions'])
+        for event, groups in hooks.items():
+            retained = config['hooks'][event][0]['hooks']
+            self.assertEqual(retained, [groups[0]['hooks'][1]])
+            self.assertEqual(len(config['hooks'][event]), 2 if event in ('SessionStart', 'UserPromptSubmit', 'Stop') else 1)
+        saved = self.snapshot()
+        self.install(apply=True)
+        self.assertEqual(saved, self.snapshot())
+        self.install(remove=True, apply=True)
+        config = json.loads(path.read_text(encoding='utf-8'))
+        for event, groups in hooks.items():
+            self.assertEqual(config['hooks'][event], [{'hooks': [groups[0]['hooks'][1]]}])
+
+    def test_generated_string_hooks_execute_selected_shell_with_utf8_io(self):
+        fixture = ('import json,sys\n'
+                   'payload=json.load(sys.stdin)\n'
+                   'print(json.dumps({"payload":payload,"argv":sys.argv[1:]},ensure_ascii=False))\n')
+        for name in ('codex_hafiza.py', 'client_hafiza.py'):
+            (self.vault / 'araclar' / name).write_text(fixture, encoding='utf-8')
+        self.install(apply=True)
+        for client, relative in [('codex', '.codex/hooks.json'), ('antigravity', '.gemini/config/hooks.json')]:
+            config = json.loads((self.home / relative).read_text(encoding='utf-8'))
+            for event, entries in config['hooks' if client == 'codex' else 'hafiza-os'].items():
+                with self.subTest(client=client, event=event):
+                    handler = entries[0]['hooks'][0] if client == 'codex' else entries[0]
+                    payload = {'hook_event_name': event, 'prompt': 'Türkçe girdi'}
+                    result = subprocess.run(handler['command'], shell=True,
+                                            executable=os.environ.get('COMSPEC', 'cmd.exe') if os.name == 'nt' else '/bin/sh',
+                                            input=json.dumps(payload, ensure_ascii=False), text=True,
+                                            encoding='utf-8', capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    expected = ['--vault', str(self.vault)] + (['hook'] if client == 'codex' else ['--client', client, '--event', event])
+                    self.assertEqual(json.loads(result.stdout), {'payload': payload, 'argv': expected})
 
     def test_quoting_and_generic_rejection(self):
         import shlex

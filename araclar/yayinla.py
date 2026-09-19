@@ -20,7 +20,7 @@ def digest(path):
 
 
 def parity(repo, vault):
-    manifest = json.loads((repo / 'publication-manifest.json').read_text())
+    manifest = json.loads((repo / 'publication-manifest.json').read_text(encoding='utf-8'))
     covered = set()
     for row in manifest['files']:
         name = row['path']; covered.add(name)
@@ -39,7 +39,7 @@ def parity(repo, vault):
             valid = False
         if not valid:
             raise ValueError('unreviewed local/public difference: ' + name)
-    required = {str(p.relative_to(repo)) for p in (repo / 'araclar').glob('*.py')
+    required = {p.relative_to(repo).as_posix() for p in (repo / 'araclar').glob('*.py')
                 if not p.name.startswith('test_') and p.name != 'codex_kur.py'}
     if required - covered:
         raise ValueError('runtime missing from manifest: ' + ', '.join(sorted(required - covered)))

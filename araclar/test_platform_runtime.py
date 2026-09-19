@@ -234,8 +234,55 @@ codex_hafiza.main()
         self.assertNotIn('latest-session .', command)
         self.assertTrue(list((directory / '.state').glob('*.json')))
 
+    def test_latest_session_stdout_is_utf8_under_legacy_pipe_encoding(self):
+        expected='Türkçe oturum: ışıltı, görev ve çıktı.'
+        (self.vault/'zihin/son-oturum.md').write_text('## 2026-09-19\n'+expected,encoding='utf-8')
+        environment=dict(self.environment, PYTHONIOENCODING='cp1252', PYTHONUTF8='0')
+        result=subprocess.run([sys.executable, str(self.scripts/'codex_hafiza.py'),
+                               '--vault', str(self.vault), 'latest-session'],
+                              env=environment, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn(expected,result.stdout.decode('utf-8'))
+
+    def test_reparse_attribute_fallback_rejects_parent_on_python310(self):
+        import ajan_kur
+        import client_transcripts
+        from types import SimpleNamespace
+        parent=self.vault/'redirect'
+        target=parent/'settings.json'
+        original=Path.lstat
+        def attributes(path, *args, **kwargs):
+            if path == parent:
+                return SimpleNamespace(st_file_attributes=0x400)
+            return original(path, *args, **kwargs)
+        with patch.object(Path,'lstat',attributes), \
+             patch.object(Path,'is_symlink',return_value=False), \
+             patch.object(Path,'is_junction',return_value=False,create=True):
+            for check in (ajan_kur.safe_path, client_transcripts.safe_path):
+                with self.subTest(check=check.__module__), self.assertRaises(ValueError):
+                    check(target)
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows junction fixture')
+    def test_native_junction_parent_escape_is_rejected_without_writes(self):
+        import ajan_kur
+        import client_transcripts
+        home=self.vault.parent/'isolated-home'
+        home.mkdir()
+        junction=home/'.claude'
+        # The destination deliberately points into the synthetic vault.
+        result=subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(junction),str(self.vault)],
+                              capture_output=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr)
+        try:
+            for check in (ajan_kur.safe_path, client_transcripts.safe_path):
+                with self.subTest(check=check.__module__), self.assertRaises(ValueError):
+                    check(junction/'settings.json')
+            self.assertFalse((self.vault/'settings.json').exists())
+        finally:
+            junction.rmdir()
+
     def test_command_quoting_both_shells(self):
-        argv = [sys.executable, str(self.scripts / 'codex_hafiza.py'),
+        argv = [sys.executable, '-X', 'utf8', str(self.scripts / 'codex_hafiza.py'),
                 '--vault', str(self.vault), 'latest-session']
         with patch.object(codex_hafiza.os, 'name', 'posix'):
             self.assertEqual(shlex.split(codex_hafiza.latest_session_command(self.vault)), argv)

@@ -1,6 +1,7 @@
 """Isolated bridge tests: no real home, vault, hooks, network or client process."""
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import shlex
@@ -23,7 +24,7 @@ class InstallerTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('fixture\n', encoding='utf-8')
         self.home = self.root / 'test home'
-        self.env = patch.dict(os.environ, {}, clear=True)
+        self.env = patch.dict(os.environ, {'HOME': str(self.home), 'USERPROFILE': str(self.home)}, clear=True)
         self.env.start()
         self.addCleanup(self.env.stop)
 
@@ -56,9 +57,9 @@ class InstallerTests(unittest.TestCase):
         result = self.install(apply=True)
         for row in result['targets']:
             data = Path(row['path']).read_text(encoding='utf-8')
-            self.assertIn(str(self.vault), data)
+            self.assertIn(json.dumps(str(self.vault), ensure_ascii=False), data)
             self.assertIn('latest-session', data)
-            self.assertIn('--char-budget 1200', data)
+            self.assertIn(bridge.command(['--char-budget', '1200'], os.name == 'nt').removeprefix('& '), data)
             self.assertTrue(Path(row['path']).read_bytes().endswith(old))
             self.assertEqual(Path(row['backup']).read_bytes(), old)
         before = self.snapshot()

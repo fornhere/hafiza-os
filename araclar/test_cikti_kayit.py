@@ -11,7 +11,7 @@ from is_ve_ders import put
 class Outputs(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-        self.v=Path(self.tmp.name);(self.v/'komuta').mkdir();(self.v/'zihin').mkdir()
+        self.v=Path(self.tmp.name).resolve();(self.v/'komuta').mkdir();(self.v/'zihin').mkdir()
         self.project=self.v/'project';self.project.mkdir()
         self.file=self.project/'demo.txt';self.file.write_text('CSV example output')
         self.review=self.v/'review.md';self.review.write_text('CSV demo çıktı dosyası içerik ve biçim kontrolünden geçti.')

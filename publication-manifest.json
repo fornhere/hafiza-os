@@ -25,8 +25,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Private default identity versus configurable public default only.",
-      "local_sha256": "3b5ce94d9d4c55cab452c6f770b870759f38b3fd7aaa079524cd48ea9e250162",
-      "public_sha256": "d9eb4888eba332763bf6f08547d2753b1c8ff56d061e63e0153386d4e287eae5"
+      "local_sha256": "a6245720edd6f6b2108962d0aff0342865dd41cbeb0c624e2521e7a69a95ace4",
+      "public_sha256": "4a57c046998cecce5568ae0231c6a260dacee2077574807be17d218fd7878a5b"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -100,6 +100,30 @@
     },
     {
       "path": "araclar/jev_review.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/agent_hooks.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/platform_lock.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/client_hafiza.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/client_sessions.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/client_transcripts.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/client_review.py",
       "mode": "shared"
     }
   ]

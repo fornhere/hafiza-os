@@ -24,7 +24,7 @@ def now():
 
 def latest_session_command(vault):
     """Render a POSIX shell or Windows PowerShell command, including executable."""
-    argv = [sys.executable, str(vault / 'araclar/codex_hafiza.py'),
+    argv = [sys.executable, '-X', 'utf8', str(vault / 'araclar/codex_hafiza.py'),
             '--vault', str(vault), 'latest-session']
     if os.name == 'nt':
         # PowerShell needs & to invoke a quoted executable; single quotes also
@@ -240,6 +240,8 @@ def hook(vault, data):
 
 
 def main():
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser()
     parser.add_argument('--vault', type=Path, default=DEFAULT_VAULT)
     sub = parser.add_subparsers(dest='cmd', required=True)

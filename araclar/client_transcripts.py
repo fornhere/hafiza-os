@@ -27,7 +27,12 @@ def safe_path(path):
     if not path.is_absolute() or '..' in path.parts:
         raise SourceError('absolute_path_required')
     for item in (path, *path.parents):
-        if item.is_symlink() or getattr(item, 'is_junction', lambda: False)():
+        try:
+            attributes = getattr(item.lstat(), 'st_file_attributes', 0)
+        except FileNotFoundError:
+            attributes = 0
+        if (item.is_symlink() or getattr(item, 'is_junction', lambda: False)()
+                or attributes & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)):
             raise SourceError('symlink_rejected')
     return path
 
@@ -200,6 +205,9 @@ def parse(client, session, path, end_line=None):
                 text = '' if has_tools else row['content']
                 role, terminal = (None if has_tools else 'assistant'), bool(text.strip())
             elif origin in ('TOOL', 'SYSTEM') and kind in ('TOOL_RESULT', 'TOOL_RESPONSE', 'SYSTEM_MESSAGE'):
+                text, role, terminal = '', None, False
+            elif origin == 'SYSTEM_SDK' and kind == 'EPHEMERAL_MESSAGE':
+                # Observed PreInvocation context injection, never human evidence.
                 text, role, terminal = '', None, False
             else:
                 raise SourceError('unknown_antigravity_schema')

@@ -124,6 +124,7 @@ class NativeSessions(NativeFixture):
             {'source': 'MODEL', 'type': 'PLANNER_RESPONSE', 'status': 'DONE', 'tool_calls': [{'name': 'fixture'}]},
             {'source': 'MODEL', 'type': 'GENERIC', 'status': 'ERROR'},
             {'source': 'SYSTEM', 'type': 'SYSTEM_MESSAGE', 'status': 'DONE', 'content': 'NEVER_COPY_SYSTEM'},
+            {'source': 'SYSTEM_SDK', 'type': 'EPHEMERAL_MESSAGE', 'status': 'DONE', 'content': 'NEVER_COPY_INJECTED_CONTEXT'},
         ]
         self.rows[1:1] = extra
         for index, row in enumerate(self.rows): row['step_index'] = index * 3
@@ -139,6 +140,51 @@ class NativeSessions(NativeFixture):
         self.assertIn(decision['summary'], shared_reviewed_context(self.vault))
         self.path.unlink()
         self.assertEqual(shared_reviewed_context(self.vault), '')
+
+    def test_actual_preinvocation_output_is_not_user_or_review_evidence(self):
+        self.agy()
+        out, _ = self.cli('PreInvocation')
+        context = out['injectSteps'][0]['ephemeralMessage']
+        injected = {'source': 'SYSTEM_SDK', 'type': 'EPHEMERAL_MESSAGE',
+                    'status': 'DONE', 'content': context}
+        self.rows.insert(-1, injected)
+        for index, row in enumerate(self.rows): row['step_index'] = index * 2
+        self.write()
+        out, diagnostic = self.cli('Stop')
+        self.assertEqual(out, {})
+        self.assertIn('pending', diagnostic)
+        ident = sessions.pending(self.vault)[0]['id']
+        material = sessions.packet(self.vault, ident)
+        self.assertEqual(material['user_count'], 6)
+        self.assertNotIn(context, [e['quote'] for e in material['evidence']])
+        decision = self.judgment(ident)
+        sessions.review(self.vault, ident, decision, True)
+        self.assertIn(decision['summary'], sessions.recall(self.vault))
+        for change in ({'source': 'UNKNOWN_SDK'}, {'type': 'UNKNOWN_MESSAGE'}, {'status': 'ERROR'}):
+            original = dict(injected)
+            injected.update(change)
+            self.write()
+            with self.subTest(change=change), self.assertRaises(SourceError):
+                parse(self.client, self.session, self.path)
+            injected.clear(); injected.update(original)
+
+    def test_review_cli_accepts_documented_file_and_existing_inline_json(self):
+        ident = self.register()['id']
+        decision = self.judgment(ident)
+        decision_path = self.root / 'Türkçe karar.json'
+        decision_path.write_text(json.dumps(decision, ensure_ascii=False), encoding='utf-8')
+        command = [sys.executable, '-X', 'utf8', sessions.__file__, '--vault', str(self.vault),
+                   'review', '--id', ident, '--input-json']
+        for value in (str(decision_path), decision_path.name, json.dumps(decision, ensure_ascii=False)):
+            result = subprocess.run(command + [value], cwd=self.root, text=True, encoding='utf-8', capture_output=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)['status'], 'dry_run')
+            self.assertEqual(sessions.recall(self.vault), '')
+        result = subprocess.run(command + [str(decision_path), '--apply'], text=True,
+                                encoding='utf-8', capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['status'], 'record')
+        self.assertIn(decision['summary'], sessions.recall(self.vault))
 
     def test_observed_claude_administrative_rows_are_not_evidence(self):
         for kind in ('attachment', 'atis-latch', 'last-prompt'):

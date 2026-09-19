@@ -10,7 +10,7 @@ class Visibility(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.v = Path(self.tmp.name)
+        self.v = Path(self.tmp.name).resolve()
         self.p = self.v / 'tercih.md'
         self.p.write_text('Önce ihtiyacı açıkla.', encoding='utf-8')
         self.sha = hashlib.sha256(self.p.read_bytes()).hexdigest()

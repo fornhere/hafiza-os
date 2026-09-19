@@ -32,7 +32,8 @@ class ClientTests(unittest.TestCase):
         self.assertFalse(self.run_client(source_versions={'a':'2'},scope='project:other')['cache_hit'])
         self.assertEqual(len(self.calls),3)
         for path in (self.vault/'.cache/jev').glob('*.json'):
-            self.assertEqual(path.stat().st_mode&0o777,0o600)
+            if os.name != 'nt':
+                self.assertEqual(path.stat().st_mode&0o777,0o600)
             self.assertNotIn('test-key',path.read_text());self.assertNotIn('question',path.read_text())
     def test_facets(self):
         self.config()

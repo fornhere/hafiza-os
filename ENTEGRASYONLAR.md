@@ -64,6 +64,8 @@ Eski aynı-kasa Claude shell hook'ları veya `codex_kur.py` komutu bulunursa
 kurulum çatışma bildirir. Geçişi incelemek için aynı komuta `--migrate-legacy`,
 uygulamak için ayrıca `--apply` ekle. Yalnız tam bilinen aynı-kasa komutları
 çıkarılır; başka kasaların ve kullanıcı hook'larının komutları korunur.
+Eski Claude yollarının ham ve `shlex.quote` ile tırnaklanmış biçimleri tanınır;
+`bash ...` gibi kullanıcı sarmalayıcıları otomatik sahiplenilmez.
 `kur.sh` eski, isteğe bağlı POSIX yoludur; yeni sessiz kurulumla birlikte yeniden
 çalıştırma. Eski dosyalar ve kişisel yönergeler otomatik silinmez; kullanıcıya
 ait eski kapanış zorlamalarını ayrıca gözden geçir.
@@ -80,6 +82,8 @@ adaptör oturum kimliği ve transcript dosyasıyla bağ kurar.
 aday olur. Kaydetmeme, sır, alt ajan, eksik/başarısız terminal ve bilinmeyen
 kanıt biçimleri güvenli biçimde dışlanır. Araç, sistem ve düşünce metinleri
 kanıta alınmaz. Geçmiş hata ilerideki başarılı Stop'u kalıcı olarak engellemez.
+PreInvocation ile eklenen bilinen `SYSTEM_SDK/EPHEMERAL_MESSAGE` satırı da
+kullanıcı sayısına veya inceleme kanıtına katılmaz; bilinmeyen biçimler reddedilir.
 Hook Stop'u engellemez ve kanonik dosyalara yazmaz.
 
 Linux/macOS örnekleri; `<id>` yerine pending sonucunu kullan:
@@ -109,6 +113,8 @@ verilir. Büyük paketlerde stdin tercih et. Dry-run süreç başlatmaz. Sağlay
 kullanıcı kurar; otomasyon veya API anahtarı kurulmaz. Elle üretilmiş karar için
 `client_sessions.py ... review --id '<id>' --input-json karar.json` plan gösterir;
 `--apply` incelenmiş episodik makbuzu yazar. Basit soru reviewer tarafından skip olur.
+`--input-json` UTF-8 karar dosyasının göreli veya tam yolunu ya da doğrudan JSON
+nesnesi metnini kabul eder. Dosyalar en fazla 128000 bayt olabilir.
 
 Claude/Antigravity ve Codex bağlamı kaynak doğrulamalı incelenmiş makbuzları
 bütçeli çağırabilir. Bu, kullanıcı profilini değiştirmez; semantik çıkarım ve

@@ -300,14 +300,19 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('pending')
     p = commands.add_parser('packet'); p.add_argument('--id', required=True)
-    p = commands.add_parser('review'); p.add_argument('--id', required=True); p.add_argument('--input-json', required=True); p.add_argument('--apply', action='store_true')
+    p = commands.add_parser('review'); p.add_argument('--id', required=True); p.add_argument('--input-json', required=True, help='JSON object text or path to a UTF-8 JSON decision file'); p.add_argument('--apply', action='store_true')
     commands.add_parser('recall')
     args = parser.parse_args()
     try:
         if args.command == 'pending': result = pending(args.vault)
         elif args.command == 'packet': result = packet(args.vault, args.id)
         elif args.command == 'recall': result = {'context': recall(args.vault)}
-        else: result = review(args.vault, args.id, strict_json(args.input_json), args.apply)
+        else:
+            value = args.input_json
+            # Preserve the existing inline-object API and support documented files.
+            decision = strict_json(value if value.lstrip().startswith('{') else
+                                   read_bytes(Path(value).absolute(), 128000))
+            result = review(args.vault, args.id, decision, args.apply)
         print(json.dumps(result, ensure_ascii=False))
     except (ValueError, OSError, KeyError, TypeError):
         print(json.dumps({'status': 'error', 'diagnostic': 'validation_failed'}))

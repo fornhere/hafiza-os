@@ -82,6 +82,9 @@ def plan_hooks(vault, agent, home, codex_home, remove, migrate, shell):
         if client == 'claude':
             legacy = {str(vault / '.claude/hooks' / name) for name in
                       ('oturum-basla.sh', 'mesaj-say.sh', 'hafiza-kontrol.sh', 'oturum-bitir.sh')}
+            # kur.sh emitted both raw and shlex.quote paths over its lifetime.
+            # Compare whole generated strings only; wrappers remain user-owned.
+            legacy |= {shlex.quote(command) for command in legacy}
         elif client == 'codex':
             legacy = {'python3 ' + shlex.quote(str(vault / 'araclar/codex_hafiza.py')) + ' hook'}
         for event, groups in list(hooks.items()):

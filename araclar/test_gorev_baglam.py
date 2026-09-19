@@ -36,7 +36,7 @@ class Package(unittest.TestCase):
 
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-  self.v=Path(self.tmp.name);(self.v/'komuta').mkdir()
+  self.v=Path(self.tmp.name).resolve();(self.v/'komuta').mkdir()
   self.image=self.v/'approved.png';self.image.write_bytes(b'approved-image')
   self.source=self.v/'approval.md';self.source.write_text('Bu karakter tek onaylı kimlik referansıdır.')
   self.asset=dict(id='mascot',role='identity',path=str(self.image),allowed_roots=[str(self.v)],status='approved',sha256=digest(self.image),approval_source=str(self.source),approval_evidence=self.source.read_text())
