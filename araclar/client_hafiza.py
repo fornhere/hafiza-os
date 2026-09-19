@@ -8,7 +8,6 @@ import argparse
 import json
 from pathlib import Path
 import sys
-import threading
 
 from client_transcripts import CLIENTS, SourceError, private, sha, source_path, strict_json
 from client_sessions import atomic, enforce_policy, locked, load, recall, register, source_with_policy
@@ -16,25 +15,14 @@ from hafiza import contains_secret
 
 MAX_INPUT = 128000
 CONTEXT_BUDGET = 6500
-_LOCAL_RETRIEVAL_LOCK = threading.RLock()
 
 
 def local_task_package(vault, query, cwd=None):
-    """Reuse the core builder with its optional semantic advisor forced off.
-
-    The native hook is a one-shot process. This scoped in-process dependency
-    override leaves the user's config and the existing Codex adapter untouched.
-    Serialize native callers and always restore the advisor mode function.
-    """
-    import jev_retrieval
+    """Task-local policy covers all model purposes without changing globals."""
+    import jev_client
     from gorev_baglam import build_task_package
-    with _LOCAL_RETRIEVAL_LOCK:
-        original_mode = jev_retrieval.mode
-        try:
-            jev_retrieval.mode = lambda _vault: 'off'
-            return build_task_package(vault, query, cwd=cwd, budget=2000)
-        finally:
-            jev_retrieval.mode = original_mode
+    with jev_client.disabled():
+        return build_task_package(vault, query, cwd=cwd, budget=2000)
 
 
 def identity(client, payload):

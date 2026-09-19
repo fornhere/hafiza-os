@@ -36,7 +36,7 @@ Aday havuzu kaynak ve proje kapsamıyla sınırlandırılır; açık alan sözc�
 
 ## Sınırlar ve hata davranışı
 
-Her erişim yüzeyi tek istek yapar; otomatik tekrar yoktur. Varsayılan üst sınır 32 aday, 96 soru ve 24000 girdi karakteridir. Bunlar token veya günlük harcama sınırı değildir. Görev paketi bilgi, katalog ve isteğe bağlı prosedür seçimi için en fazla üç istek yapabilir; varsayılan bekleme toplamı yaklaşık 9 saniyeye kadar çıkar, buna yerel işlem süresi eklenir. Timeout olmuş uzak istek sağlayıcıda tamamlanıp ücretlenebilir. Sağlayıcıda ayrıca harcama sınırı belirlenmelidir.
+Her erişim yüzeyi tek istek yapar; otomatik tekrar yoktur. Varsayılan üst sınır 32 aday, 96 soru ve 24000 girdi karakteridir. Bunlar token veya günlük harcama sınırı değildir. Görev paketi bilgi, katalog ve isteğe bağlı prosedür seçimi için en fazla üç istek yapabilir; üç bağımsız okuyucu paralel çalışır ve ortak varsayılan inference süresi yaklaşık 3 saniyeyle sınırlıdır; buna yerel işlem süresi eklenir. Timeout olmuş uzak istek sağlayıcıda tamamlanıp ücretlenebilir. Sağlayıcıda ayrıca harcama sınırı belirlenmelidir.
 
 Timeout, 401/403/429/5xx, bozuk yanıt, aday/girdi sınırı ve kaynak değişimi yerel geri dönüşle `degraded` olarak görünür; bunlar “kanıt yok” sayılmaz. Geçersiz kaynak geri dönüşte de teslim edilmez. `confidence` seçim veya izin için kullanılmaz.
 
@@ -138,3 +138,6 @@ yüzeyler çağrılabilir. Her yüzey en fazla bir çağrı yapar, otomatik tekr
 Puanlar ve token kullanımı tanı verisidir; fatura tutarı değildir.
 `on` ile tek seçiciye geçiş ayrıca yeni sorularla geri çağırma, yanlış aday,
 karakter bütçesi, son paket teslimi ve gecikme ölçümü gerektirir.
+
+Paralellik, tekil çağrı paylaşımı, kapasite, kaynak snapshot ve görevler arası
+ayrım için [mimari sözleşmesi](MIMARI.md).

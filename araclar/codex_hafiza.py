@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import tempfile
 from pathlib import Path
 import sys
 
@@ -54,9 +55,10 @@ def key(session, turn):
 
 def atomic(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + f'.{os.getpid()}.tmp')
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix='.'+path.name+'.', suffix='.tmp')
+    temp = Path(name)
     try:
-        with temp.open('w', encoding='utf-8') as out:
+        with os.fdopen(fd, 'w', encoding='utf-8') as out:
             os.chmod(temp, 0o600)
             out.write(text)
             out.flush()
@@ -188,7 +190,10 @@ def hook(vault, data):
         lesson_text = package['text']
         # One consecutive repeat may be omitted; the next prompt refreshes it.
         # Hash includes source versions, not only rendered prose.
-        package_hash = hashlib.sha256(json.dumps(package, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        package_hash = hashlib.sha256(json.dumps(
+            {'text': lesson_text, 'sources': package.get('source_versions', {}),
+             'selected': package.get('selected_ids', [])},
+            sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         cache = state.get('package_cache', {})
         suppress = bool(lesson_text and package_hash == cache.get('hash') and not cache.get('suppressed'))
         original_chars = len(lesson_text)
@@ -255,14 +260,21 @@ def main():
         return
     queue = args.vault / INBOX
     queue.mkdir(parents=True, exist_ok=True)
-    with exclusive_lock(queue / '.lock'):
-        if args.cmd == 'record':
-            data = json.loads(args.input_json.read_text(encoding='utf-8'))
-            if 'semantic_candidates' not in data:
-                raise ValueError('semantic_candidates gerekli; kalıcı bilgi yoksa [] kullan')
+    if args.cmd == 'record':
+        data = json.loads(args.input_json.read_text(encoding='utf-8'))
+        if 'semantic_candidates' not in data:
+            raise ValueError('semantic_candidates gerekli; kalıcı bilgi yoksa [] kullan')
+        # The receipt index is shared; hook state and network work are not.
+        with exclusive_lock(queue / '.lock'):
             result = record(args.vault, data['session_id'], data['turn_id'], data['summary'], data['semantic_candidates'], data.get('source_snapshot'))
-        else:
-            result = hook(args.vault, json.load(sys.stdin))
+    else:
+        data = json.load(sys.stdin)
+        state_dir = queue / '.state'
+        state_dir.mkdir(parents=True, exist_ok=True)
+        # Different sessions can progress independently. Same-session ordering
+        # remains serialized so a late prompt cannot overwrite newer turn state.
+        with exclusive_lock(state_dir / (key(data.get('session_id'), 'state') + '.lock')):
+            result = hook(args.vault, data)
     print(json.dumps(result, ensure_ascii=False))
 
 

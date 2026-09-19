@@ -20,7 +20,7 @@ else:
 
 
 @contextmanager
-def exclusive_lock(path):
+def exclusive_lock(path, timeout=None):
     """Acquire an exclusive lock, blocking until available; always close/release.
 
 The caller creates the parent directory. Opening does not truncate existing
@@ -28,6 +28,7 @@ files. Only contention/interruption is retried; other I/O failures propagate.
 """
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     acquired = False
+    deadline = None if timeout is None else time.monotonic() + max(0, timeout)
     try:
         while True:
             try:
@@ -36,16 +37,18 @@ files. Only contention/interruption is retried; other I/O failures propagate.
                     # LK_LOCK has a finite retry limit; retry LK_NBLCK ourselves.
                     msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
                 else:
-                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    fcntl.flock(fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if deadline is not None else 0))
                 acquired = True
                 break
             except OSError as error:
                 if error.errno == errno.EINTR:
                     continue
-                if os.name == "nt" and error.errno in (
+                if (os.name == "nt" or deadline is not None) and error.errno in (
                     errno.EACCES, errno.EAGAIN, errno.EDEADLK
                 ):
-                    time.sleep(0.05)
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise TimeoutError("lock_deadline_exceeded") from None
+                    time.sleep(0.01 if deadline is not None else 0.05)
                     continue
                 raise
         yield

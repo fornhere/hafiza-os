@@ -1,3 +1,14 @@
+## 20 Eylül 2026 — Paralellik ve tutarlı görev bağlamı
+
+- Bağımsız okuyucular paralel; tek ayar snapshot'ı ve ortak Jev inference süresi.
+- Aynı isteği paylaşma, süreçler arası sınırlı kapasite ve timeout sonrası geç yanıt koruması.
+- Yerel hook'ta bütün Jev amaçlarını kapsayan görev bayrağı; oturum başına Codex kilidi.
+- Son paket kaynak kontrolü, değişmeyen bağlamın doğru bastırılması ve kararlı paket kimliği.
+- Terminal hafıza adayında yeniden terfi engeli; inceleme kontrolü ve karar tek kilitte.
+- Aynı baytlara bağlı kaynak/hash; çelişkili olasılık/score yanıtında geri dönüş.
+- Mem0 ağı kanonik yazıcıyı tutmaz; sürüm karşılaştırmalı son yazma ve belirsiz işlem günlüğü.
+- [Mimari, sınırlar ve önerilen deneyler](MIMARI.md).
+
 ## 20 Eylül 2026 — Jev için bağımsız prosedür ve kaynak adaylığı
 
 - Prosedür seçimi: incelenmiş, mevcut yerel dosyalardan bütçeli okuma önerisi.

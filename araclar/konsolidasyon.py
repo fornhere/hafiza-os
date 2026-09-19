@@ -25,6 +25,13 @@ def pending(vault):
 
 
 def review(vault, decision, apply=False):
+    # Claim, revalidation, promotion and terminal audit are one local transaction.
+    # Inference is performed before this entry point, never under this lock.
+    if apply: return h.serialized(_review)(vault, decision, True)
+    return _review(vault, decision, False)
+
+
+def _review(vault, decision, apply=False):
     candidates = pending(vault)
     candidate = next((c for c in candidates if c['candidate_id'] == decision['candidate_id']), None)
     if candidate is None:
@@ -40,14 +47,14 @@ def review(vault, decision, apply=False):
             raise ValueError('yalnız kanıtlı semantik aday otomatik incelemeden geçebilir')
         if candidate['assessment']['result'] != 'eligible':
             raise ValueError('çelişki veya tekrar otomatik terfi edemez')
-        result = h.promote_candidate(vault, candidate['candidate_id'],
+        result = h.promote_candidate.__wrapped__(vault, candidate['candidate_id'],
             memory_id='memory-auto-' + candidate['candidate_id'], reviewed_by=ACTOR, apply=apply)
     elif action in ('reject', 'duplicate', 'defer'):
         result = {'result': action, 'candidate_id': candidate['candidate_id']}
     else:
         raise ValueError('decision approve/reject/duplicate/defer olmalı')
     if apply:
-        save_review(vault, candidate['candidate_id'], action, decision)
+        save_review.__wrapped__(vault, candidate['candidate_id'], action, decision)
     return result
 
 

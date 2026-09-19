@@ -1,4 +1,4 @@
-"""Local, source-validated task context. No network and no memory writes."""
+"""Source-validated task context with optional bounded Jev advice; no memory writes."""
 import math
 import hashlib
 import json
@@ -180,14 +180,66 @@ def continuation_request(query):
     return any(alias_match(term, words) for term in ('devam', 'kaldık', 'sonraki adım'))
 
 
+class RevisionMap(dict):
+    """A merged read set must never hide two observed versions of one path."""
+    conflict = False
+    def __setitem__(self, key, value):
+        if key in self and self[key] != value: self.conflict = True
+        super().__setitem__(key, value)
+    def update(self, other):
+        for key, value in other.items(): self[key] = value
+
+
 def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view="auto"):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
+    from jev_client import evaluation_context
+    from is_ve_ders import TASKS, LESSONS
+    vault = Path(vault).resolve()
+    ledgers = [h.CATALOG_PATH, h.SOURCE_BINDINGS, TASKS, LESSONS,
+               Path('komuta/gorev-baglam.json')]
+    def revisions():
+        return {str(p): digest(vault/p) if (vault/p).is_file() else None for p in ledgers}
+    before = revisions()
+    # Readers are independent. Assembly stays ordered in the calling thread.
+    with evaluation_context(vault), ThreadPoolExecutor(max_workers=3) as executor:
+        def submit(function, *args, **kwargs):
+            return executor.submit(copy_context().run, function, *args, **kwargs)
+        result = _build_task_package(vault, query, cwd, budget, history, view, submit)
+    changed = before != revisions() or getattr(result.get('source_versions'), 'conflict', False)
+    for name, version in result.get('source_versions', {}).items():
+        try:
+            if digest(vault/name) != version: changed = True
+        except OSError: changed = True
+    if changed:
+        # Never relabel an old claim with a freshly computed source hash.
+        text = 'Bağlam hazırlanırken kaynak değişti; güncel kaynağı yeniden doğrula.'
+        result.update(text=text[:max(0,int(budget))], selected_ids=[], assets=[],
+                      source_versions={}, knowledge=None, decision_history=None, reuse=None)
+        result['omitted_reasons'].append('source_changed_during_package')
+        result['summary'] = dict(record_ids=[],task_ids=[],derived=True)
+        result['procedure_reading'].update(paths=[],delivered=False)
+        result['history'].update(included=False,topic_covered=False)
+        if 'capsule' in result:
+            result['capsule'].update(tasks=[],facts=[],outputs=[],last_verified_output=None,
+                                    suggested_next_step=None,selection_required=True)
+        if result.get('jev'): result['jev']['knowledge_delivered']=False
+        result['usage'].update(context_chars=len(result['text']),selected_count=0,
+                               omitted_count=len(result['omitted_reasons']))
+    result['package_id']=hashlib.sha256(json.dumps(
+        {k:result.get(k) for k in ('text','source_versions','selected_ids','assets','project_id')},
+        ensure_ascii=False,sort_keys=True).encode()).hexdigest()[:24]
+    return result
+
+
+def _build_task_package(vault, query, cwd, budget, history, view, submit):
     if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
     if view not in ("auto", "standard", "resume"): raise ValueError("invalid view")
     query = task_intent(query)
     resume = view == "resume" or (view == "auto" and continuation_request(query))
     resume_tasks = []; card_facts = []
     vault = Path(vault).resolve(); words = tokens(query)
-    selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions={}
+    selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions=RevisionMap()
     budget=max(0, int(budget)); candidates=[]; current_facts=[]; current_tasks=[]
     projects=[]
     cfg=config(vault)
@@ -216,9 +268,12 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     wants_decisions=any(requested_phrase(p) for p in ('karar geçmişi','eski karar','önceki karar','neden seçtik','neden seçmiştik'))
     wants_reuse=any(requested_phrase(p) for p in ('yeniden kullan','yeniden kullanım','yeniden kullanabiliriz','yeniden kullanabilirim','başka nerede','hangi çıktıyı'))
     knowledge_data = None
+    knowledge_future = None
+    from jev_procedures import route as route_procedures
+    procedure_future = submit(route_procedures, vault, query, budget=min(1000,budget))
     if (vault / 'bilgi').is_dir() and len(projects)<=1:
         from konu_sentezi import retrieve as read_knowledge
-        knowledge_data=read_knowledge(vault,query,project_id=project['id'] if project else None,budget=min(1800,budget))
+        knowledge_future=submit(read_knowledge,vault,query,project_id=project['id'] if project else None,budget=min(1800,budget))
     decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
     if wants_decisions and len(projects)<=1:
         from karar_gecmisi import history as read_decisions
@@ -241,9 +296,6 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
         candidates.append((priority, len(candidates), ident, text))
         return True
     task_ids=set()
-    from jev_procedures import route as route_procedures
-    procedure_data = route_procedures(vault, query, budget=min(1000,budget))
-    if procedure_data['text']: add('procedure-reading', procedure_data['text'])
     qwords=query_words(query)
     deictic=any(w in qwords for w in ('dünkü','o','şu','önceki'))
     task_reference=any(inflected(base,word) for base in ('kapak','video','proje','çıktı') for word in qwords) or any(w in qwords for w in ('iş','işi','işe','işin'))
@@ -254,6 +306,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
         add('ambiguous_project','Birden fazla proje eşleşti; proje seçimini netleştirmeden dosya veya onay uydurma.')
     overrides=asset_claim_overrides(vault)
     eligible=[]
+    eligible_versions={}
     for row in h.load_catalog(vault):
         if decision_data and row.get('memory_id') in decision_data['considered_ids']: continue
         if not any(h.retrievable(row,context_scope) for context_scope in [scope]+['project:'+w['id'] for w in workflows]): continue
@@ -264,15 +317,26 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
             if rank_records([row], query): omitted.append(row.get('memory_id','unknown')+':invalid')
             continue
         eligible.append(row)
+        eligible_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
     from jev_retrieval import catalog as semantic_catalog
-    ranked_catalog, catalog_evaluation = semantic_catalog(vault, query, eligible, rank_records, scope)
+    catalog_future = submit(semantic_catalog, vault, query, eligible, rank_records, scope)
+    ranked_catalog, catalog_evaluation = catalog_future.result()
+    procedure_data = procedure_future.result()
+    knowledge_data = knowledge_future.result() if knowledge_future else None
+    if procedure_data['text']: add('procedure-reading', procedure_data['text'])
+    def still_current(row):
+        try:
+            return (not h.context_record_errors(vault,row) and
+                    digest(h.source_file(vault,row['source_path'])) == eligible_versions[row['source_path']])
+        except (OSError,ValueError): return False
+    ranked_catalog=[row for row in ranked_catalog if still_current(row)]
     if catalog_evaluation and catalog_evaluation.get('suggested_ids'):
         suggested=set(catalog_evaluation['suggested_ids'])
         for row in eligible:
-            if row['memory_id'] not in suggested:continue
+            if row['memory_id'] not in suggested or not still_current(row):continue
             add('jev-reading:'+row['memory_id'], 'Jev kaynak adayı (okumadan tercih/onay sayma): '+row['subject_key']+' — '+str(vault/row['source_path']))
-            source_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
+            source_versions[row['source_path']]=eligible_versions[row['source_path']]
 
     for row in ranked_catalog:
         # A source-derived card requires a reviewed source revision, not a new
@@ -289,7 +353,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
             current_facts.append(row)
             priority,sequence,ident,text=candidates[-1]
             candidates[-1]=(4,sequence,ident,text)
-            source_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
+            source_versions[row['source_path']]=eligible_versions[row['source_path']]
     if project:
         add('project', 'Proje: '+project['id'])
         if workflows: add('workflow', 'Bu projedeki üretim yöntemi: '+', '.join(w['id'] for w in workflows)+'. Yöntem referansları proje seçimini değiştirmez.')

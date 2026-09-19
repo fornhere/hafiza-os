@@ -121,6 +121,9 @@ def _retrieve_local(vault, query, project_id=None, budget=1800):
         for record in topic['records']:
             if record['id'] in seen:
                 continue
+            try: revision=knowledge.note_version(vault,record)
+            except (OSError,ValueError):
+                result['diagnostics'].append(record['id']+':source_changed_during_read');continue
             path = f"bilgi/{record['id']}.md"
             card = (f"Konu: {topic['title']} | Kapsam: {record['scope']} | "
                     f"Alanlar: {', '.join(record['domains'])}\n"
@@ -138,7 +141,7 @@ def _retrieve_local(vault, query, project_id=None, budget=1800):
             records.append(record)
             delivered.append(record['id'])
             seen.add(record['id'])
-            versions[path] = knowledge.digest(vault / path)
+            versions[path] = revision
             for source in record['sources']:
                 versions[source['path']] = source['sha256']
             for example in record.get('examples', []):

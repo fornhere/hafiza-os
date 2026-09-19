@@ -47,9 +47,9 @@ def _validate(vault, data):
     contents=[]
     for s in d['sources']:
         if set(s)!={'path','sha256','evidence'}:raise ValueError('invalid_source')
-        path=_safe(vault,s['path']);text=path.read_text()
+        path=_safe(vault,s['path']);raw=path.read_bytes();text=raw.decode('utf-8').replace('\r\n','\n')
         if h.contains_secret(text):raise ValueError('restricted_source')
-        if digest(path)!=s['sha256']:raise ValueError('source_changed')
+        if hashlib.sha256(raw).hexdigest()!=s['sha256']:raise ValueError('source_changed')
         if not isinstance(s['evidence'],str) or len(s['evidence'].strip())<10 or s['evidence'] not in text:raise ValueError('evidence_missing')
         contents.append(text)
     for key in ('rationale','conditions','exceptions'):
@@ -85,13 +85,25 @@ def _body(d):
     return '\n'.join(lines)+'\n'
 
 
-def _read(path):
-    raw=path.read_text();match=re.fullmatch(r'<!-- bilgi-agi-v1\n(.*?)\n-->\n(.*)',raw,re.S)
+def _read_snapshot(path):
+    data=path.read_bytes();raw=data.decode('utf-8').replace('\r\n','\n');match=re.fullmatch(r'<!-- bilgi-agi-v1\n(.*?)\n-->\n(.*)',raw,re.S)
     if not match:raise ValueError('unmanaged_note')
     meta=json.loads(match[1]);body=match[2]
     if hashlib.sha256(body.encode()).hexdigest()!=meta['body_sha256']:raise ValueError('note_manually_changed')
     if body!=_body(meta['record']):raise ValueError('note_metadata_changed')
-    return meta['record']
+    return meta['record'], hashlib.sha256(data).hexdigest()
+
+
+def _read(path):
+    return _read_snapshot(path)[0]
+
+
+def note_version(vault, record):
+    """A revision may only label the record parsed from those same bytes."""
+    current, revision = _read_snapshot(Path(vault)/'bilgi'/f"{record['id']}.md")
+    if current != record: raise ValueError('note_changed_during_read')
+    _validate(Path(vault), current)
+    return revision
 
 
 def _write(path,text):
@@ -244,6 +256,9 @@ def _retrieve_local(vault,query,project_id=None,budget=1800):
     ranked.sort(key=lambda item:(item[2] is not None,-item[0],item[1]['id']))
     selected=[];transfers=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
     for _,d,transfer in ranked:
+        try: revision=note_version(vault,d)
+        except (OSError,ValueError):
+            diagnostics.append(d['id']+':source_changed_during_read');continue
         card=f"Bilgi [{d['kind']}; {', '.join(d['domains'])}]: {d['statement']}\nKaynak: bilgi/{d['id']}.md"
         if transfer:
             card='Uyarlama önerisi ['+', '.join(d['domains'])+' → '+', '.join(transfer['target_domains'])+']: '+d['statement']+'\nAktarılabilecek özellik: '+', '.join(transfer['aspects'])+'. '+transfer['reason']+' Yeni alanda kullanıcı onayı değildir; renk/font gibi belirtilmeyen özellikleri çıkarma.\nKaynak: bilgi/'+d['id']+'.md'
@@ -257,7 +272,7 @@ def _retrieve_local(vault,query,project_id=None,budget=1800):
         cards.append(card)
         if transfer:transfers.append(dict(transfer,source_record=d))
         else:selected.append(d)
-        versions[f"bilgi/{d['id']}.md"]=digest(vault/'bilgi'/f"{d['id']}.md")
+        versions[f"bilgi/{d['id']}.md"]=revision
         for s in d['sources']:versions[s['path']]=s['sha256']
         for e in d.get('examples',[]):versions[e['path']]=e['sha256']
     text='\n\n'.join(cards)

@@ -56,7 +56,7 @@ VALID_SENSITIVITIES = {"normal", "private", "secret"}
 
 
 def serialized(function):
-    """All local writers share one process lock, including sync/readback."""
+    """Canonical local writers share one lock; sync holds it only at prepare/commit."""
     @functools.wraps(function)
     def wrapped(vault, *args, **kwargs):
         directory = vault / "günlük" / "hafıza-makbuzları"
@@ -250,11 +250,11 @@ def promote_candidate(
         raise ValueError("aday bulunamadı")
     events = load_jsonl(vault / EVENT_PATH)
     if any(
-        event.get("event_type") == "candidate.promoted"
+        event.get("event_type") in ("candidate.promoted", "candidate.rejected", "candidate.duplicate")
         and event.get("candidate_id") == candidate_id
         for event in events
     ):
-        raise ValueError("aday daha önce terfi ettirilmiş")
+        raise ValueError("aday daha önce terfi ettirilmiş veya kapatılmış")
     records = load_catalog(vault)
     if any(r["memory_id"] == memory_id for r in records):
         raise ValueError("memory_id zaten var")
@@ -362,16 +362,64 @@ def memory_metadata(vault: Path, record: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
-@serialized
-def sync_existing(
+def sync_existing(vault, records, client, *, apply=False):
+    """Serialize index workers, but never hold the canonical lock over network.
+
+    Prepare and commit are short writer transactions. An intervening catalog
+    change rejects the whole stale write; remote identity metadata permits repair
+    on the next explicit sync without blindly adding another remote record.
+    """
+    from codex_hafiza import atomic
+    vault = Path(vault)
+    directory = vault / 'günlük/hafıza-makbuzları'
+    directory.mkdir(parents=True, exist_ok=True)
+    with exclusive_lock(directory / '.sync.lock'):
+        working = json.loads(json.dumps(records))
+        journal = directory / 'sync-transactions' / (str(uuid.uuid4()) + '.json')
+        @serialized
+        def prepare(vault):
+            before = load_catalog(vault)
+            if apply and (vault/CATALOG_PATH).exists() and before != working:
+                raise ValueError('katalog eşzamanlı değişmiş; yeniden yükleyip senkronu tekrarla')
+            errors = validate_catalog(vault, working)
+            if errors: raise ValueError('katalog geçersiz: ' + '; '.join(errors))
+            if apply:
+                atomic(journal, json.dumps(dict(status='prepared',
+                    catalog_sha256=statement_hash(json.dumps(before,sort_keys=True)),
+                    at=dt.datetime.now(dt.timezone.utc).isoformat())))
+            return before
+        before = prepare(vault)
+        try:
+            result = _sync_remote(vault, working, client, apply=apply)
+        except Exception:
+            if apply: atomic(journal, json.dumps(dict(status='remote_outcome_unknown',
+                reconciliation_required=True)))
+            raise
+        @serialized
+        def finish(vault):
+            conflict = apply and load_catalog(vault) != before
+            if conflict:
+                result.update(verified=0, reconciliation_required=True, status='catalog_conflict')
+            else:
+                if apply and result.pop('catalog_changed', False):
+                    _write_jsonl(vault/CATALOG_PATH, working)
+                result.update(status='applied' if apply else 'preview', reconciliation_required=False)
+                if apply: records[:] = working
+            result.pop('catalog_changed', None)
+            if apply: atomic(journal, json.dumps(dict(status=result['status'],
+                reconciliation_required=result['reconciliation_required'],
+                verified=result['verified'], total=result['total'])))
+            return result
+        return finish(vault)
+
+
+def _sync_remote(
     vault: Path,
     records: list[dict[str, Any]],
     client: Any,
     *,
     apply: bool = False,
 ) -> dict[str, Any]:
-    if apply and (vault / CATALOG_PATH).exists() and load_catalog(vault) != records:
-        raise ValueError("katalog eşzamanlı değişmiş; yeniden yükleyip senkronu tekrarla")
     errors = validate_catalog(vault, records)
     if errors:
         raise ValueError("katalog geçersiz: " + "; ".join(errors))
@@ -405,7 +453,7 @@ def sync_existing(
                 memory_id = matches[0]["id"]
                 if apply:
                     record["mem0_id"] = memory_id
-                    _write_jsonl(vault / CATALOG_PATH, records)
+                    catalog_changed = True
         current = remote.get(memory_id)
         if not memory_id:
             if record["status"] != "active":
@@ -418,9 +466,8 @@ def sync_existing(
                 memory_id = created["id"]
                 remote[memory_id] = created
                 catalog_changed = True
-                # Persist every add before the next network operation. A retry can
-                # also recover a crash between remote add and this write by metadata.
-                _write_jsonl(vault / CATALOG_PATH, records)
+                # Remote identity metadata recovers an interrupted local binding.
+                # Local publication occurs once, under a revision-checked lock.
             continue
         if current is None:
             receipt["missing_remote"] += 1
@@ -440,8 +487,6 @@ def sync_existing(
                 )
         else:
             receipt["unchanged"] += 1
-    if apply and catalog_changed:
-        _write_jsonl(vault / CATALOG_PATH, records)
     verified_remote = {item["id"]: item for item in client.list_memories()}
     for record in records:
         memory_id = record.get("mem0_id")
@@ -454,6 +499,7 @@ def sync_existing(
             current_metadata.get(k) == v for k, v in expected_metadata.items()
         ):
             receipt["verified"] += 1
+    receipt["catalog_changed"] = catalog_changed
     return receipt
 
 
@@ -1054,7 +1100,7 @@ def main(argv: list[str] | None = None) -> int:
         result["receipt"] = str(write_receipt(vault, "sync", result).relative_to(vault))
         _json_print(result)
         expected = sum(1 for record in records if record.get("mem0_id") or (args.apply and record["status"] == "active"))
-        return 0 if result["verified"] == expected else 1
+        return 0 if result["verified"] == expected and not result.get("reconciliation_required") else 1
 
     if args.command == "eval":
         path = args.file if args.file.is_absolute() else vault / args.file

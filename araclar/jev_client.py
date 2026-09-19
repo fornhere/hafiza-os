@@ -12,6 +12,8 @@ import urllib.error
 import socket
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 DEFAULTS = dict(mode='off', retrieval_mode='inherit', procedure_mode='off', model='jev-1.13.0', provider='typesafe',
@@ -66,7 +68,7 @@ class _AnswerInvalid(ValueError):
         self.issue = issue
 
 
-def load_config(vault):
+def _read_config(vault):
     path = Path(vault) / 'komuta/jev.json'
     config = dict(DEFAULTS)
     if path.exists():
@@ -93,6 +95,41 @@ def load_config(vault):
     if 'env_file' in config and (not isinstance(config['env_file'],str) or not Path(config['env_file']).is_absolute()):
         raise ValueError('config_invalid')
     return config
+
+
+_CONTEXT = ContextVar('jev_context', default=None)
+_DISABLED = ContextVar('jev_disabled', default=False)
+
+@contextmanager
+def disabled():
+    """Task-local no-network policy, inherited only via an explicit context copy."""
+    token = _DISABLED.set(True)
+    try: yield
+    finally: _DISABLED.reset(token)
+
+
+def load_config(vault):
+    if _DISABLED.get(): return dict(DEFAULTS, mode='off')
+    current = _CONTEXT.get()
+    if current and current['vault'] == str(Path(vault).resolve()):
+        if current['config'] is None: raise ValueError('config_invalid')
+        return dict(current['config'])
+    return _read_config(vault)
+
+
+@contextmanager
+def evaluation_context(vault):
+    """One config revision and one inference deadline for a whole package."""
+    current = _CONTEXT.get()
+    if current and current['vault'] == str(Path(vault).resolve()):
+        yield
+        return
+    try: config = load_config(vault)
+    except (ValueError, OSError): config = None
+    token = _CONTEXT.set(dict(vault=str(Path(vault).resolve()), config=config,
+                             deadline=time.monotonic() + (config or DEFAULTS)['timeout']))
+    try: yield
+    finally: _CONTEXT.reset(token)
 
 
 def _environment(config):
@@ -154,20 +191,6 @@ def _transport(endpoint, body, key, timeout):
         return json.loads(raw)
 
 
-def _bounded_transport(transport, endpoint, body, key, timeout):
-    # Bound caller latency even if a server dribbles bytes between socket timeouts.
-    # A timed-out daemon may finish its single in-flight request; never retry it.
-    output=queue.Queue(maxsize=1)
-    def call():
-        try: output.put((True,transport(endpoint,body,key,timeout)))
-        except Exception as exc: output.put((False,exc))
-    threading.Thread(target=call,daemon=True).start()
-    try: success,value=output.get(timeout=timeout)
-    except queue.Empty: raise ValueError('deadline_exceeded') from None
-    if not success: raise value
-    return value
-
-
 def _quantized_distribution(probabilities, score):
     """Feasibility of independently rounded 2dp probabilities and score.
 
@@ -206,9 +229,11 @@ def _scores(raw, ids, allow_quantized=False, quantized_counter=None):
             if not isinstance(probabilities,list) or len(probabilities)!=3: raise _AnswerInvalid('probability_shape')
             if any(type(v) not in (int,float) or not math.isfinite(v) or not 0<=v<=1 for v in probabilities):
                 raise _AnswerInvalid('probability_range_or_type')
-            if abs(sum(probabilities)-1)>0.001:
+            sum_invalid = abs(sum(probabilities)-1)>0.001
+            expectation_invalid = abs(sum(i*p for i,p in enumerate(probabilities))-score)>0.001
+            if sum_invalid or expectation_invalid:
                 if not allow_quantized or not _quantized_distribution(probabilities, score):
-                    raise _AnswerInvalid('probability_sum')
+                    raise _AnswerInvalid('probability_sum' if sum_invalid else 'score_probability_mismatch')
                 if quantized_counter is not None: quantized_counter.append(ident)
         result[ident]=float(score)
     return result
@@ -253,77 +278,93 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
         body=dict(model=config['model'],state=dict(query=query,facets=facets,candidates=cards),questions={
             f'f{j}_c{i}':_question(purpose,i,j)
             for j in range(len(facets)) for i,c in enumerate(cards)})
-        def assign(scores):
-            result['facet_scores']={j:{} for j in range(len(facets))}
-            for key,score in scores.items():
-                j,ident=question_map[key]; result['facet_scores'][j][ident]=score
-            result['scores']={ident:max(result['facet_scores'][j][ident] for j in range(len(facets))) for ident in ids}
         if len(json.dumps(body,ensure_ascii=False))>config['max_input_chars']: raise ValueError('budget_exceeded')
         env=_environment(config); endpoint=_endpoint(env.get('TYPESAFE_BASE_URL',config['base_url']))
         fingerprint=dict(body=body,scope=scope,sources=source_versions or {},endpoint=endpoint,
-                         provider=config['provider'],rubric_version=config['rubric_version'],purpose=purpose,purpose_version=1,probability_adapter=2,schema=2)
+                         provider=config['provider'],rubric_version=config['rubric_version'],purpose=purpose,purpose_version=1,probability_adapter=3,schema=2)
         digest=hashlib.sha256(json.dumps(fingerprint,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
         result['request_hash']=digest
-        path=None
-        try:
-            path=_cache_path(vault,digest)
-            if path.exists():
-                cached=json.loads(path.read_text())
-                age=time.time()-cached['created_at']
-                if cached['request_hash']==digest and 0<=age<config['cache_ttl']:
-                    assign(_scores(cached['response'],question_map))
-                    reported=cached.get('reported_model')
-                    if isinstance(reported,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}',reported): result['reported_model']=reported
-                    provenance=cached.get('confidence_provenance',{})
-                    if isinstance(provenance,dict) and all(type(provenance.get(k)) is int and 0<=provenance[k]<=len(question_map) for k in ('present','missing')):
-                        result['confidence_provenance']={k:provenance[k] for k in ('present','missing')} | {'used_for_selection':False,'origin':'cached_provider_response_unverified'}
-                    count=cached.get('quantized_probability_count',0)
-                    if type(count) is int and 0<=count<=len(question_map):
-                        result['quantized_probability_count']=count
-                        if count: result['diagnostics'].append('quantized_probability')
-                    result['cache_hit']=True
-                    return result
-        except (OSError,ValueError,KeyError,TypeError):
-            result['diagnostics'].append('cache_unavailable')
-        key=(env.get('AI_GATEWAY_API_KEY') or env.get('TYPESAFE_API_KEY')) if config['provider']=='vercel' else env.get('TYPESAFE_API_KEY')
-        if not key: raise ValueError('credentials_missing')
-        remaining=config['timeout']-(time.monotonic()-started)
-        if remaining<=0: raise ValueError('deadline_exceeded')
-        raw=_bounded_transport(transport or _transport,endpoint,body,key,remaining)
-        if time.monotonic()-started>config['timeout']: raise ValueError('deadline_exceeded')
-        # Usage can be valid even when typed answers fail; retain bounded counters.
-        usage=raw.get('usage',{}) if isinstance(raw,dict) else {}
-        if isinstance(usage,dict):
-            result['usage']={k:usage[k] for k in ('input_tokens','output_tokens') if type(usage.get(k)) is int and usage[k]>=0}
-        quantized = []
-        validated=_scores(raw,question_map,allow_quantized=config['provider']=='vercel',quantized_counter=quantized)
-        result['quantized_probability_count']=len(quantized)
-        if quantized: result['diagnostics'].append('quantized_probability')
-        assign(validated)
-        # Record provider identity only when it is a bounded identifier, never free text.
-        reported=raw.get('model')
-        if isinstance(reported,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}',reported):
-            result['reported_model']=reported
-        answers=raw['answers']
-        present=sum('confidence' in answer for answer in answers.values())
-        result['confidence_provenance']=dict(present=present,missing=len(answers)-present,
-            used_for_selection=False,origin='provider_response_unverified')
-        if path:
+        current = _CONTEXT.get()
+        deadline = started + config['timeout']
+        if current and current['vault'] == str(Path(vault).resolve()):
+            deadline = min(deadline, current['deadline'])
+        initial = result
+        def resolve():
+            result=dict(initial, diagnostics=list(initial['diagnostics']))
+            def assign(scores):
+                result['facet_scores']={j:{} for j in range(len(facets))}
+                for key,score in scores.items():
+                    j,ident=question_map[key]; result['facet_scores'][j][ident]=score
+                result['scores']={ident:max(result['facet_scores'][j][ident] for j in range(len(facets))) for ident in ids}
+            path=None
             try:
-                # Store only validated score output: no prompts, credentials or raw provider metadata.
-                safe=dict(answers={i:dict(type='score',score=s) for i,s in validated.items()})
-                with tempfile.NamedTemporaryFile(mode='w',dir=path.parent,delete=False) as handle:
-                    os.chmod(handle.name,0o600)
-                    json.dump(dict(created_at=time.time(),request_hash=digest,response=safe,
-                                   reported_model=result['reported_model'],confidence_provenance=result['confidence_provenance'],
-                                   quantized_probability_count=result['quantized_probability_count']),handle)
-                    temporary=handle.name
-                os.replace(temporary,path)
-            except OSError: result['diagnostics'].append('cache_write_failed')
+                path=_cache_path(vault,digest)
+                if path.exists():
+                    cached=json.loads(path.read_text())
+                    age=time.time()-cached['created_at']
+                    if cached['request_hash']==digest and 0<=age<config['cache_ttl']:
+                        assign(_scores(cached['response'],question_map))
+                        reported=cached.get('reported_model')
+                        if isinstance(reported,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}',reported): result['reported_model']=reported
+                        provenance=cached.get('confidence_provenance',{})
+                        if isinstance(provenance,dict) and all(type(provenance.get(k)) is int and 0<=provenance[k]<=len(question_map) for k in ('present','missing')):
+                            result['confidence_provenance']={k:provenance[k] for k in ('present','missing')} | {'used_for_selection':False,'origin':'cached_provider_response_unverified'}
+                        count=cached.get('quantized_probability_count',0)
+                        if type(count) is int and 0<=count<=len(question_map):
+                            result['quantized_probability_count']=count
+                            if count: result['diagnostics'].append('quantized_probability')
+                        result['cache_hit']=True
+                        return result
+            except (OSError,ValueError,KeyError,TypeError):
+                result['diagnostics'].append('cache_unavailable')
+            key=(env.get('AI_GATEWAY_API_KEY') or env.get('TYPESAFE_API_KEY')) if config['provider']=='vercel' else env.get('TYPESAFE_API_KEY')
+            if not key: raise ValueError('credentials_missing')
+            remaining=deadline-time.monotonic()
+            if remaining<=0: raise ValueError('deadline_exceeded')
+            raw=(transport or _transport)(endpoint,body,key,remaining)
+            if time.monotonic()>deadline: raise ValueError('deadline_exceeded')
+            # Usage can be valid even when typed answers fail; retain bounded counters.
+            usage=raw.get('usage',{}) if isinstance(raw,dict) else {}
+            if isinstance(usage,dict):
+                result['usage']={k:usage[k] for k in ('input_tokens','output_tokens') if type(usage.get(k)) is int and usage[k]>=0}
+            quantized = []
+            try:
+                validated=_scores(raw,question_map,allow_quantized=config['provider']=='vercel',quantized_counter=quantized)
+            except _AnswerInvalid as error:
+                error.usage = result['usage']
+                raise
+            result['quantized_probability_count']=len(quantized)
+            if quantized: result['diagnostics'].append('quantized_probability')
+            assign(validated)
+            # Record provider identity only when it is a bounded identifier, never free text.
+            reported=raw.get('model')
+            if isinstance(reported,str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}',reported):
+                result['reported_model']=reported
+            answers=raw['answers']
+            present=sum('confidence' in answer for answer in answers.values())
+            result['confidence_provenance']=dict(present=present,missing=len(answers)-present,
+                used_for_selection=False,origin='provider_response_unverified')
+            if path:
+                try:
+                    # Store only validated score output: no prompts, credentials or raw provider metadata.
+                    safe=dict(answers={i:dict(type='score',score=s) for i,s in validated.items()})
+                    with tempfile.NamedTemporaryFile(mode='w',dir=path.parent,delete=False) as handle:
+                        os.chmod(handle.name,0o600)
+                        json.dump(dict(created_at=time.time(),request_hash=digest,response=safe,
+                                       reported_model=result['reported_model'],confidence_provenance=result['confidence_provenance'],
+                                       quantized_probability_count=result['quantized_probability_count']),handle)
+                        temporary=handle.name
+                    os.replace(temporary,path)
+                except OSError: result['diagnostics'].append('cache_write_failed')
+            return result
+        from jev_runtime import run
+        result = run(vault, digest, deadline-time.monotonic(), resolve)
     except Exception as exc:
-        safe_codes={'config_invalid','env_file_invalid','endpoint_invalid','payload_invalid','budget_exceeded','answers_invalid','credentials_missing','deadline_exceeded','purpose_invalid'}
+        safe_codes={'config_invalid','env_file_invalid','endpoint_invalid','payload_invalid','budget_exceeded','answers_invalid','credentials_missing','deadline_exceeded','purpose_invalid','capacity_exceeded','coordination_unavailable'}
         code=str(exc) if isinstance(exc,ValueError) and str(exc) in safe_codes else 'request_failed'
-        if isinstance(exc,_AnswerInvalid): result['answer_issue']=exc.issue
+        if isinstance(exc,_AnswerInvalid):
+            result['answer_issue']=exc.issue
+            result['usage']=getattr(exc,'usage',{})
         if isinstance(exc,urllib.error.HTTPError):
             result['http_status']=exc.code if type(exc.code) is int and 100<=exc.code<=599 else None
             code=({401:'http_unauthorized',403:'http_forbidden',429:'http_rate_limited'}.get(exc.code)

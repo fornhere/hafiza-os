@@ -47,7 +47,7 @@ def audit(vault, project_id=None, card_ids=None, anchor_id=None):
                   evaluations={}, excluded_count=len(diagnostics))
     try:
         before = versions(vault, watched)
-    except OSError:
+    except (OSError, ValueError):
         result.update(status='degraded', diagnostics=['source_changed_before_evaluation'])
         return result
     checks = jev_client.evaluate(vault, 'Assess each stored claim against only its attached exact evidence quotes.',
@@ -59,7 +59,7 @@ def audit(vault, project_id=None, card_ids=None, anchor_id=None):
         fresh, _ = knowledge._rows(vault)
         fresh = [r for r in fresh if r['id'] in {r['id'] for r in watched}]
         try: return versions(vault, fresh) == before
-        except OSError: return False
+        except (OSError, ValueError): return False
     if not unchanged():
         checks.update(scores={}, facet_scores={}, degraded=True)
         result.update(status='degraded', diagnostics=['source_changed_during_evaluation'])
@@ -72,7 +72,7 @@ def audit(vault, project_id=None, card_ids=None, anchor_id=None):
     fresh, _ = knowledge._rows(vault)
     fresh = [r for r in fresh if r['id'] in {r['id'] for r in watched}]
     try: after = versions(vault, fresh)
-    except OSError: after = None
+    except (OSError, ValueError): after = None
     if after != before:
         result.update(status='degraded', diagnostics=['source_changed_during_evaluation'])
         # Retain diagnostic/usage metadata, never publish stale semantic scores.

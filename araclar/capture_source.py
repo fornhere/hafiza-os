@@ -159,8 +159,13 @@ def exclusion_evidence(path, evidence):
 from hafiza import serialized
 
 
-@serialized
 def apply_prompt_policy(vault, session, prompt):
+    if not privacy_command(prompt): return False
+    return _apply_prompt_policy(vault, session, prompt)
+
+
+@serialized
+def _apply_prompt_policy(vault, session, prompt):
     """Conservative exact commands; nuanced privacy decisions need reviewer context."""
     import hafiza as h
     import datetime as dt

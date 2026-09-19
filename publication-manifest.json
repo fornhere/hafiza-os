@@ -25,8 +25,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Public installer supports vault-scoped external Mem0 credentials, optional automatic remote lookup and local override; private runtime retains its current identity and credential source.",
-      "local_sha256": "4cda7843caa36565b543307a6392c1004b782fe71c9c1093c023ec867246b666",
-      "public_sha256": "09086fb62779088d9d942d143e2a9d62df19b4333513ffa536368b782f725092"
+      "local_sha256": "d57a8ff91fb644ae35a8bdb80bddcae679d0f7b0b87214cf496f204ba1de07ed",
+      "public_sha256": "b893171ebf0bccf873a5d2e15160dd490b2a22c2980bd2917554dd1e3dbce975"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -47,8 +47,8 @@
       "path": "araclar/konsolidasyon.py",
       "mode": "reviewed-variant",
       "reason": "Private historic exclusion, identity prefix and import start date versus generic defaults.",
-      "local_sha256": "cd6db23c8adee2dff613fb411e1a235ac4da57d7e36d602ce657b8284da92411",
-      "public_sha256": "0bbc352dd9a053a7d25a82bad1952d3bb6b0588c9e3fc72ab4dad8108dae8b4e"
+      "local_sha256": "f31b279b981de704635fec17b3f7f1b6f66c2605191f60ccb2c2d32826b3628c",
+      "public_sha256": "2eb7d3ce101c116bd2a158529cc9a17a1f16081d8df555acf2f2885a47dc539d"
     },
     {
       "path": "araclar/kullanim_kontrol.py",
@@ -94,8 +94,8 @@
       "path": "araclar/jev_client.py",
       "mode": "reviewed-variant",
       "reason": "Public credential file and provider-specific environment routing versus installed legacy credential reader; purpose modes and procedure rubric are identical.",
-      "local_sha256": "7fe8ef6e2cc43a90e12200a9530a0417ab85bd6fdd42d96514f652501709f280",
-      "public_sha256": "552fd9ca75e2f978693e976b26a1b48d554e5e934d8b5beb38c037ea3d7a3ae1"
+      "local_sha256": "bbfcef958c74c4de9a3e6776f4d9b192f29872ae1b37bf2258a8f756e5f22455",
+      "public_sha256": "4582dda07919a5c5466db05f1b711a44352b19806c55bcd0b098da8bbb82bc55"
     },
     {
       "path": "araclar/jev_retrieval.py",
@@ -143,6 +143,10 @@
     },
     {
       "path": "araclar/jev_procedures.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/jev_runtime.py",
       "mode": "shared"
     }
   ]

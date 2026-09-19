@@ -52,12 +52,17 @@ def versions(vault, rows):
     result = {}
     for row in rows:
         name = f"bilgi/{row['id']}.md"
-        result[name] = b.digest(Path(vault) / name)
+        result[name] = b.note_version(vault, row)
         for s in row['sources']: result[s['path']] = s['sha256']
         for e in row.get('examples', []): result[e['path']] = e['sha256']
     return result
 
 def knowledge(vault, query, project_id, budget, local):
+    with jev_client.evaluation_context(vault):
+        return _knowledge(vault, query, project_id, budget, local)
+
+
+def _knowledge(vault, query, project_id, budget, local):
     """Same hook for direct knowledge and synthesis; local is a zero-arg fallback."""
     import bilgi_agi as b
     active = mode(vault)
@@ -69,7 +74,7 @@ def knowledge(vault, query, project_id, budget, local):
     rows = [r for r in rows if r['scope'] in ('user', f'project:{project_id}')]
     plan = facet_plan(query)
     try: before = versions(vault, rows)
-    except OSError:
+    except (OSError, ValueError):
         out = local(); out['jev'] = dict(mode=active, degraded=True, diagnostics=['source_changed_before_evaluation']); return out
     candidates = [{k: r[k] for k in ('id', 'title', 'statement', 'scope', 'domains')} for r in rows]
     result = jev_client.evaluate(vault, query, candidates, source_versions=before,
@@ -78,7 +83,7 @@ def knowledge(vault, query, project_id, budget, local):
     fresh, _ = b._rows(vault)
     fresh = [r for r in fresh if r['id'] in {d['id'] for d in rows}]
     try: after = versions(vault, fresh)
-    except OSError: after = None
+    except (OSError, ValueError): after = None
     if after != before:
         result = dict(result, degraded=True, diagnostics=result.get('diagnostics', []) + ['source_changed_during_evaluation'])
     if result.get('degraded') or not rows or active == 'invalid':
@@ -152,6 +157,11 @@ def knowledge(vault, query, project_id, budget, local):
     return out
 
 def catalog(vault, query, eligible, local_rank, scope):
+    with jev_client.evaluation_context(vault):
+        return _catalog(vault, query, eligible, local_rank, scope)
+
+
+def _catalog(vault, query, eligible, local_rank, scope):
     """Canonical rows have already passed retrievable/source/override checks."""
     import hafiza as h
     active = mode(vault)
@@ -168,7 +178,7 @@ def catalog(vault, query, eligible, local_rank, scope):
     for r in eligible:
         try:
             if current.get(r['memory_id']) == r and not h.context_record_errors(Path(vault), r) and h.retrievable(r, r['scope']): still_valid.append(r)
-        except OSError: pass
+        except (OSError, ValueError): pass
     if len(still_valid) != len(eligible):
         result = dict(result, degraded=True, diagnostics=result.get('diagnostics', []) + ['source_changed_during_evaluation'])
     if active == 'assist' and not result.get('degraded'):

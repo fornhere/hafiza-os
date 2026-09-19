@@ -42,6 +42,23 @@ class RetrievalTests(unittest.TestCase):
                     facet_scores={i: dict(scores) for i in range(len(kw['facets']))},
                     diagnostics=[], degraded=False)
 
+    def test_note_changes_between_record_read_and_hash_never_relabels_old_content(self):
+        self.config('on');original=b._rows;changed=False
+        def mutate(vault):
+            nonlocal changed
+            rows,diagnostics=original(vault)
+            if not changed:
+                changed=True
+                self.add(statement='Sunumda yeni ifade kullan.',
+                         expected_version=b.digest(self.v/'bilgi/short.md'))
+            return rows,diagnostics
+        with patch.object(b,'_rows',side_effect=mutate),patch.object(jev_client,'evaluate') as call:
+            result=b.retrieve(self.v,'sunum')
+            call.assert_not_called()
+        self.assertTrue(result['jev']['degraded'])
+        self.assertNotIn('Sunumda kısa cümle kullan.',result['text'])
+        self.assertEqual(result['source_versions']['bilgi/short.md'],b.digest(self.v/'bilgi/short.md'))
+
     def test_off_identical_without_evaluation(self):
         for reader, query in [(b, 'sunum'), (k, 'anlatım tercihlerimi özetle')]:
             with self.subTest(reader=reader.__name__), patch.object(jev_client, 'evaluate') as call:
