@@ -43,6 +43,58 @@ ile Linux'ta gerçek hook → inceleme → farklı oturumda hatırlama zinciri d
 Claude Code 2.1.261 için adaptör testleri geçti.
 [Kurulum ve destek matrisi](ENTEGRASYONLAR.md).
 
+## Tek komutla kur
+
+Python 3.10+ kurulu olsun. **Linux / macOS** terminaline yapıştır:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fornhere/hafiza-os/main/install.sh | bash
+```
+
+**Windows PowerShell:**
+
+```powershell
+& ([scriptblock]::Create((Invoke-WebRequest 'https://raw.githubusercontent.com/fornhere/hafiza-os/main/install.ps1' -UseBasicParsing).Content))
+```
+
+Kurucu sırayla:
+
+1. Kullandığın ajanı sorar: **Codex, Claude Code veya Antigravity**.
+2. Güncel depo dosyalarını indirip `~/Hafiza` kasasını hazırlar. Git gerekmez;
+   mevcut klasörün üzerine yazılmaz.
+3. Obsidian kurulu değilse resmi masaüstü paketini indirir ve SHA256 değerini
+   doğrular. Linux'ta AppImage çalıştırılabilir hazırlanır; Windows/macOS'ta
+   indirilen kurucuyu açıp uygulamanın kurulumunu tamamla.
+4. **Mem0 API anahtarını** sorar. İstemiyorsan **Enter** ile geç.
+5. **Jev / TypeSafe API anahtarını** sorar. İstemiyorsan **Enter** ile geç.
+6. Ajanın kasa yönerge bağlantısını kurar ve sıradaki adımı gösterir.
+
+API anahtarları gizli girişle alınır; kasanın ve Git'in dışında saklanır.
+Mem0 girersen kullanıcı kimliği de sorulur ve uzak arama etkinleştirilir.
+Jev girersen TypeSafe doğrudan bağlantısı `on` olarak ayarlanır. Vercel/OpenRouter
+anahtarını TypeSafe alanına girme; bu sihirbaz doğrudan TypeSafe anahtarı içindir.
+Anahtarlar kurulumda canlı API isteğiyle doğrulanmaz; yanlış anahtar hizmeti
+çalıştırmaz. Anahtarsız yerel hafıza kullanılabilir. Otomatik sohbet kaydı ve
+arka plan incelemesi ayrı kurulur: [kullanım rehberi](KULLANIM.md).
+
+Kurulum bitince kasayı Obsidian'da **Open folder as vault** ile aç; ajanı yeniden
+başlatıp kasa klasöründe yeni sohbet başlat. İlk mesaj:
+
+> agents.md dosyasını oku. Profilimi birlikte hazırlayalım; soruları tek tek sor.
+
+Başka klasör veya otomatik kullanım için:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fornhere/hafiza-os/main/install.sh | bash -s -- --agent codex --vault "$HOME/Hafiza-Yeni"
+```
+
+`--skip-obsidian` indirmeyi atlar. `--non-interactive --agent codex` API sorularını
+atlar. Var olan kişisel kasa için bu kurucuyu kullanma; aşağıdaki ajan bağlantısı
+adımları mevcut dosyaları yeniden indirmeden uygulanabilir.
+
+İndirdiğin dosyaları önce incelemek istersen **Code → Download ZIP** ile indir,
+`baslat.py` dosyasını okuyup `python3 baslat.py` (Windows: `py -3 baslat.py`) çalıştır.
+
 ## İlk kez kullanıyorsan
 
 1. Bu sayfanın üstündeki **Code → Download ZIP** ile indir ve arşivi aç.

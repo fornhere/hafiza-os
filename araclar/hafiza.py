@@ -843,9 +843,39 @@ class Mem0HttpClient:
         return self._request("DELETE", f"/v1/memories/{memory_id}/")
 
 
-def load_api_key() -> str:
+def mem0_config(vault: Path | None = None) -> dict:
+    if vault is None:
+        return {}
+    path = Path(vault) / "komuta/mem0.json"
+    if not path.exists():
+        return {}
+    if path.is_symlink():
+        raise ValueError("Mem0 ayar yolu geçersiz")
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict) or set(config) - {"enabled", "user_id", "credentials_file"}:
+        raise ValueError("Mem0 ayarı geçersiz")
+    if type(config.get("enabled")) is not bool or not isinstance(config.get("user_id"), str) or not config["user_id"]:
+        raise ValueError("Mem0 ayarı geçersiz")
+    return config
+
+
+def load_api_key(vault: Path | None = None) -> str:
     if os.environ.get("MEM0_API_KEY"):
         return os.environ["MEM0_API_KEY"]
+    config = mem0_config(vault)
+    if config.get("enabled"):
+        path = Path(config.get("credentials_file", ""))
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise ValueError("Mem0 anahtar dosyası geçersiz")
+        if vault is not None and path.resolve().is_relative_to(Path(vault).resolve()):
+            raise ValueError("Mem0 anahtarı kasa dışında olmalı")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("Mem0 anahtar dosyası geçersiz")
+        value = data.get("MEM0_API_KEY")
+        if not isinstance(value, str) or not value or any(c.isspace() for c in value):
+            raise ValueError("Mem0 anahtar dosyası geçersiz")
+        return value
     config_path = Path.home() / ".claude.json"
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -920,6 +950,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     context = sub.add_parser("context")
     context.add_argument("query")
+    context.add_argument("--local", action="store_true", help="Bu çağrıda Mem0 erişimini kapat")
     context.add_argument("--remote", action="store_true", help="İsteğe bağlı Mem0 sıralaması; hata halinde yerel erişim")
     context.add_argument("--scope", default="user")
     context.add_argument("--limit", type=int, default=5)
@@ -996,9 +1027,9 @@ def main(argv: list[str] | None = None) -> int:
         ranked = rank_records(valid, args.query)
         results = [{'memory':row['statement'], 'metadata':row} for row in ranked]
         mode = 'local'; fallback = None
-        if args.remote:
+        if not args.local and (args.remote or mem0_config(vault).get("enabled", False)):
             try:
-                client = Mem0HttpClient(load_api_key(), user_id=resolve_user_id(args.user_id))
+                client = Mem0HttpClient(load_api_key(vault), user_id=resolve_user_id(args.user_id or mem0_config(vault).get("user_id")))
                 remote = client.search_memories(args.query, filters={'user_id':client.user_id}, top_k=max(args.limit*3,args.limit), threshold=args.threshold)
                 remote_results = hydrate_remote(vault, remote, args.scope)
                 seen = {item['metadata']['memory_id'] for item in remote_results}
@@ -1011,7 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
         _json_print(result)
         return 1 if errors else 0
 
-    client = Mem0HttpClient(load_api_key(), user_id=resolve_user_id(args.user_id))
+    client = Mem0HttpClient(load_api_key(vault), user_id=resolve_user_id(args.user_id or mem0_config(vault).get("user_id")))
     if args.command == "audit":
         result = audit(vault, records, client)
         result["receipt"] = str(write_receipt(vault, "audit", result).relative_to(vault))

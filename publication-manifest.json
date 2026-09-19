@@ -24,9 +24,9 @@
     {
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
-      "reason": "Private default identity versus configurable public default only.",
+      "reason": "Public installer supports vault-scoped external Mem0 credentials, optional automatic remote lookup and local override; private runtime retains its current identity and credential source.",
       "local_sha256": "4cda7843caa36565b543307a6392c1004b782fe71c9c1093c023ec867246b666",
-      "public_sha256": "63daf24e257737712c761b429f0d392b4be76607c7ea9da5ef3dbede564fba0c"
+      "public_sha256": "09086fb62779088d9d942d143e2a9d62df19b4333513ffa536368b782f725092"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -92,7 +92,10 @@
     },
     {
       "path": "araclar/jev_client.py",
-      "mode": "shared"
+      "mode": "reviewed-variant",
+      "reason": "Public installer supports private external JSON credentials in addition to existing env_file; private runtime remains unchanged and uses its existing environment configuration.",
+      "local_sha256": "a3fb77a2e50bc61ca9549fe7aa4738501f58d0967fe775558bce1d692acb03c0",
+      "public_sha256": "1368e3c476869b191125b9e15730de20160a7600a168b1e72a6013e8f3ea41ac"
     },
     {
       "path": "araclar/jev_retrieval.py",

@@ -33,3 +33,9 @@ service-account*.json
 # Private semantic advisor config and derived scores
 .cache/jev/
 komuta/jev.json
+
+# Local setup metadata and bytecode
+komuta/mem0.json
+komuta/kurulum-sonucu.json
+__pycache__/
+*.pyc

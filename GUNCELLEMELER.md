@@ -1,3 +1,11 @@
+# 19 Eylül 2026 — Tek komutla kurulum
+
+- Linux/macOS ve Windows için tek komutlu depo indirme girişleri; Git gerekmez.
+- Resmi Obsidian masaüstü paketini mimariye göre seçme, SHA256 doğrulama ve mevcut kurulumu koruma.
+- Mem0 ve TypeSafe/Jev anahtarları için gizli, ayrı ayrı atlanabilir giriş; kasa dışında özel dosyalar.
+- Mem0 ayarı etkinse kaynaklı uzak arama, ağ hatasında yerel erişim ve `--local` geçişi.
+- Mevcut kasanın üzerine yazılmaz; otomatik sohbet kaydı/inceleme servisi ayrıca kurulur.
+
 # 19 Eylül 2026 — Kaynaklı öğrenme döngüsü ve taşınabilirlik düzeltmeleri
 
 - Bekleyen hafıza adaylarına sınırlı kaynak/tekrar/çelişki incelemesi; kayıt terfisi ayrı incelemede kalır.

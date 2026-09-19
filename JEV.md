@@ -82,3 +82,12 @@ görev bağlamı ve cevap atıf kontrolü için [HAFIZA-DONGUSU.md](HAFIZA-DONGU
 Tek giriş `araclar/hafiza_dongusu.py`; bakım reviewer'ı ayrıca
 `konsolidasyon.py review-pending` kullanabilir. Bunlar semantik kalite kanıtı
 veya otomatik kanonik onay değildir; off/shadow/on sınırları korunur.
+
+## Kurulum sihirbazı
+
+README'deki tek komut TypeSafe doğrudan API anahtarını gizli girişle alabilir.
+Enter ile geçilirse Jev kapalı kalır. Girilirse `komuta/jev.json` mode=on,
+model=jev-latest ve kasa dışındaki `credentials_file` yoluyla oluşturulur.
+JSON anahtar dosyası yalnız TYPESAFE_API_KEY içerir; değer loga yazılmaz.
+Eski env_file ve ortam değişkeni desteği sürer; ortam değişkenleri önceliklidir.
+Bu kurucu Vercel/OpenRouter anahtarlarını TypeSafe'e dönüştürmez.

@@ -128,3 +128,12 @@ buluta gönderilmez.
 - Ölçüm yeterli olmadan otomatik terfi açılmaz.
 
 **Bağlantılar:** [[Ana Sayfa]] · [[agents]] · [[zihin/çekirdek]]
+
+## Tek komutla isteğe bağlı Mem0 ayarı
+
+Kurucu `komuta/mem0.json` içinde enabled, user_id ve credentials_file yolunu
+yazar. Anahtar kasanın dışındaki özel JSON dosyasındadır. MEM0_API_KEY ortam
+değişkeni önceliklidir; eski Claude MCP ayarıyla erişim de korunur.
+Etkin ayar varsa `hafiza.py context` uzak aramayı kullanır; ağ hatasında yerel
+erişime döner. `--local` tek çağrıda uzak erişimi kapatır. Bu ayar mevcut
+notları kendiliğinden Mem0'a yüklemez; kaynaklı inceleme ve sync politikası sürer.

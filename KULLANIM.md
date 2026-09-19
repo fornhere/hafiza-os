@@ -4,6 +4,15 @@ Amaç, her yeni sohbette kendini ve projenin geçmişini baştan anlatmak zorund
 kalmaman. Ajan gereken notları senin bilgisayarındaki kasadan okur.
 Başlamak için Mem0, Jev veya bir API anahtarı gerekmez.
 
+## Tek komut seçeneği
+
+[README'deki tek komutu](README.md#tek-komutla-kur) kullanırsan dosya indirme,
+Obsidian indirme ve ajan bağlantısı aynı akışta yapılır. Mem0 ve Jev sorularını
+Enter ile geçebilirsin. Başarı özeti `komuta/kurulum-sonucu.json` içindedir;
+`configured_unverified` bağlantı ayarının yazıldığı, API'nin henüz denenmediği
+anlamına gelir. Obsidian indirmesi başarısızsa hafıza kurulumu devam eder ve
+özette ayrı gösterilir.
+
 ## 1. Kasayı hazırla ve ajanı bağla
 
 [README'deki indirme ve kurulum adımlarını](README.md#ilk-kez-kullanıyorsan)

@@ -63,7 +63,7 @@ def load_config(vault):
     if path.exists():
         try: supplied = json.loads(path.read_text())
         except json.JSONDecodeError: raise ValueError('config_invalid') from None
-        if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS) - {'env_file'}:
+        if not isinstance(supplied, dict) or set(supplied) - set(DEFAULTS) - {'env_file', 'credentials_file'}:
             raise ValueError('config_invalid')
         config.update(supplied)
     if config['mode'] not in ('off', 'shadow', 'on'):
@@ -77,6 +77,8 @@ def load_config(vault):
     for name in ('model','provider','rubric_version','base_url'):
         if not isinstance(config[name],str) or not config[name].strip():
             raise ValueError('config_invalid')
+    if 'credentials_file' in config and (not isinstance(config['credentials_file'], str) or not Path(config['credentials_file']).is_absolute()):
+        raise ValueError('config_invalid')
     if 'env_file' in config and (not isinstance(config['env_file'],str) or not Path(config['env_file']).is_absolute()):
         raise ValueError('config_invalid')
     return config
@@ -84,6 +86,17 @@ def load_config(vault):
 
 def _environment(config):
     values = {}
+    if config.get('credentials_file'):
+        path = Path(config['credentials_file'])
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise ValueError('env_file_invalid')
+        data = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(data, dict) or set(data) != {'TYPESAFE_API_KEY'}:
+            raise ValueError('env_file_invalid')
+        key = data['TYPESAFE_API_KEY']
+        if not isinstance(key, str) or not key or any(c.isspace() for c in key):
+            raise ValueError('env_file_invalid')
+        values['TYPESAFE_API_KEY'] = key
     if config.get('env_file'):
         path = Path(config['env_file'])
         if not path.is_absolute() or not path.is_file():
