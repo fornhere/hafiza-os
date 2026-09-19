@@ -3,7 +3,21 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  checks:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -X utf8 -m unittest discover -s araclar -p "test_*.py"
+  publication:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

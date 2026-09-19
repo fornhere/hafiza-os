@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path
 import shlex
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,7 +16,7 @@ class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.vault = self.root / "Türkçe kasa ' $(not-a-command)"
         for name in bridge.REQUIRED:
             path = self.vault / name
@@ -211,23 +212,13 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(bridge.command(['python', "C:\\Kişi'nin kasası\\hafiza.py"], True),
                          "& 'python' 'C:\\Kişi''nin kasası\\hafiza.py'")
 
-    def test_windows_instructions_are_manual_only(self):
-        # Build the path before patching: pathlib must not create WindowsPath on Linux.
+    def test_windows_instructions_use_native_utf8_python(self):
         vault = self.vault
         with patch.object(bridge.os, 'name', 'nt'):
             block = bridge.instruction_block(vault)
-        for required in ('manuel', 'agents.md', 'zihin/ruh.md',
-                         'zihin/hafıza-sistemi.md', 'zihin/son-oturum.md',
-                         'en yeni tarihli', '2500 karakter', '1200 karakter',
-                         'zihin/açık-işler.md', 'POSIX fcntl', 'desteklenmez',
-                         'WSL', 'ayrı kurulum', 'WSL yollarıyla',
-                         'kaynak/sürüm doğrulamalı CLI erişimi değildir'):
-            self.assertIn(required, block)
-        for forbidden in ('```', 'python', 'latest-session', '--vault',
-                          'codex_hafiza.py', 'hafiza.py'):
-            self.assertNotIn(forbidden, block)
-        self.assertEqual(block.count(bridge.START), 1)
-        self.assertEqual(block.count(bridge.END), 1)
+        for value in ('powershell', 'latest-session', "'-X' 'utf8'", '--vault'):
+            self.assertIn(value, block)
+        self.assertNotIn('desteklenmez', block)
 
     def test_posix_instructions_keep_bounded_cli_commands(self):
         vault = self.vault
@@ -236,9 +227,9 @@ class InstallerTests(unittest.TestCase):
         commands = [part.split('\n```', 1)[0]
                     for part in block.split('```sh\n')[1:]]
         self.assertEqual([shlex.split(cmd) for cmd in commands], [
-            ['python3', str(vault / 'araclar/codex_hafiza.py'), '--vault',
+            [sys.executable, '-X', 'utf8', str(vault / 'araclar/codex_hafiza.py'), '--vault',
              str(vault), 'latest-session'],
-            ['python3', str(vault / 'araclar/hafiza.py'), '--vault', str(vault),
+            [sys.executable, '-X', 'utf8', str(vault / 'araclar/hafiza.py'), '--vault', str(vault),
              'context', 'göreve ilişkin soru', '--limit', '5', '--char-budget', '1200'],
         ])
         self.assertNotIn('Yerel Windows', block)

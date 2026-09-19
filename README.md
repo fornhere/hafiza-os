@@ -27,62 +27,39 @@ okuma, kaynaklı geri çağırma ve oturum kaydı farklı katmanlardır.
 
 ## Hangi ajanla?
 
-| İstemci | Ortak yönerge hedefi | Oturum otomasyonu |
+| İstemci | Yönerge hedefi | İsteğe bağlı yerel runtime |
 |---|---|---|
-| Claude Code | `~/.claude/CLAUDE.md` | Mevcut `kur.sh` ile ayrıca kurulan shell hook'ları |
-| Codex | `~/.codex/AGENTS.md` veya `CODEX_HOME` | [Codex adaptörü ve ayrı konsolidasyon](CODEX.md) |
-| Antigravity | `~/.gemini/GEMINI.md` | Bu depoda transcript/hook adaptörü yok |
-| Diğer yerel ajanlar | Seçtiğin Markdown dosyası | İstemciye elle bağlanır; otomasyon yok |
-| Tarayıcı sohbetleri | Elle seçilmiş içerik aktarımı | Yerel kasaya kendiliğinden erişmez |
+| Claude Code | `~/.claude/CLAUDE.md` | Python exec hook, sessiz episodik aday |
+| Codex | `~/.codex/AGENTS.md` | Mevcut adaptör ve ayrı konsolidasyon |
+| Antigravity CLI (`agy`) | `~/.gemini/GEMINI.md` | PreInvocation/Stop, sessiz episodik aday |
+| Diğer ajanlar | Seçilen Markdown | Yalnız yönerge aktarımı |
 
-Linux mevcut sistemin test edildiği platformdur. Yeni köprünün yerel kabul
-kontrolleri ve her istemcide canlı smoke kontrolü ayrıca yapılmalıdır.
-macOS canlı denenmedi. Yerel Windows köprüsü yalnız manuel, bütçeli dosya
-okuma yönergesi üretir; kaynak doğrulamalı CLI erişimi sağlamaz. Erişim ve
-konsolidasyon araçları POSIX `fcntl` bağımlılığı nedeniyle yerel Windows'ta
-desteklenmez. Tam motor (CLI erişimi, konsolidasyon ve hook'lar) için WSL
-içinde, WSL'den görünen kasa/istemci yollarıyla ayrı kurulum gerekir.
-Windows canlı istemci oturumuyla doğrulanmış değildir. [Destek ve sınırların tamamı](ENTEGRASYONLAR.md).
+Linux yerel çekirdek kanıtı vardır; yeni değişikliğin kabulü bekliyor.
+macOS/Windows yerel Python CI matrisi eklendi, koşum sonucu ve canlı istemci
+kanıtı bekliyor. agy 1.1.27 altı insan girdisi ve başarılı Stop gözlendi;
+Claude model denemesi 403 ile engellendi. Bunlar bütün istemcilerin her işletim
+sisteminde doğrulandığı anlamına gelmez. [Ayrıntılı kurulum matrisi](ENTEGRASYONLAR.md).
 
-## Hızlı başlangıç: aynı kasayı bağla
+## Hızlı başlangıç
 
-Python 3.10+ yeterli; köprü ek paket indirmez. Aşağıdaki POSIX örneği kasayı
-indirir, önce planı gösterir, sonra üç istemcinin yönergesini günceller:
+Python 3.10+ ile kasa kökünde, Linux/macOS:
 
 ```sh
-git clone https://github.com/fornhere/hafiza-os "$HOME/Hafıza"
-cd "$HOME/Hafıza"
-python3 araclar/ajan_kur.py --vault "$PWD" --agent all
-python3 araclar/ajan_kur.py --vault "$PWD" --agent all --apply
+python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent all
+python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent all --apply
 ```
 
-Yalnız kullandığın ajan için `all` yerine `claude`, `codex` veya `antigravity`
-yaz. Kurucu kendi işaretli bloğunu ekler, diğer metni korur; değişen mevcut
-hedefi zaman damgalı yedekler. Hook, güven ayarı, Mem0 veya zamanlayıcı kurmaz.
+Varsayılan yalnız yönerge köprüsüdür. Kayıt adaptörleri için `--with-hooks` ekle.
+Eski aynı-kasa hook'larından geçiş ayrıca `--migrate-legacy` gerektirir. Kurucu
+ilgisiz ayar ve trust değerlerini korur; jq/bash gerektirmez. Windows PowerShell,
+istemci kabuğu, kaldırma ve yeniden başlatma: [entegrasyon rehberi](ENTEGRASYONLAR.md).
 
-Yeni bir ajan oturumunda kasa yolunu ve örnek bir bilginin kaynak dosyasını
-sorarak kontrol et. Ardından `zihin/çekirdek.md`, `zihin/ruh.md` ve
-`komuta/bu-hafta.md` şablonlarını kendine göre doldur. Henüz kaydedilmemiş bir
-geçmişi sistem biliyormuş gibi bekleme.
-
-[Windows/PowerShell, özel yollar, genel aktarım, kaldırma ve smoke kontrolü →](ENTEGRASYONLAR.md)
-
-## Oturum kaydı da istiyorsan
-
-Aşağıdakiler POSIX/WSL içindeki, ortak yönergelerden bağımsız kurulumlardır;
-yerel Windows köprüsü oturum otomasyonu sağlamaz:
-
-- **Claude Code:** kasa kökünde `bash kur.sh`. Git, jq ve bash gerektirir;
-  ayarları ve shell hook'larını değiştirir. [Kurucuyu](kur.sh) ve
-  [hook sözleşmesini](agents.md#7-hooklar) incele; yeni oturumda `/hooks` ile
-  bağlantıları doğrula. Kaldırma: `bash kur.sh --kaldir`.
-- **Codex:** [CODEX.md](CODEX.md) içindeki adaptör, etkinleştirme ve isteğe
-  bağlı düzenli inceleme adımlarını uygula. Dosyaları indirmek zamanlanmış
-  konsolidasyonu başlatmaz.
-
-Var olan kurulumu koruyabilirsin. Köprü eski kurucuların bloklarını silmez;
-aynı kasaya işaret ettiklerini kontrol et. Kasa taşıma ve kaldırma işlemlerinde
-her kurulumun kendi yönergesini izle.
+Yönerge köprüsü kayıt değildir; hook yakalaması da incelenmiş hafıza değildir.
+Reviewer sağlayıcısını ayrıca yapılandır ve tek seferlik incelemeyi açıkça çalıştır.
+İlk beş mesaj, kaydetmeme ve sır koruması sürer. Yeni native adaptörler yalnız
+episodik aday üretir; kanonik terfi ve Codex konsolidasyonu ayrı süreçtir.
+Paylaşılan kasadan kaynaklı recall, tam transcript senkronu değildir.
+Kişisel profil şablonlarını kendin doldur; kurucu bunları güncellemez.
 
 ## Son eklenenler
 
@@ -115,7 +92,7 @@ bağlam sınırları nedeniyle bir dosyanın kurulmuş olması okunacağını ka
 - `gelen-kutusu/`: henüz ayıklanmamış girdiler.
 - `araclar/`: yerel erişim ve bakım araçları; yalnız Mem0'a ait değildir.
 
-Aşağıdaki CLI komutları POSIX/WSL içindir; yerel Windows'ta çalışmaz.
+Aşağıdaki örnekler POSIX kabuğu içindir; Windows'ta Python için `py -3 -X utf8` ve PowerShell yollarını kullan.
 
 ```sh
 python3 araclar/hafiza.py --vault . validate

@@ -2,7 +2,6 @@
 """Codex lifecycle -> yerel görev makbuzu. Kataloğa veya Mem0'a yazmaz."""
 import argparse
 import datetime as dt
-import fcntl
 import hashlib
 import json
 import os
@@ -12,6 +11,7 @@ from pathlib import Path
 import sys
 
 from hafiza import contains_secret, add_candidate
+from platform_lock import exclusive_lock
 
 DEFAULT_VAULT = Path(__file__).resolve().parents[1]
 INBOX = Path('gelen-kutusu/codex-oturumları')
@@ -20,6 +20,17 @@ CONTINUATION = '[HAFIZA_KAPANIS]'
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def latest_session_command(vault):
+    """Render a POSIX shell or Windows PowerShell command, including executable."""
+    argv = [sys.executable, str(vault / 'araclar/codex_hafiza.py'),
+            '--vault', str(vault), 'latest-session']
+    if os.name == 'nt':
+        # PowerShell needs & to invoke a quoted executable; single quotes also
+        # protect dollar signs, backticks and spaces in arbitrary path names.
+        return '& ' + ' '.join("'" + arg.replace("'", "''") + "'" for arg in argv)
+    return shlex.join(argv)
 
 
 def opening_brief(vault):
@@ -99,12 +110,12 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
             + summary.strip() + '\n\n[[gelen-kutusu/codex-oturumları/README]] · [[Ana Sayfa]]\n')
     if note.exists():
         # Aynı çağrı tekrarlandığında geçmiş kaydı değiştirme.
-        if summary.strip() not in note.read_text():
+        if summary.strip() not in note.read_text(encoding='utf-8'):
             raise ValueError('Bu tura ait makbuz zaten var; üzerine yazılmadı')
     else:
         atomic(note, text)
     index = vault / INBOX / 'README.md'
-    index_text = index.read_text() if index.exists() else '# Codex Oturumları\n\n[[Ana Sayfa]]\n'
+    index_text = index.read_text(encoding='utf-8') if index.exists() else '# Codex Oturumları\n\n[[Ana Sayfa]]\n'
     link = f'[[gelen-kutusu/codex-oturumları/{marker}]]'
     if link not in index_text:
         atomic(index, index_text.rstrip() + '\n\n- ' + link + '\n')
@@ -123,7 +134,7 @@ def latest_session_section(vault, limit=2500):
     """Read the newest dated section without sending the whole journal to the model."""
     path = vault / 'zihin/son-oturum.md'
     if not path.exists(): return 'Son oturum notu yok.'
-    text = path.read_text()
+    text = path.read_text(encoding='utf-8')
     matches = list(re.finditer(r'^## (\d{4}-\d{2}-\d{2})[^\n]*', text, re.M))
     if not matches: return 'Tarihli son oturum bölümü bulunamadı; gerekirse kaynakta ara.'
     index = max(range(len(matches)), key=lambda i: (matches[i].group(1), i))
@@ -141,13 +152,22 @@ def account_context(state, emitted, suppressed=0):
     usage['token_count_method'] = 'not_measured'
 
 
+def shared_reviewed_context(vault):
+    """Optional source-validated native recall; no model and no startup dependency."""
+    try:
+        from client_sessions import recall
+        return recall(vault, budget=1800)
+    except Exception:
+        return ''
+
+
 def hook(vault, data):
     event = data.get('hook_event_name')
     session = data.get('session_id')
     if not isinstance(session, str) or not session:
         raise ValueError('session_id gerekli')
     state_path = vault / INBOX / '.state' / (key(session, 'state') + '.json')
-    state = json.loads(state_path.read_text()) if state_path.exists() else {'turns': [], 'count': 0}
+    state = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {'turns': [], 'count': 0}
     if event == 'UserPromptSubmit':
         # Stop devam istemi gerçek kullanıcı mesajı değildir.
         from konsolidasyon import clean_user
@@ -179,6 +199,9 @@ def hook(vault, data):
             parts.append(lesson_text)
             if package.get('source_versions'):
                 parts.append('HAFIZA GÖRÜNÜRLÜĞÜ: Bu bağlamın gelmesi kullanım kanıtı değildir. Geçmiş bilgi somut seçimini etkilediyse kısa bir cümlede neyi nasıl uyguladığını kaynak bağlantısıyla belirt; etkilemediyse kullanım iddiası üretme. Aynı bildirimi değişiklik yokken tekrarlama. Uyarlama önerisini yeni kullanıcı onayı sayma. Kayıt bildirimi yalnız başarılı yazma ve geri okuma kanıtından sonra; dry-run, bekleyen aday veya değişmeyen kayıt için kaydettim deme.')
+        shared = shared_reviewed_context(vault)
+        if shared:
+            parts.append(shared)
         emitted = '\n\n'.join(parts)
         account_context(state, len(emitted), original_chars if suppress else 0)
         atomic(state_path, json.dumps(state))
@@ -196,13 +219,17 @@ def hook(vault, data):
         health_notice = notice(vault)
         context = (f'Hafıza kasası: {vault}. Önce {vault}/agents.md ve '
             f'{vault}/zihin/son-oturum.md dosyasının yalnız en yeni bölümünü oku. '
-            f'Bütçeli okuma: python3 {shlex.quote(str(vault / "araclar/codex_hafiza.py"))} --vault {shlex.quote(str(vault))} latest-session . '
+            f'Bütçeli okuma ({"PowerShell" if os.name == "nt" else "POSIX shell"}):\n'
+            f'{latest_session_command(vault)}\n'
             f'Diğer ajan açılış yönergeleri geçerlidir. Yeni Codex görev makbuzları: {recent or "yok"}. '
             f'Eksik makbuz sayısı: {missing}. Makbuzlar gelen kutusundadır, kanonik gerçek değildir. '
             f'Bu oturumda sayılan kullanıcı mesajı: {state["count"]}. '
             'Hafıza kaydı arka plan konsolidasyonunda yapılır; cevap sonunda makbuz '
             'isteme ve sohbeti kayıt bildirimiyle bölme. Basit kısa sorular hafızaya girmez. '
             'Kataloğa ve Mem0’a doğrudan yazma.\n\n' + health_notice + '\n\n' + opening_brief(vault))
+        shared = shared_reviewed_context(vault)
+        if shared:
+            context += '\n\n' + shared
         account_context(state, len(context))
         atomic(state_path, json.dumps(state))
         return {'hookSpecificOutput': {'hookEventName': event, 'additionalContext': context}}
@@ -226,10 +253,9 @@ def main():
         return
     queue = args.vault / INBOX
     queue.mkdir(parents=True, exist_ok=True)
-    with (queue / '.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with exclusive_lock(queue / '.lock'):
         if args.cmd == 'record':
-            data = json.loads(args.input_json.read_text())
+            data = json.loads(args.input_json.read_text(encoding='utf-8'))
             if 'semantic_candidates' not in data:
                 raise ValueError('semantic_candidates gerekli; kalıcı bilgi yoksa [] kullan')
             result = record(args.vault, data['session_id'], data['turn_id'], data['summary'], data['semantic_candidates'], data.get('source_snapshot'))

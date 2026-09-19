@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
-import fcntl
 import functools
 import json
 import os
@@ -19,6 +18,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any
+
+from platform_lock import exclusive_lock
 
 CATALOG_PATH = Path("zihin/hafıza-kataloğu.jsonl")
 CANDIDATE_PATH = Path("gelen-kutusu/hafıza-adayları.jsonl")
@@ -60,8 +61,7 @@ def serialized(function):
     def wrapped(vault, *args, **kwargs):
         directory = vault / "günlük" / "hafıza-makbuzları"
         directory.mkdir(parents=True, exist_ok=True)
-        with (directory / ".writer.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with exclusive_lock(directory / ".writer.lock"):
             return function(vault, *args, **kwargs)
     return wrapped
 

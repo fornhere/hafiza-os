@@ -1,27 +1,25 @@
 # Codex ve düzenli hafıza incelemesi
 
-Yalnız ortak kasa yönergesi için [ajan entegrasyonları](ENTEGRASYONLAR.md)
-rehberindeki `ajan_kur.py` yeterlidir; aşağıdaki mevcut akış hook ve ayrı
-konsolidasyon kurulumu içindir. Köprü bu davranışı değiştirmez.
+[Birleşik yerel kurucu](ENTEGRASYONLAR.md) varsayılan olarak yalnız yönerge,
+`--with-hooks` ile mevcut Codex adaptörünü kurar. Güven ayarını değiştirmez.
+Python 3.10+ gerekir; macOS/Windows native CI ve canlı istemci sonuçları henüz
+bekliyor. Windows string hook kabuğunu ayrıca doğrulamak gerekir.
 
-Gereksinimler: Python 3.10+, POSIX araçları ve hook desteği olan Codex.
-Linux mevcut test platformudur; macOS/Windows canlı denenmiş sayılmaz.
-Windows tam shell akışı için WSL gerekir.
-Bu komutları hafıza kasasının kökünde çalıştır. Mevcut Claude kurulumu için
-`kur.sh` kullanılmaya devam eder.
-
-## Bağlantı
-
-```bash
-python3 araclar/codex_kur.py           # yapılacak işlemleri gösterir
-python3 araclar/codex_kur.py --apply   # mevcut ayarları yedekleyip ekler
+```sh
+python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent codex --with-hooks
+python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent codex --with-hooks --apply
 ```
 
-Kurucu diğer hook'ları ve genel AGENTS.md metnini korur; güven/onay ayarlarını
-değiştirmez. Codex'te `/hooks` ekranından dört Hafıza OS bağlantısını inceleyip
-etkinleştir. Ardından yeni bir ana oturumda açılış bağlamını kontrol et.
-Kasa taşınırsa eski konuma ait hook'ları `/hooks` üzerinden kaldırıp yeni
-konumda kurucuyu tekrar çalıştır.
+Eski `codex_kur.py` komutu bulunursa `--migrate-legacy` ile açık geçiş yap.
+`/hooks` ekranında bağlantıları inceleyip etkinleştir; yeni ana oturum başlat.
+Trust otomatik açılmaz. Kasa taşıma/kaldırma için entegrasyon rehberini kullan.
+Aşağıdaki eski düzenli konsolidasyon örnekleri POSIX araçları içerebilir;
+bunlar modern yerel kurucunun veya Windows otomasyonunun kendisi değildir.
+
+Açılış ve kullanıcı bağlamı, varsa kaynak doğrulamalı incelenmiş native
+Claude/Antigravity makbuzlarını en fazla 1800 karakter ekler. Kaynak silinir veya
+değişirse makbuz recall'a alınmaz; ek okuyucu hatası mevcut Codex akışını bozmaz.
+Tam transcript senkronu, otomatik profil güncellemesi veya kanonik terfi değildir.
 
 İlk beş gerçek kullanıcı mesajı kayıt istemez. Altıncıdan sonra karar, sonuç
 ve kalan işi içeren kısa makbuz arka plan konsolidasyonunda üretilir; cevap

@@ -85,42 +85,15 @@ kaynaklarıyla incelenir. Basit sorular ve kaydetmeme talepleri dışarıda kal�
 Stop/Interrupt sonunda makbuz isteme, kayıt için ek tur açma veya rutin
 "kaydettim" mesajı gönderme. Makbuz yoksa kaydedildi deme. Ayrıntılar: CODEX.md.
 
-### Claude Code: dosya temelli kapanış
+### Claude Code ve Antigravity: sessiz native adaylar
 
-Aşağıdaki kapanış şablonu ve zorlama, yalnız Claude Code akışını anlatır.
-
-**5 mesajı geçen her oturumun sonunda** `zihin/son-oturum.md` dosyasının
-**en üstüne** yeni bir not eklenir (eski notlar altta kalır, silinmez).
-
-Not şu biçimdedir:
-
-```
-## YYYY-AA-GG — tek satır başlık
-<!-- hafiza-session:OTURUM_KIMLIGI mesaj:MESAJ_SAYISI -->
-
-**Kararlar:**
--
-
-**Ne oldu:**
--
-
-**Yarım kalanlar:**
--
-
-**Sonraya devredilenler:**
--
-
-**Bağlantılar:**
-- [[Ana Sayfa]]
-```
-
-**Yazılmayan oturum yaşanmamış sayılır.**
-
-Kapanış notu yazmak izin gerektirmez; anayasanın kendisidir.
-Aynı oturum kapanışı yeniden denerse yeni başlık açılmaz; kendi
-`hafiza-session` işaretli bölümünü günceller. Oturum kimliği ve mesaj sayısı
-hook çıktısından alınır. Böylece eşzamanlı oturumlar birbirinin makbuzunu
-yanlışlıkla sahiplenemez.
+Yeni `ajan_kur.py --with-hooks` akışı Stop'u engellemez, kapanış notu istemez
+ve kanonik dosyalara otomatik yazmaz. İlk beş gerçek kullanıcı mesajı,
+kaydetmeme ve sır koruması geçerlidir. Altıncıdan sonra başarılı tamamlanan
+anlamlı işler ayrı reviewer'ın incelemesine aday olur. Hook model çağırmaz;
+reviewer ayrıca yapılandırılır. İncelenmiş makbuzlar kaynakları geçerliyken
+paylaşılan kasadan çağrılır. Semantik terfi ayrı inceleme/yazıcı sürecidir.
+Eski zorunlu shell kapanış protokolü modern native kurulum için geçerli değildir.
 
 ---
 
@@ -248,25 +221,13 @@ Araç bunları desen taramasıyla reddeder, ama kural araçtan önce gelir.
 
 ## 7. Hook'lar
 
-Aşağıdaki tablo Claude Code hook'larını gösterir. Codex adaptörünün
-güncel sessiz davranışı için bölüm 4 ve CODEX.md geçerlidir.
+Modern kurulum `araclar/ajan_kur.py --with-hooks` ile yapılır. Claude
+SessionStart/UserPromptSubmit/Stop, Antigravity PreInvocation/Stop ve mevcut
+Codex adaptörü sessiz çalışır. Ayarlar, geçiş ve kaldırma için ENTEGRASYONLAR.md.
 
-Otomatik davranışlar `.claude/hooks/` içinde yaşar. Başka yerde durmazlar.
-Bir hook eklendiğinde ne yaptığı tek satırla yanına yazılır.
-
-Kapanış protokolü iyi niyete değil mekanizmaya bağlıdır:
-
-| Script | Ne zaman | Ne yapar |
-|---|---|---|
-| `oturum-basla.sh` | oturum açılışında | Son oturum notunu ve aktif iş başlıklarını bağlama enjekte eder; yeni oturum sayacını açar, resume'da mevcut sayacı korur; eksik makbuzları hatırlatır. |
-| `mesaj-say.sh` | her kullanıcı mesajında | Mesaj sayacını bir artırır. |
-| `hafiza-kontrol.sh` | `Stop` ve `PreCompact` öncesinde | 5 mesajı geçen oturumda kimlikli, bağlantılı makbuz yoksa kapanışı durdurur; iki zorlamadan sonra işi kilitlememek için açık bırakır. |
-| `baglanti-denetle.sh` | kapanış kontrolünün içinde veya elle | Gelen ve giden `[[wikilink]]` bulunmayan Markdown notlarını listeler. |
-| `oturum-bitir.sh` | oturum kapanışında | Zorlamadan yine kaçan uzun oturumu transcript yolu ile kalıcı eksik-makbuz listesine yazar. |
-
-Oturum sayaçları `.claude/durum/` içinde tutulur; geçicidir, deftere girmez.
-Script'ler kullanıcı ayarlarına (`~/.claude/settings.json`) bağlıdır,
-böylece hangi klasörde çalışılırsa çalışılsın devreye girerler.
+`.claude/hooks/` ve `kur.sh` eski isteğe bağlı POSIX yoludur; Stop/PreCompact
+zorlaması içerebilir. Modern kurulumla birlikte yeniden kurma. Aynı-kasa tam
+bilinen eski komutları `--migrate-legacy` ile taşı; başka hook'ları elle silme.
 
 ---
 

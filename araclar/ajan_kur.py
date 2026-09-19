@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shlex
 import stat
+import sys
 import tempfile
 
 START = '<!-- HAFIZA-OS:SHARED:START -->'
@@ -52,38 +53,20 @@ def command(argv, windows=False):
 
 def instruction_block(vault):
     windows = os.name == 'nt'
-    if windows:
-        access = """Yerel Windows'ta yalnız manuel, bütçeli dosya okuma kullan.
-Yeni ana oturumda kasanın agents.md, zihin/ruh.md ve zihin/hafıza-sistemi.md
-kurallarını yerel dosya okuma aracıyla oku. zihin/son-oturum.md içinden yalnız
-en yeni tarihli bölümü, en fazla 2500 karakter oku; tüm geçmişi yükleme.
-Geçmiş özet güncel durum kanıtı değildir. Görevle ilgiliyse zihin/çekirdek.md,
-zihin/açık-işler.md ve komuta/bu-hafta.md içinden yalnız gerekli bölümleri oku.
-Geçmiş tercih/karar için ilgili kaynakları manuel seç; en fazla 5 bölüm ve
-toplam 1200 karakterlik bağlam kullan. Dosya yoksa veya okunamıyorsa belirt.
-Bu manuel okuma kaynak/sürüm doğrulamalı CLI erişimi değildir; böyle sunma.
-
-Yerel Windows erişim ve konsolidasyon araçları desteklenmez: POSIX fcntl
-bağımlılığı nedeniyle çalışmazlar. Kasadaki POSIX Python/hook komutlarını
-Windows'ta çalıştırma. Tam CLI erişimi, konsolidasyon ve hook'lar için WSL
-ortamında ayrı kurulum yap; WSL içinden görünen kasa ve istemci yollarını kullan.
-Windows yönergesini WSL'ye kopyalamak kurulum değildir; köprüyü WSL içinde
-WSL yollarıyla yeniden üret. Bu köprü WSL kurulumunu kendiliğinden yapmaz.
-"""
-    else:
-        latest = command(['python3', vault / 'araclar/codex_hafiza.py', '--vault', vault,
-                          'latest-session'])
-        context = command(['python3', vault / 'araclar/hafiza.py', '--vault', vault,
-                           'context', 'göreve ilişkin soru', '--limit', '5', '--char-budget', '1200'])
-        access = f"""Yeni ana oturumda kasanın agents.md, zihin/ruh.md ve zihin/hafıza-sistemi.md
+    latest = command([sys.executable, '-X', 'utf8', vault / 'araclar/codex_hafiza.py',
+                      '--vault', vault, 'latest-session'], windows)
+    context = command([sys.executable, '-X', 'utf8', vault / 'araclar/hafiza.py', '--vault', vault,
+                       'context', 'göreve ilişkin soru', '--limit', '5', '--char-budget', '1200'], windows)
+    language = 'powershell' if windows else 'sh'
+    access = f"""Yeni ana oturumda kasanın agents.md, zihin/ruh.md ve zihin/hafıza-sistemi.md
 kurallarını oku. Yalnız en yeni tarihli oturum bölümünü bütçeli getir:
-```sh
+```{language}
 {latest}
 ```
 Bu komut en fazla 2500 karakter getirir. Geçmiş özet güncel durum kanıtı değildir.
 Gerektiğinde zihin/açık-işler.md ve komuta/bu-hafta.md içinden ilgili işi oku.
 Göreve özgü geçmiş tercih/karar gerektiğinde soru metnini değiştirerek çalıştır:
-```sh
+```{language}
 {context}
 ```
 """
@@ -105,7 +88,7 @@ Ayrı inceleme/yazıcı akışı için komuta/hafıza-konsolidasyonu.md kullanı
 koru. Makbuz olmadan kaydedildi deme. Yalnız bu köprüyle otomatik kapanış kaydı,
 istemci geçmişine erişim veya ajanlar arası sohbet senkronu oluşmaz.
 Claude ve Codex hook davranışları ayrı kurulumlara bağlıdır; ENTEGRASYONLAR.md
-ve CODEX.md belgelerine bak. Antigravity/generic için transcript adaptörü yoktur.
+ve CODEX.md belgelerine bak. Antigravity adaptörü isteğe bağlıdır; generic yalnız yönerge aktarır.
 {END}
 '''
 
@@ -153,7 +136,8 @@ def targets(agent, home, codex_home=None, export=None):
     return [safe_path(mapping[name]) for name in (mapping if agent == 'all' else [agent])]
 
 
-def install(vault, agent, home, *, codex_home=None, export=None, apply=False, remove=False):
+def install(vault, agent, home, *, codex_home=None, export=None, apply=False, remove=False,
+            with_hooks=False, migrate_legacy=False, hook_shell=None):
     vault = validate_vault(vault)
     paths = targets(agent, home, codex_home, export)
     plans = []
@@ -165,6 +149,16 @@ def install(vault, agent, home, *, codex_home=None, export=None, apply=False, re
         previous = original.decode('utf-8') if original is not None else ''
         updated = rewrite(previous, instruction_block(vault), remove).encode('utf-8')
         plans.append((path, original, updated))
+    if migrate_legacy and not with_hooks:
+        raise ValueError('--migrate-legacy requires --with-hooks')
+    if with_hooks:
+        from agent_hooks import plan_hooks
+        plans.extend(plan_hooks(vault, agent, home, codex_home, remove, migrate_legacy, hook_shell))
+    for path, original, updated in plans:
+        if path == vault or vault in path.parents:
+            raise ValueError('Hedef kanonik kasanın dışında olmalı')
+        if read_target(path) != original:
+            raise ValueError(f'Hedef işlem sırasında değişti: {path}')
     result = []
     for path, original, updated in plans:
         changed = (original or b'') != updated
@@ -210,10 +204,14 @@ def main(argv=None):
     mode.add_argument('--apply', action='store_true')
     mode.add_argument('--dry-run', action='store_true', help='Varsayılan: yalnız plan')
     parser.add_argument('--remove', action='store_true', help='Yalnız bu kurucunun bloğunu çıkar; yazmak için --apply ekle')
+    parser.add_argument('--with-hooks', action='store_true')
+    parser.add_argument('--migrate-legacy', action='store_true')
+    parser.add_argument('--hook-shell', choices=('posix', 'cmd'), help='String hook shell; required on Windows for Codex/Antigravity')
     args = parser.parse_args(argv)
     try:
         report = install(args.vault, args.agent, args.home, codex_home=args.codex_home,
-                         export=args.export, apply=args.apply, remove=args.remove)
+                         export=args.export, apply=args.apply, remove=args.remove,
+                         with_hooks=args.with_hooks, migrate_legacy=args.migrate_legacy, hook_shell=args.hook_shell)
     except (OSError, ValueError, UnicodeError) as exc:
         parser.error(str(exc))
     print(json.dumps(report, ensure_ascii=False, indent=2))
