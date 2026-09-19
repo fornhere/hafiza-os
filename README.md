@@ -64,8 +64,8 @@ python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent claude --apply
 
 ```powershell
 py -3 --version
-py -3 -X utf8 .\araclarjan_kur.py --vault "$($PWD.Path)" --agent claude
-py -3 -X utf8 .\araclarjan_kur.py --vault "$($PWD.Path)" --agent claude --apply
+py -3 -X utf8 .\araclar\ajan_kur.py --vault "$($PWD.Path)" --agent claude
+py -3 -X utf8 .\araclar\ajan_kur.py --vault "$($PWD.Path)" --agent claude --apply
 ```
 
 İlk kurulum komutu yapılacakları gösterir; `--apply` olan komut uygular.
