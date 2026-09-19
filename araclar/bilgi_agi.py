@@ -187,7 +187,7 @@ def status(vault):
     pending=[];deferred=[];complete=[]
     for path in sources:
         if path.name.lower()=='readme.md':continue
-        relative=str(path.relative_to(vault));entry=latest.get(relative)
+        relative=path.relative_to(vault).as_posix();entry=latest.get(relative)
         if entry:
             try:
                 assess_source(vault,entry)

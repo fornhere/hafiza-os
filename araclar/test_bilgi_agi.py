@@ -98,5 +98,39 @@ class KnowledgeTests(unittest.TestCase):
         b.assess_source(self.v,entry,True);s=b.status(self.v)
         self.assertEqual(len(s['deferred_sources']),1);self.assertFalse(s['reviewed_sources'])
 
+    def test_nested_source_coverage_uses_portable_identity_and_preserves_history(self):
+        self.source.unlink()
+        source_id='gelen-kutusu/codex-oturumları/session.md'
+        source=self.v/source_id
+        source.parent.mkdir()
+        source.write_text('Session evidence for source coverage.',encoding='utf-8')
+        self.assertEqual(b.status(self.v)['unreviewed_sources'],[source_id])
+        entry=dict(path=source_id,sha256=b.digest(source),outcome='deferred',
+                   record_ids=[],reason='Needs review',reviewed_by='review-agent')
+        b.assess_source(self.v,entry,True)
+        journal=self.v/'bilgi/.reviews.jsonl'
+        deferred_history=journal.read_bytes()
+        state=b.status(self.v)
+        self.assertEqual(state['deferred_sources'],[source_id])
+        self.assertFalse(state['unreviewed_sources'])
+        self.assertFalse(state['reviewed_sources'])
+        entry.update(outcome='no_relevant_knowledge',reason='No reusable claim')
+        b.assess_source(self.v,entry,True)
+        history=journal.read_bytes()
+        self.assertTrue(history.startswith(deferred_history))
+        self.assertEqual(len(history.splitlines()),2)
+        state=b.status(self.v)
+        self.assertEqual(state['reviewed_sources'],[source_id])
+        self.assertFalse(state['deferred_sources'])
+        self.assertFalse(state['unreviewed_sources'])
+        source.write_text('Changed session evidence.',encoding='utf-8')
+        state=b.status(self.v)
+        self.assertEqual(state['unreviewed_sources'],[source_id])
+        self.assertFalse(state['reviewed_sources'])
+        self.assertIn(source_id+':assessment_stale',state['diagnostics'])
+        self.assertEqual(journal.read_bytes(),history)
+        with self.assertRaisesRegex(ValueError,'unsafe_source_path'):
+            b.assess_source(self.v,dict(entry,path=source_id.replace('/','\\')))
+
 
 if __name__=='__main__':unittest.main()
