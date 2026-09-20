@@ -235,3 +235,6 @@ python3 araclar/hafiza.py --vault . context 'ilgili karar' --limit 5 --char-budg
 ## Lisans
 
 MIT.
+
+Kaynak seçimi için sınırlı, üretime otomatik değişiklik uygulamayan deney
+altyapısı: [Gölge gelişim döngüsü](GELISIM-DONGUSU.md).

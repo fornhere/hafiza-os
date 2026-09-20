@@ -379,3 +379,11 @@ Beyan edilmiş okuma/yazma alanları ve bağımlılıklardan çalışma gruplar�
 üreten salt okunur CLI eklendi. Eksik deklarasyonlar ve bağımlıları plan
  dışında tutulur. İsteğe bağlı Jev kaynak eşleştirmesi tek çağrıda üç görevi
 puanlar; yürütme veya izin kararı vermez. Ayrıntılar GOREV-PLANI.md içinde.
+
+## 2026-09-20 — Sınırlı gelişim deney yöneticisi
+
+Kaynak ailesine göre ayrılan geliştirme/sınama verisi, sınırlı sentetik soru
+varyasyonları ve Jev puanlarından üç eşik adayını karşılaştıran gölge deney
+CLI'si eklendi. Bütçe, kaynak/ayar güncelliği, tekrar ve eşzamanlı koşum
+kontrolleri vardır. Üretim ayarları veya kanonik kayıtlar değiştirilmez.
+Kapsam ve kullanım: [GELISIM-DONGUSU.md](GELISIM-DONGUSU.md).

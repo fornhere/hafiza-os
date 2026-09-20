@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "candidates": [
+    {
+      "id": "shipping",
+      "title": "shipping",
+      "statement": "Kargo teslim süresi üç iş günüdür.",
+      "scope": "user",
+      "domains": [
+        "shop"
+      ],
+      "families": [
+        "shipping.txt"
+      ]
+    },
+    {
+      "id": "returns",
+      "title": "returns",
+      "statement": "İade başvurusu on dört gün içinde yapılır.",
+      "scope": "user",
+      "domains": [
+        "shop"
+      ],
+      "families": [
+        "returns.txt"
+      ]
+    },
+    {
+      "id": "support",
+      "title": "support",
+      "statement": "Destek ekibi hafta içi dokuz ile on yedi arasında çalışır.",
+      "scope": "user",
+      "domains": [
+        "shop"
+      ],
+      "families": [
+        "support.txt"
+      ]
+    },
+    {
+      "id": "payment",
+      "title": "payment",
+      "statement": "Mağazada kredi kartı ile ödeme kabul edilir.",
+      "scope": "user",
+      "domains": [
+        "shop"
+      ],
+      "families": [
+        "payment.txt"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "shipping",
+      "query": "Kargo kaç iş gününde gelir?",
+      "scope": "user",
+      "expected": [
+        "shipping"
+      ],
+      "allowed": [
+        "shipping"
+      ],
+      "families": [
+        "shipping.txt"
+      ],
+      "origin": "fictional_fixture"
+    },
+    {
+      "id": "returns",
+      "query": "Ürünü geri göndermek için ne kadar sürem var?",
+      "scope": "user",
+      "expected": [
+        "returns"
+      ],
+      "allowed": [
+        "returns"
+      ],
+      "families": [
+        "returns.txt"
+      ],
+      "origin": "fictional_fixture"
+    },
+    {
+      "id": "support",
+      "query": "Destek hangi saatlerde açık?",
+      "scope": "user",
+      "expected": [
+        "support"
+      ],
+      "allowed": [
+        "support"
+      ],
+      "families": [
+        "support.txt"
+      ],
+      "origin": "fictional_fixture"
+    },
+    {
+      "id": "payment",
+      "query": "Kartla ödeme yapabilir miyim?",
+      "scope": "user",
+      "expected": [
+        "payment"
+      ],
+      "allowed": [
+        "payment"
+      ],
+      "families": [
+        "payment.txt"
+      ],
+      "origin": "fictional_fixture"
+    },
+    {
+      "id": "weather",
+      "query": "Yarın yağmur yağacak mı?",
+      "scope": "user",
+      "expected": [],
+      "allowed": [],
+      "families": [
+        "negative:weather"
+      ],
+      "origin": "fictional_fixture"
+    },
+    {
+      "id": "recipe",
+      "query": "Mercimek çorbası nasıl yapılır?",
+      "scope": "user",
+      "expected": [],
+      "allowed": [],
+      "families": [
+        "negative:recipe"
+      ],
+      "origin": "fictional_fixture"
+    }
+  ],
+  "source_versions": {
+    "shipping.txt": "892d19d60c885d6a18ccd3f7e805b8de9af1505bbe0ebfcda821ed484b4d9222",
+    "returns.txt": "3325112685023ec1b7305db5fdbdcb50e5f11ae945a1ea5c85c8b8740a38bfdc",
+    "support.txt": "dfe4913abfa9f64591ffd191917901dec87595eedf0172491a10b2e6a8527f46",
+    "payment.txt": "0a635a81b66f08397e871329e92a40e631f9170cb34ce4f50d3f858605ef7a7d"
+  },
+  "label_status": "fictional mechanical smoke test, not user outcome"
+}

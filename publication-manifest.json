@@ -152,6 +152,10 @@
     {
       "path": "araclar/gorev_plani.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/gelisim_dongusu.py",
+      "mode": "shared"
     }
   ]
 }
