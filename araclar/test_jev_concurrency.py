@@ -63,17 +63,23 @@ class ConcurrencyTests(unittest.TestCase):
     def test_timed_out_workers_keep_slots_until_transport_finishes(self):
         self.config(timeout=.06)
         release=threading.Event();workers=[];started=[]
+        original_thread=threading.Thread
+        def tracked_thread(*args,**kwargs):
+            worker=original_thread(*args,**kwargs);workers.append(worker);return worker
         def stalled(url,body,key,timeout):
-            workers.append(threading.current_thread());started.append(1)
+            started.append(1)
             release.wait(5);return answer(body)
         try:
-            results=[j.evaluate(self.v,'different-'+str(n),CARDS,transport=stalled) for n in range(7)]
+            with patch.object(runtime.threading,'Thread',side_effect=tracked_thread):
+                results=[j.evaluate(self.v,'different-'+str(n),CARDS,transport=stalled) for n in range(7)]
             self.assertTrue(all(r['degraded'] for r in results))
             self.assertEqual(len(started),runtime.MAX_INFLIGHT)
             self.assertTrue(all(r['scores']=={} for r in results))
         finally:
             release.set()
-            for worker in workers:worker.join(5)
+            for worker in workers:
+                worker.join(5)
+                self.assertFalse(worker.is_alive(),'request worker still holds temporary vault')
         self.assertTrue(all(r['scores']=={} for r in results),'late answer mutated fallback')
     def test_single_flight_processes(self):
         script = '''import sys,json,time,os
