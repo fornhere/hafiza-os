@@ -42,6 +42,7 @@ class SetupTests(unittest.TestCase):
         for agent, rel in [('codex','.codex/AGENTS.md'),('claude','.claude/CLAUDE.md'),('antigravity','.gemini/GEMINI.md')]:
             with self.subTest(agent=agent):
                 self.args.agent = agent; self.args.vault = str(self.root / agent)
+                self.args.client_home = str(self.root / ('client-' + agent))
                 target = Path(self.args.client_home) / rel
                 target.parent.mkdir(parents=True, exist_ok=True); target.write_text('Keep my instructions\n')
                 with patch.dict(os.environ, {'CODEX_HOME': str(self.root / 'wrong')}): self.install()
@@ -49,6 +50,49 @@ class SetupTests(unittest.TestCase):
                 self.assertIn(self.args.vault, target.read_text())
                 self.assertFalse((self.root/'wrong').exists())
                 self.assertFalse((Path(self.args.vault)/'komuta/mem0.json').exists())
+
+    def test_existing_bridge_rejected_before_network_or_new_vault(self):
+        for agent, rel in [('codex', '.codex/AGENTS.md'),
+                           ('claude', '.claude/CLAUDE.md'),
+                           ('antigravity', '.gemini/GEMINI.md')]:
+            with self.subTest(agent=agent):
+                self.args.vault = str(self.root / ('new-' + agent))
+                target = Path(self.args.client_home) / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                original = '<!-- HAFIZA-OS:SHARED:START -->\nExisting vault\n<!-- HAFIZA-OS:SHARED:END -->\nPersonal instructions\n'
+                target.write_text(original, encoding='utf-8')
+                with patch.object(b, 'download') as download:
+                    with self.assertRaisesRegex(ValueError, 'Mevcut'):
+                        b.run(self.args)
+                    download.assert_not_called()
+                self.assertFalse(Path(self.args.vault).exists())
+                self.assertEqual(target.read_text(encoding='utf-8'), original)
+                target.unlink()
+
+    def test_existing_default_vault_aliases_are_detected(self):
+        home = Path(self.args.client_home)
+        for name in ('Hafiza', 'Hafıza'):
+            with self.subTest(name=name):
+                vault = home / name
+                (vault / 'araclar').mkdir(parents=True)
+                (vault / 'agents.md').write_text('personal')
+                (vault / 'araclar/hafiza.py').write_text('')
+                with patch.object(b, 'download') as download:
+                    with self.assertRaisesRegex(ValueError, 'Mevcut'):
+                        b.run(self.args)
+                    download.assert_not_called()
+                self.assertFalse(Path(self.args.vault).exists())
+                shutil.rmtree(vault)
+
+    def test_custom_codex_home_is_detected_but_isolated_demo_is_allowed(self):
+        custom = self.root / 'custom-codex'
+        custom.mkdir()
+        (custom / 'AGENTS.md').write_text('<!-- HAFIZA-OS:SHARED:START -->')
+        with patch.dict(os.environ, {'CODEX_HOME': str(custom)}):
+            with self.assertRaisesRegex(ValueError, 'Mevcut'):
+                b.check_existing_installation(Path(self.args.client_home))
+            self.install()
+        self.assertIn('SHARED', (custom / 'AGENTS.md').read_text())
 
     def test_existing_target_and_symlink_rejected_before_network(self):
         vault = Path(self.args.vault); vault.mkdir(); (vault/'keep').write_text('mine')

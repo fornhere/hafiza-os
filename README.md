@@ -125,6 +125,20 @@ curl -fsSL https://raw.githubusercontent.com/fornhere/hafiza-os/main/install.sh 
 atlar. Var olan kişisel kasa için bu kurucuyu kullanma; aşağıdaki ajan bağlantısı
 adımları mevcut dosyaları yeniden indirmeden uygulanabilir.
 
+Kurucu, mevcut Codex/Claude/Antigravity Hafıza OS yönerge bağlantısını veya
+kullanıcı klasöründeki `Hafiza` / `Hafıza` kasasını bulursa indirmeden durur.
+Başka bir `--vault` vermek mevcut istemci bağlantısını değiştirme izni değildir.
+Kurulu sistemin yanında eğitim/demonstrasyon için hem kasa hem istemci ayarlarını
+ayrı klasörlere yönlendir (iki klasör de demo için ayrılmış olmalı):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fornhere/hafiza-os/main/install.sh | bash -s -- --agent codex --vault "$PWD/hafiza-demo/kasa" --client-home "$PWD/hafiza-demo/istemci"
+```
+
+Bu komut Mem0 ve Jev sorularını gösterir; seçimleri terminalde kullanıcı yapar.
+Demo istemci yönergesi ayrı klasöre yazılır, normal Codex bağlantısı değişmez.
+Normal Codex oturumu bu ayrı yönergeyi otomatik kullanmaz.
+
 İndirdiğin dosyaları önce incelemek istersen **Code → Download ZIP** ile indir,
 `baslat.py` dosyasını okuyup `python3 baslat.py` (Windows: `py -3 baslat.py`) çalıştır.
 

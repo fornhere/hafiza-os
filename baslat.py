@@ -273,6 +273,25 @@ def optional_services(vault, config_home):
             'jev': 'configured_unverified' if jev else 'skipped'}
 
 
+def check_existing_installation(home, *, isolated=False):
+    """Do not replace an existing shared vault with a fresh template."""
+    codex_home = home / '.codex' if isolated else Path(os.environ.get('CODEX_HOME') or home / '.codex')
+    for candidate in (codex_home / 'AGENTS.md', home / '.claude/CLAUDE.md',
+                      home / '.gemini/GEMINI.md'):
+        path = safe_path(candidate)
+        if path.is_file() and '<!-- HAFIZA-OS:SHARED:' in path.read_text(encoding='utf-8'):
+            raise ValueError(
+                f'Mevcut Hafıza OS bağlantısı bulundu: {path}. '
+                'Yeni kasa oluşturulmadı; mevcut bağlantı korunuyor. '
+                'Bu komut ilk kurulum içindir. Demo için --client-home ile ayrı bir '
+                'istemci klasörü ve --vault ile yeni bir kasa yolu kullan.')
+    for name in ('Hafiza', 'Hafıza'):
+        vault = safe_path(home / name)
+        if (vault / 'agents.md').is_file() and (vault / 'araclar/hafiza.py').is_file():
+            raise ValueError(f'Mevcut Hafıza OS kasası bulundu: {vault}. '
+                             'Yeni kasa oluşturulmadı. Demo için --client-home ve --vault ile ayrı yollar kullan.')
+
+
 def run(args):
     if sys.version_info < (3, 10):
         raise ValueError('Python 3.10 veya sonrası gerekli.')
@@ -284,8 +303,9 @@ def run(args):
     config_home = safe_path(args.config_home or home / '.config')
     if config_home == target or target in config_home.parents:
         raise ValueError('Anahtar dizini hafıza kasasının dışında olmalı.')
+    check_existing_installation(home, isolated=bool(args.client_home))
     if target.exists():
-        raise ValueError(f'Hedef zaten var; üzerine yazılmadı: {target}. --vault ile yeni klasör seç.')
+        raise ValueError(f'Hedef zaten var; üzerine yazılmadı: {target}. Mevcut kasa için yeniden ilk kurulum çalıştırma.')
     agent = args.agent
     if not agent and interactive:
         agent = input('Kullandığın ajan [codex/claude/antigravity]: ').strip().lower()
@@ -350,7 +370,7 @@ def main():
     except (ValueError, OSError, subprocess.CalledProcessError, EOFError, KeyboardInterrupt, zipfile.BadZipFile) as error:
         # Anahtarlar ve sunucu cevapları hata çıktısına yazılmaz.
         print('Kurulum tamamlanmadı: ' + (str(error) if isinstance(error, ValueError) else type(error).__name__), file=sys.stderr)
-        print('Oluşmuş kasa silinmedi. Sorunu çözdükten sonra farklı --vault yolu kullanabilirsin.', file=sys.stderr)
+        print('Mevcut dosyalar silinmedi. Yukarıdaki nedeni kontrol et.', file=sys.stderr)
         return 1
     return 0
 
