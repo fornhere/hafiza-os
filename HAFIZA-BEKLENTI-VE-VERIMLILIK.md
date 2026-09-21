@@ -54,7 +54,12 @@ CLI dışı çağıran, kayıtların güncelliğini ayrıca doğrulamalıdır.
 İfade, gerekçe, koşul ve atıf tek bütçe birimidir; sığmayan kayıt atlanır,
 koşulu kırpılarak koşulsuz iddia üretilmez.
 
-## En verimli minimum mimari
+Biçimleyiciye verilen kanonik kaydın gerekçe ve koşulları, alanların yokluğu
+dahil, uzak metadata'dan önce gelir. Biçimsiz veya sır içeren ek alan varsa
+koşulsuz iddia üretmek yerine kaydın tamamı dışlanır. `null` veya boş metin
+olan isteğe bağlı alanlar eski, ayrıntısız çıktı biçimini korur.
+
+## Önerilen minimum mimari — çıkarım
 
 Okuma yolu kademelidir:
 

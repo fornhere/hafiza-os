@@ -162,6 +162,7 @@ def add_candidate(
     for name, value in (("rationale", rationale), ("conditions", conditions)):
         if value is not None and (not isinstance(value, str) or len(value.strip()) < 10 or value not in source_file(vault, source_path).read_text(encoding="utf-8") or contains_secret(value)):
             raise ValueError(name + " kaynakta aynen bulunmalı")
+    # Identical text is a duplicate only within its own scope.
     normalized = " ".join(statement.casefold().split())
     for existing in load_jsonl(vault / CANDIDATE_PATH):
         if (
@@ -215,6 +216,7 @@ def assess_candidate(
     for record in records:
         if record.get("status") != "active":
             continue
+        # Topic identity is (scope, subject_key); user/project exceptions coexist.
         if record.get("scope", "user") != candidate.get("scope", "user"):
             continue
         current = " ".join(str(record.get("statement", "")).casefold().split())
@@ -570,6 +572,24 @@ def retrievable(metadata: dict[str, Any], scope: str | None = None) -> bool:
     return True
 
 
+def _context_decision_details(record: dict[str, Any]) -> str | None:
+    """Keep optional decision fields together; never weaken an invalid condition.
+
+    Source validation belongs to callers. None/blank optional text retains the
+    legacy no-detail format; malformed or secret-bearing text excludes the claim.
+    """
+    details = []
+    for field, label in (("rationale", "Gerekçe"), ("conditions", "Geçerlilik koşulu")):
+        value = record.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str) or contains_secret(value):
+            return None
+        if value.strip():
+            details.append(f" {label}: {value}")
+    return "".join(details)
+
+
 def context_from_results(
     results, *, query, scope, limit=5, char_budget=1200, records=None
 ):
@@ -585,18 +605,14 @@ def context_from_results(
         if not retrievable(metadata, scope):
             continue
         memory_id = metadata.get("memory_id") or item.get("id", "unknown")
-        record = canonical.get(str(memory_id), {})
-        for field in ("rationale", "conditions"):
-            if not metadata.get(field) and record.get(field):
-                metadata[field] = record[field]
+        record = canonical.get(str(memory_id))
+        # A supplied canonical row, including absent fields, wins over the index.
+        details = _context_decision_details(record if record is not None else metadata)
+        if details is None:
+            continue
         source = metadata.get("source_path", "kaynak-yok")
         block = metadata.get("block_id", "")
         suffix = f"#{block}" if block else ""
-        details = "".join(
-            f" {label}: {metadata[field]}"
-            for field, label in (("rationale", "Gerekçe"), ("conditions", "Geçerlilik koşulu"))
-            if isinstance(metadata.get(field), str) and metadata[field].strip()
-        )
         line = (
             f"- [{memory_id}] {item.get('memory', '')}{details} "
             f"(kaynak: {source}{suffix}; tarih: {metadata.get('observed_at', 'bilinmiyor')}; "
