@@ -1,6 +1,6 @@
 # Sınırlı, gölge gelişim döngüsü
 
-`araclar/gelisim_dongusu.py` kaynak seçiminin **puan/eşik altbileşeni** için
+`araclar/gelisim_dongusu.py`, kaynak seçiminin **puan/eşik altbileşeni** için
 tekrarlanabilir bir deney yöneticisidir. Tam görev paketinin facet, alan,
 karakter bütçesi ve assist birleşimini taklit etmez. Kazananı üretime uygulamaz;
 kod değiştirmez, kanonik bilgi veya Mem0 yazmaz. Gerçek görevde iyileşme ancak
@@ -8,26 +8,42 @@ ayrı uçtan uca ölçümle doğrulanabilir.
 
 ## Akış
 
-1. İncelenmiş soru etiketlerini güncel, kaynakları doğrulanmış bilgi kartlarıyla dondur.
-2. Ortak kaynakları bulunan örnekleri aynı grupta tut; grupları geliştirme/sınama diye ayır.
-3. Geliştirme sorularından boşluk ve istek öneki varyasyonları üret. Bunlar sınırlı yüzey testleridir; zengin serbest parafraz üretimi değildir.
-4. Jev her uygun kaynağın soruyu destekleme puanını bir kez üretir. Aynı puanlardan mevcut 1.5 eşiği ve 1.3/1.7/1.9 adayları kodla karşılaştırılır.
-5. Eksik ve gereksiz kaynak sayısı artmadan en az birinde azalma varsa aday seçilir. Sonra daha önce görülmeyen kaynak ailelerinden sınama sorularına bakılır.
-6. Sınamada iki hata türünden biri artarsa reddet; artmazsa yalnız gölge aday raporu oluştur. İyileşme yoksa dur.
+1. İncelenmiş soru etiketlerini güncel ve kaynakları doğrulanmış kartlarla dondur.
+2. Ortak kaynakları, aynı kaynak içeriğini veya aynı kapsamda normalize edilmiş
+   aynı soruyu paylaşan örnekleri birlikte tut; geliştirme/sınama ayrımını yap.
+3. Yalnız geliştirme sorularından boşluk ve istek öneki varyasyonları üret.
+4. Jev her uygun kartı bir kez puanlar. Aynı puanlarla mevcut 1.5 eşiğini ve
+   1.3/1.7/1.9 adaylarını karşılaştır.
+5. Eksik/gereksiz kaynak sayısı artmadan en az biri azalırsa adayı seç ve
+   sınama çağrılarından **önce** bu seçimi kaydet.
+6. Sınamada iki hata türünden biri artarsa reddet; artmazsa yalnız gölge aday
+   raporu oluştur. İyileşme yoksa sınamayı çağırmadan dur.
 
-Etiketler Jev puanından türetilmez. Kaynak doğruluğu mekanik, ilgililik
-etiketleri ayrıca insan/ajan tarafından incelenmiş olmalıdır. Ajan etiketi
-insan kabulü değildir. Kod başlangıç doğrulaması yapı/yol/hash/kapsamı denetler;
-etiketin anlamsal doğruluğunu ispatlayamaz. Üretici veya aday seçiciye etiketli
-sınama sonuçlarıyla tekrar optimizasyon yaptırılmamalıdır.
+Etiketler Jev puanından türetilmez. Kaynak hash'i anlamsal doğruluk kanıtı
+olmadığı gibi ajan etiketi de insan kabulü değildir. Sınama sonuçlarına bakarak
+başka aday seçilmez veya aynı kampanya tekrar optimize edilmez. Her iki bölümde
+de pozitif ve negatif bağımsız örnekler korunur.
 
-## Kullanım
+## Kullanım ve sürüm 2
 
-Etiket JSON'u `label_status` ve `cases` içerir. Her soru için `id`, `query`,
-`project_id` (yoksa null), `expected_ids` (zorunlu), `relevant_ids` (izinli),
-`origin` gerekir. Zorunlu kimlikler izinli kümenin altkümesidir. Boş kümeler
-cevabı olmayan negatif sorudur. En az iki pozitif ve iki negatif bağımsız
-kaynak ailesi bulunmalıdır. Kaynak ailesi bölünmesi, varyasyon üretiminden önce yapılır.
+Etiket JSON'u `label_status`, `label_review` ve `cases` içerir. İnceleme kaydı:
+
+```json
+"label_review": {
+  "status": "reviewed",
+  "kind": "agent",
+  "reviewed_by": "reviewer-id"
+}
+```
+
+`kind`: `human`, `agent` veya `fixture`. Bu alan kimlik doğrulaması değil,
+inceleme beyanıdır. Gerçek inceleme yapılmadan sırf kapıyı geçmek için
+doldurulmaz. `fixture` mekanik örnektir; kullanıcı faydası değildir.
+
+Her soru: `id`, `query`, `project_id` (yoksa null), `expected_ids` (zorunlu
+kartlar), `relevant_ids` (izinli kartlar), `origin`. Zorunlu küme izinli kümenin
+altkümesidir; iki kümesi de boş soru desteksiz negatiftir. En az iki pozitif ve
+iki negatif bağımsız aile gerekir. Aynı kaynağa dayanan sorular bağımsız değildir.
 
 ```sh
 python3 araclar/gelisim_dongusu.py --vault /path/to/vault freeze \
@@ -36,46 +52,77 @@ python3 araclar/gelisim_dongusu.py --vault /path/to/vault run \
   --corpus /private/corpus.json --output-dir /private/experiment-runs
 ```
 
-Freeze yalnız kasa içinde çözümlenen kaynakları olan, mevcut bilgi ağı kapılarından
-geçmiş kartları alır; dış varlıklar dışarıda kalır. Dışarıda kalan karta bağlı
-etiket varsa sessizce değiştirilmez, girdi reddedilir. Kaynaklar model çağrısı
-öncesinde ve sonrasında denetlenir. Başka proje kartları çağrıya gönderilmez.
-Soru ve kısa kart ifadeleri mevcut Jev hizmetine gönderilir; ham kaynak dosyaları
-gönderilmez. Deney çıktıları özel tutulmalıdır.
+`freeze` yalnız mevcut bilgi ağı kapılarından geçmiş, kasa içinde çözümlenen
+kanıtları olan kartları alır. Dışarıda kalan karta bağlı etiket sessizce
+silinmez; girdi reddedilir. Kaynak aileleri göreli yollardır ve hash haritasında
+bulunmalıdır. Eski korpusun yalnız `schema` değerini artırmayın: kaynakları ve
+etiketleri yeniden inceleyip `freeze` edin. Örnek `examples/improvement-demo/`
+tamamen kurgu mağaza verisidir ve sürüm 2 inceleme kaydı taşır.
 
-Aynı korpus özeti ikinci kez çalıştırıldığında ağ çağrısı yapılmaz. Sonuç
-`unchanged`, önceki durum `previous_status` olur. Kaynaklar değişince yeni
-incelenmiş korpus gerekir. Daha önce ayrılmış sınama ailesi yeni dosya veya
-ayar değişikliğiyle yeniden kullanılamaz. Bu koruma yalnız aynı kalıcı
-`output-dir` defteri için geçerlidir; yeni dizin açmak veya kayıt silmek
-korumayı aşar. Otomasyon dizini sabit tutmalıdır.
+## Tekrar kullanım, çökme ve devam
 
-Timeout sonrası, yalnız sınama aşamasına geçilmemiş başarısız deneyde,
-bir kez açık `--resume-timeout` kullanılabilir. Önceki rapor saklanır,
-çağrı/token bütçeleri birlikte hesaplanır. Otomasyon bu bayrağı kullanmaz.
-Crash/bozuk yanıt diğer başarısızlıklar otomatik tekrarlanmaz.
+Aynı korpus özeti tekrar çalıştırılınca ağ çağrısı yapılmaz: `status=unchanged`,
+`previous_status` önceki sonucu gösterir. Başarısızlık olumsuz kalite etiketi
+veya otomatik tekrar izni değildir.
 
-## Bütçe ve kontrol
+İki bölümün kimlikleri ilk çağrıdan önce kalıcı deftere ayrılır. Önceki sınama
+verisi yeni geliştirmeye veya sınamaya; önceki geliştirme verisi yeni sınamaya
+giremez. Soru kimliği değiştirme, boşluk/büyük harf farkı veya kaynak dosyasını
+yeniden adlandırma bu korumayı sıfırlamaz. Aynı içerik hash'ine sahip kaynaklar
+da aynı grupta kalır. Serbest anlamsal parafraz eşitliği mekanik olarak çözülmez;
+kaynak ailesi/etiket incelemesi hâlâ gereklidir.
 
-- En fazla 32 kaynak, 40 tohum soru, 60 toplam değerlendirme çağrısı; tahmini çağrı sayısı başlamadan denetlenir.
-- Deneme başına 240 saniye; toplam raporlanan 200000 token. Son çağrı sınırı aşabilir ve sağlayıcının raporlamadığı/timeout olmuş kullanım bilinmeyebilir. Bunlar garantili dolar sınırı değildir.
-- Varsayılan istemci timeout'u aynen kullanılır. Deney için uzun timeout gerekiyorsa ayrı deney kasası kullanın; üretim ayarını değiştirmeyin.
-- Tek kalıcı dosya kilidi; eşzamanlı ikinci deney beklemek yerine hata verir.
-- Kaynak/ayar değişimi, bozuk veya eksik model cevabı sonuç üretimini durdurur. Hata, olumsuz kalite etiketi sayılmaz.
-- Tekrarlanabilir başarılı/başarısız ve sınamada reddedilen yollar birim testleriyle doğrulanır.
+Koruma yalnız **aynı kalıcı `output-dir`** için geçerlidir; başka dizin açmak
+veya geçmişi silmek korumayı aşar. Defter kötü niyetli elle düzenlemeye karşı
+imzalı bir güvenlik sınırı değildir. Otomasyon dizini sabit tutmalıdır.
+Bozuk raporlar atlanmaz. Sürüm 1 raporlarının ayrılmış sınama aileleri ve mevcut
+geliştirme satırları korunur; çağrı yapmış fakat geliştirme kaydı eksik kalmış
+eski rapor `legacy_ledger_incomplete` ile işlemi durdurur.
 
-Örnek `examples/improvement-demo/` tamamen kurgu mağaza verisidir; kişisel
-hafıza içermez. Jev kapalıysa canlı run `failed` olur, kalite sonucu uydurmaz.
-Örnek klasörün özel bir kopyasına Jev yapılandırması ekleyerek sınanabilir.
+Yalnız sınamaya geçmemiş timeout başarısızlığında bir kez açık
+`--resume-timeout` kullanılabilir. Önceki rapor saklanır; çağrı, raporlanan token
+ve **geçen yürütme süresi** birlikte hesaplanır. Denemeler arasındaki boşta süre
+sayılmaz. Kod hash'leri (çalıştırıcı, Jev istemcisi, koordinasyon, kilit),
+etkin/diskteki ayar, eşikler ve limitler aynı olmalıdır. Fark varsa eski rapora
+dokunulmadan `resume_revision_changed` döner. Uzak model takma adının aynı
+ağırlıkları sunduğu bu yerel kontrollerle ispatlanamaz.
 
-## Otonomi sınırı
+## Bütçe, gizlilik ve otomasyon
 
-Çalıştırıcı yeni **incelenmiş** korpus geldiğinde varyasyon, ölçüm, aday seçimi
-ve raporlamayı kendi yapar. Genel dağıtım zamanlayıcı kurmaz. Yerel zamanlayıcı
-aynı kalıcı defterle tur başına tek korpus işlemelidir; değişmeyen durumda sessiz
-kalmalı, yeni aday/hata/kaynak yenileme ihtiyacında bildirmelidir.
+En fazla 32 kart, 40 tohum soru, kampanya başına 60 değerlendirme çağrısı,
+240 saniye ve raporlanan 200000 token. Çağrı bütçesi önceden kontrol edilir.
+Son çağrı süre/token sınırını aşabilir; varsayılan istemci timeout'u korunur.
+Bunlar garantili dolar sınırı değildir. `usage_unreported_calls`, eksik token
+bildirimi veya başarısız çağrının bilinmeyen kullanımını gösterir; sıfır
+raporlanan token ücretsiz çağrı demek değildir. Timeout devamı bütçeyi sıfırlamaz.
 
-İlk sürümün otomatik serbest soru üreticisi, gerçek kullanıcı sonucu etiketleyicisi,
-üretime terfi mekanizması veya canlı trafik deneyi yoktur. Gölge aday raporu,
-gölge trafiğe dağıtılmış sürüm anlamına gelmez. Yeni etiketli veri gelmeden
-sonsuz sentetik üretim ve tekrar sınama yapılmaz.
+Kaynak, ayar ve kod sürümleri çağrı öncesi/sonrası ve son karar öncesinde yeniden
+denetlenir. Tek kalıcı dosya kilidi altında eşzamanlı ikinci kampanya beklemek
+yerine reddedilir. Çökme `started` bırakabilir; disk yazma hatasında kalıcı hata
+raporu da garanti edilemez. Tamamlanan rapor aynı korpusla değiştirilmez.
+
+Jev'e soru ve uygun kapsamdaki kısa kart alanları gider; etiketler, ham kaynak
+dosyaları ve aile alanları değerlendirme gövdesine eklenmez. Kaynak sürümleri
+istemcinin yerel istek parmak izinde kullanılır. Raporlar soru/etiket içerdiği
+için özel tutulmalıdır. Keyfi sağlayıcı hata/teşhis metni rapora kopyalanmaz;
+yalnız sabit hata kodları ve sınırlı metadata biçimleri kabul edilir. Bu kontrol
+genel amaçlı kişisel veri temizleyicisi değildir. Negatif/boolean/geçersiz token
+sayaçları ve bozuk puanlar aday üretmek yerine başarısız rapor oluşturur.
+
+CLI çıkışları: başarı veya kalite bakımından sonuçsuz/reddedilmiş deney `0`;
+`failed` veya başarısız/yarım kaydın tekrarı `1`; ön kontrol reddi `2`.
+Ön kontrol, bilinen güvenli hata kodunu JSON'da verir; serbest exception metnini
+vermez. Zamanlayıcı bu çıkışları başarıya çevirmemelidir.
+
+```sh
+python3 -X utf8 -m unittest discover -s araclar -p 'test_gelisim*.py' -v
+python3 -X utf8 -m unittest discover -s araclar -p 'test_*privacy*.py' -v
+python3 -X utf8 -m unittest discover -s araclar -p 'test_*.py'
+```
+
+Bu sürüm otomatik serbest soru üreticisi, gerçek kullanıcı sonucu etiketleyicisi,
+üretime terfi veya canlı trafik deneyi kurmaz. Gölge aday raporu, gölge trafiğe
+dağıtılmış sürüm değildir. Yeni incelenmiş veri olmadan sonsuz sentetik üretim ve
+tekrar sınama yapılmaz. Yerel zamanlayıcı açıkça kurulursa tur başına tek korpus
+işlemeli, değişmeyen durumda sessiz kalmalı ve yalnız yeni aday/hata/kaynak
+yenileme ihtiyacını bildirmelidir. Bu yama zamanlayıcı veya üretim ayarı kurmaz.
