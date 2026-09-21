@@ -22,7 +22,13 @@ ayrı uçtan uca ölçümle doğrulanabilir.
 Etiketler Jev puanından türetilmez. Kaynak hash'i anlamsal doğruluk kanıtı
 olmadığı gibi ajan etiketi de insan kabulü değildir. Sınama sonuçlarına bakarak
 başka aday seçilmez veya aynı kampanya tekrar optimize edilmez. Her iki bölümde
-de pozitif ve negatif bağımsız örnekler korunur.
+de pozitif ve gerçek desteksiz negatif gruplar korunur. `expected=[]` ama
+`allowed` dolu olan isteğe bağlı kanıt sorusu, desteksiz negatif yerine geçmez.
+
+Bu ayrım soru/etiket gruplarını ayırır; aday kart havuzu ortaktır. Dolayısıyla
+modelin sınama kartlarını geliştirmede hiç görmediğini veya istatistiksel
+bağımsızlığın kanıtlandığını söylemez. Aynı aile ve bilinen yüzey dönüşümlerinin
+bölümler arasında sızmaması, daha dar ve mekanik olarak sınanan güvencedir.
 
 ## Kullanım ve sürüm 2
 
@@ -63,14 +69,20 @@ tamamen kurgu mağaza verisidir ve sürüm 2 inceleme kaydı taşır.
 
 Aynı korpus özeti tekrar çalıştırılınca ağ çağrısı yapılmaz: `status=unchanged`,
 `previous_status` önceki sonucu gösterir. Başarısızlık olumsuz kalite etiketi
-veya otomatik tekrar izni değildir.
+veya otomatik tekrar izni değildir. Tamamlanmış v2 kalite raporu yeniden
+okunurken sonuç satırları, metrikler, seçilen eşik, bölüm çakışması ve bütçe
+tutarlılığı denetlenir. Yalnız `status` alanı başarı kanıtı sayılmaz; eksik veya
+tutarsız rapor `ledger_invalid` ile reddedilir ve otomatik yeniden çağrı yapılmaz.
 
 İki bölümün kimlikleri ilk çağrıdan önce kalıcı deftere ayrılır. Önceki sınama
 verisi yeni geliştirmeye veya sınamaya; önceki geliştirme verisi yeni sınamaya
 giremez. Soru kimliği değiştirme, boşluk/büyük harf farkı veya kaynak dosyasını
 yeniden adlandırma bu korumayı sıfırlamaz. Aynı içerik hash'ine sahip kaynaklar
 da aynı grupta kalır. Serbest anlamsal parafraz eşitliği mekanik olarak çözülmez;
-kaynak ailesi/etiket incelemesi hâlâ gereklidir.
+kaynak ailesi/etiket incelemesi hâlâ gereklidir. Çalıştırıcının sabit
+"Şu soruyu mevcut kaynaklardan yanıtla:" dönüşümü de bölümleme ve ilk kayıt
+sırasında ayrılır. Bu önekin eklenmiş/çıkarılmış biçimi yeni bağımsız soru
+sayılmaz; ilk yanıt gelmeden kesilen deneyde de varyasyon kimliği korunur.
 
 Koruma yalnız **aynı kalıcı `output-dir`** için geçerlidir; başka dizin açmak
 veya geçmişi silmek korumayı aşar. Defter kötü niyetli elle düzenlemeye karşı
@@ -85,7 +97,10 @@ ve **geçen yürütme süresi** birlikte hesaplanır. Denemeler arasındaki boş
 sayılmaz. Kod hash'leri (çalıştırıcı, Jev istemcisi, koordinasyon, kilit),
 etkin/diskteki ayar, eşikler ve limitler aynı olmalıdır. Fark varsa eski rapora
 dokunulmadan `resume_revision_changed` döner. Uzak model takma adının aynı
-ağırlıkları sunduğu bu yerel kontrollerle ispatlanamaz.
+ağırlıkları sunduğu bu yerel kontrollerle ispatlanamaz. Tamamlanmış v2 raporda
+`elapsed_seconds` ve `attempt_elapsed_seconds` zorunludur; eksik süre sıfır
+sayılarak devam edilmez. Yeni kod hash'i eski timeout raporuyla uyuşmadığında
+eski raporu elle düzeltmeyin; yeniden deneme izni verilmez.
 
 ## Bütçe, gizlilik ve otomasyon
 
@@ -100,6 +115,12 @@ Kaynak, ayar ve kod sürümleri çağrı öncesi/sonrası ve son karar öncesind
 denetlenir. Tek kalıcı dosya kilidi altında eşzamanlı ikinci kampanya beklemek
 yerine reddedilir. Çökme `started` bırakabilir; disk yazma hatasında kalıcı hata
 raporu da garanti edilemez. Tamamlanan rapor aynı korpusla değiştirilmez.
+Çağrı rezervasyonunu yazmak süreyi tükettiyse yeni değerlendirme başlatılmaz.
+Son ara kayıt ve son doğrulamaların süresi de kalite kararı öncesinde hesaba
+katılır; aşım `failed/budget_exhausted` olur. Son dosya yazımının disk gecikmesi
+ve uzak servisin işlemi gerçekten iptal etmesi garantili değildir. Timeout
+sonrasında geç gelen yanıt başarısız raporu başarıya çeviremez; devam eden
+istemci işi bitene kadar mevcut sağlayıcı yuvasını tutar.
 
 Jev'e soru ve uygun kapsamdaki kısa kart alanları gider; etiketler, ham kaynak
 dosyaları ve aile alanları değerlendirme gövdesine eklenmez. Kaynak sürümleri
@@ -108,6 +129,9 @@ için özel tutulmalıdır. Keyfi sağlayıcı hata/teşhis metni rapora kopyala
 yalnız sabit hata kodları ve sınırlı metadata biçimleri kabul edilir. Bu kontrol
 genel amaçlı kişisel veri temizleyicisi değildir. Negatif/boolean/geçersiz token
 sayaçları ve bozuk puanlar aday üretmek yerine başarısız rapor oluşturur.
+Bilinen başarısızlık teşhisi ile `degraded=false` çelişirse puanlar eksiksiz olsa
+bile `response_invalid` olur. Önbellek uyarısı gibi ölümcül olmayan teşhisler
+tek başına başarılı değerlendirmeyi bozmaz.
 
 CLI çıkışları: başarı veya kalite bakımından sonuçsuz/reddedilmiş deney `0`;
 `failed` veya başarısız/yarım kaydın tekrarı `1`; ön kontrol reddi `2`.

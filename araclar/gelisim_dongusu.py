@@ -19,6 +19,13 @@ BASELINE = 1.5
 MAX_CALLS = 60
 MAX_SECONDS = 240
 MAX_TOKENS = 200000
+REQUEST_PREFIX = 'Şu soruyu mevcut kaynaklardan yanıtla: '
+INFERENCE_FAILURES = {
+    'config_invalid', 'env_file_invalid', 'endpoint_invalid', 'payload_invalid',
+    'budget_exceeded', 'answers_invalid', 'credentials_missing', 'deadline_exceeded',
+    'purpose_invalid', 'capacity_exceeded', 'coordination_unavailable', 'request_failed',
+    'http_unauthorized', 'http_forbidden', 'http_rate_limited', 'http_server_error', 'http_error',
+}
 
 
 def digest(value):
@@ -140,7 +147,14 @@ def validate(corpus):
 def case_keys(case, versions=None):
     # IDs and cosmetic query edits cannot manufacture independent evidence.
     query=' '.join(unicodedata.normalize('NFKC',case['query']).casefold().split())
-    keys={'query:'+digest([case['scope'],query])}
+    # Reserve the actual deterministic augmentation as well as its seed.
+    # Strip only our own fixed request wrapper; this is not semantic paraphrasing.
+    prefix=' '.join(unicodedata.normalize('NFKC',REQUEST_PREFIX).casefold().split())+' '
+    queries={query,prefix+query}
+    while query.startswith(prefix):
+        query=query[len(prefix):]
+        queries.add(query)
+    keys={'query:'+digest([case['scope'],q]) for q in queries}
     keys.update('family:'+f for f in case['families'])
     keys.update('source:'+versions[f] for f in case['families'] if versions and f in versions)
     return keys
@@ -171,7 +185,7 @@ def split(cases, versions=None):
     groups.sort(key=lambda g:digest(sorted(f for c in g for f in c['families'])))
     count=max(2,len(groups)//3)
     positive=[g for g in groups if any(c['expected'] for c in g)]
-    negative=[g for g in groups if all(not c['expected'] for c in g)]
+    negative=[g for g in groups if all(not c.get('allowed',c['expected']) for c in g)]
     if len(positive)<2 or len(negative)<2: raise ValueError('positive_negative_coverage_required')
     held=[positive[0],negative[0]]
     # Keep one positive and one negative component in development as well.
@@ -187,7 +201,7 @@ def synthesize(cases):
     variants=[]
     for c in cases:
         for name,q in [('original',c['query']),('spacing','  '+c['query'].replace(' ','  ')+'  '),
-                       ('request','Şu soruyu mevcut kaynaklardan yanıtla: '+c['query'])]:
+                       ('request',REQUEST_PREFIX+c['query'])]:
             variants.append(dict(c,id=c['id']+':'+name,query=q,parent_id=c['id'],synthetic=name!='original'))
     return variants
 
@@ -204,6 +218,73 @@ def metrics(rows, threshold):
 
 def improves(a,b):
     return a['missing']<=b['missing'] and a['extra']<=b['extra'] and (a['missing']<b['missing'] or a['extra']<b['extra'])
+
+
+def validate_quality_report(report):
+    """A cached success requires its measured evidence, not just a status string.
+
+    These are integrity checks for accidental/incomplete edits, not signatures
+    or proof of honest labels/provider scores. Failed/started reports never
+    become quality evidence through this reader.
+    """
+    def number(value):
+        return type(value) in (int,float) and math.isfinite(value) and 0<=value<=2
+
+    def rows(partition):
+        values=report['results'].get(partition)
+        if not isinstance(values,list) or not 1<=len(values)<=120:
+            raise ValueError('ledger_invalid')
+        for row in values:
+            if (not isinstance(row,dict) or not isinstance(row.get('scores'),dict)
+                    or not strings(row.get('expected')) or not strings(row.get('allowed'))
+                    or not set(row['expected'])<=set(row['allowed'])<=set(row['scores'])
+                    or any(not isinstance(i,str) or not i for i in row['scores'])
+                    or any(not number(score) for score in row['scores'].values())
+                    or not isinstance(row.get('query'),str) or not row['query'].strip()
+                    or not valid_scope(row.get('scope')) or not strings(row.get('families'),nonempty=True)):
+                raise ValueError('ledger_invalid')
+        return values
+
+    baseline=report['baseline']; thresholds=report['candidates']
+    if (not number(baseline) or not isinstance(thresholds,list) or not 1<=len(thresholds)<=3
+            or any(not number(t) for t in thresholds) or len(set(thresholds))!=len(thresholds)
+            or report.get('production_changed') is not False or 'error' in report):
+        raise ValueError('ledger_invalid')
+    dev=rows('development'); base=metrics(dev,baseline)
+    trials={str(t):metrics(dev,t) for t in thresholds}
+    if report.get('development')!=dict(baseline=base,candidates=trials):
+        raise ValueError('ledger_invalid')
+    winners=[t for t in thresholds if improves(trials[str(t)],base)]
+    count=len(dev)
+    if report['status']=='no_improvement':
+        if (winners or 'selected_before_holdout' in report or 'holdout' in report['results']
+                or report.get('shadow_candidate') is not None):
+            raise ValueError('ledger_invalid')
+    else:
+        if not winners: raise ValueError('ledger_invalid')
+        winner=min(winners,key=lambda t:(trials[str(t)]['missing'],trials[str(t)]['extra'],abs(t-baseline)))
+        if report.get('selected_before_holdout')!=winner: raise ValueError('ledger_invalid')
+        held=rows('holdout'); count+=len(held)
+        if partition_keys(dev) & partition_keys(held): raise ValueError('ledger_invalid')
+        b=metrics(held,baseline); a=metrics(held,winner)
+        passes=a['missing']<=b['missing'] and a['extra']<=b['extra']
+        if (report.get('holdout')!=dict(baseline=b,candidate=a)
+                or report['status']!=('shadow_candidate' if passes else 'holdout_rejected')):
+            raise ValueError('ledger_invalid')
+        candidate=report.get('shadow_candidate')
+        if passes:
+            if (not isinstance(candidate,dict) or candidate.get('threshold')!=winner
+                    or candidate.get('automatic_promotion') is not False):
+                raise ValueError('ledger_invalid')
+        elif candidate is not None: raise ValueError('ledger_invalid')
+    limits=report['limits']
+    if (not isinstance(limits,dict)
+            or any(type(limits.get(k)) is not int or limits[k]<=0 for k in ('calls','tokens'))
+            or type(limits.get('seconds')) not in (int,float)
+            or not math.isfinite(limits['seconds']) or limits['seconds']<=0
+            or not count<=report['calls']<=limits['calls']
+            or report['usage_tokens']>limits['tokens'] or report['elapsed_seconds']>=limits['seconds']):
+        raise ValueError('ledger_invalid')
 
 
 def read_report(path):
@@ -224,8 +305,19 @@ def read_report(path):
             if type(report.get('attempts')) is not int or not 1<=report['attempts']<=2: raise ValueError('ledger_invalid')
             if type(report.get('usage_unreported_calls')) is not int or not 0<=report['usage_unreported_calls']<=report['calls']:
                 raise ValueError('ledger_invalid')
+            if (not report['development_keys'] or not report['holdout_keys']
+                    or set(report['development_keys']) & set(report['holdout_keys'])):
+                raise ValueError('ledger_invalid')
+            if report['status']!='started':
+                for field in ('elapsed_seconds','attempt_elapsed_seconds'):
+                    value=report.get(field)
+                    if type(value) not in (int,float) or not math.isfinite(value) or value<0:
+                        raise ValueError('ledger_invalid')
+                if report['elapsed_seconds']<report['attempt_elapsed_seconds']:
+                    raise ValueError('ledger_invalid')
+                if report['status']!='failed': validate_quality_report(report)
         return report
-    except (ValueError,TypeError,KeyError):
+    except (ValueError,TypeError,KeyError,OverflowError):
         raise ValueError('ledger_invalid') from None
 
 
@@ -263,6 +355,8 @@ def inference_metadata(result):
             or type(result.get('cache_hit',False)) is not bool): raise ValueError('response_invalid')
     diagnostics=result.get('diagnostics',[])
     if not isinstance(diagnostics,list) or len(diagnostics)>32 or any(not isinstance(d,str) for d in diagnostics):
+        raise ValueError('response_invalid')
+    if not result.get('degraded',False) and INFERENCE_FAILURES.intersection(diagnostics):
         raise ValueError('response_invalid')
     latency=result.get('latency_ms')
     if latency is not None and (type(latency) not in (int,float) or not math.isfinite(latency) or latency<0):
@@ -306,7 +400,7 @@ def run(vault, corpus, output, evaluate=None, resume=False):
         limits=dict(calls=MAX_CALLS,seconds=MAX_SECONDS,tokens=MAX_TOKENS)
         baseline=BASELINE; thresholds=tuple(THRESHOLDS); revision=code_revision()
         if len(dev)+len(holdout)+(previous or {}).get('calls',0)>limits['calls']: raise ValueError('call_budget_preflight')
-        elapsed=(previous or {}).get('elapsed_seconds',0)
+        elapsed=previous['elapsed_seconds'] if previous else 0
         if type(elapsed) not in (int,float) or not math.isfinite(elapsed) or elapsed<0: raise ValueError('ledger_invalid')
         if previous:
             if (previous.get('schema')!=VERSION or previous.get('config_digest')!=config_revision(vault)
@@ -339,6 +433,10 @@ def run(vault, corpus, output, evaluate=None, resume=False):
                 expected_score_ids={r['id'] for r in eligible}
                 report['calls']+=1; report['usage_unreported_calls']+=1
                 report.pop('last_inference',None); write(target,report)
+                # A slow durable reservation can exhaust the campaign before I/O.
+                if elapsed_total()>=limits['seconds']:
+                    report['calls']-=1; report['usage_unreported_calls']-=1
+                    raise ValueError('budget_exhausted')
                 result=evaluate(vault,c['query'],eligible,scope=c['scope'],source_versions=dict(corpus['source_versions']))
                 if not isinstance(result,dict): raise ValueError('response_invalid')
                 usage=result.get('usage',{})
@@ -388,6 +486,9 @@ def run(vault, corpus, output, evaluate=None, resume=False):
             report['error']=str(error) if isinstance(error,ValueError) and str(error) in safe else 'execution_failed'
         report['attempt_elapsed_seconds']=time.monotonic()-started
         report['elapsed_seconds']=elapsed+report['attempt_elapsed_seconds']
+        # Include the last checkpoint and final validation work, not just inference.
+        if report['elapsed_seconds']>=limits['seconds'] or report['usage_tokens']>limits['tokens']:
+            report.update(status='failed',error='budget_exhausted',shadow_candidate=None)
         write(target,report)
         return dict(status=report['status'],report=str(target),calls=report['calls'],shadow_candidate=report['shadow_candidate'])
 
