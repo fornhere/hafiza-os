@@ -210,6 +210,7 @@ bu kamu deposuna yükleme.
   karar/çıktı takibi ve hafızanın görünür kullanım bilgisi.
 
 [Tüm güncelleme notları](GUNCELLEMELER.md) · [Kullanım doğrulama](KULLANIM-DOGRULAMA.md)
+· [Hafızadan beklenti ve verimlilik kararı](HAFIZA-BEKLENTI-VE-VERIMLILIK.md)
 · [Fayda ölçümü](FAYDA-OLCUMU.md)
 
 ## Sınırlar ve gizlilik

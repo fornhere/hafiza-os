@@ -123,6 +123,31 @@ class HafizaDogrulamaTesti(unittest.TestCase):
             self.assertEqual(1, len(queue))
             self.assertEqual("candidate.queued", events[0]["event_type"])
 
+    def test_ayni_ifade_farkli_proje_kapsamlarinda_tekrar_sayilmaz(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / "zihin").mkdir()
+            (vault / "zihin/kaynak.md").write_text(
+                "Sunumlarda kısa cümle kullan.", encoding="utf-8"
+            )
+            kwargs = {
+                "statement": "Sunumlarda kısa cümle kullan.",
+                "kind": "semantic",
+                "subject_key": "presentation.sentence-length",
+                "source_path": "zihin/kaynak.md",
+                "source_anchor": "sunum",
+                "confidence": "explicit-user",
+                "sensitivity": "normal",
+                "proposed_by": "codex",
+            }
+
+            first = hafiza.add_candidate(vault, scope="project:a", **kwargs)
+            second = hafiza.add_candidate(vault, scope="project:b", **kwargs)
+
+            self.assertEqual("queued", first["result"])
+            self.assertEqual("queued", second["result"])
+            self.assertEqual(2, len(hafiza.load_jsonl(vault / hafiza.CANDIDATE_PATH)))
+
     def test_senkron_driftli_kaydi_gunceller_ve_yeniden_okuyarak_dogrular(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = Path(tmp)
@@ -250,6 +275,79 @@ class HafizaDogrulamaTesti(unittest.TestCase):
         self.assertLessEqual(len(package["text"]), 300)
         self.assertEqual(1, package["included"])
 
+    def test_yerel_baglam_gerekce_ve_kosulu_korur(self):
+        result = {
+            "memory": "Sunumlarda kısa cümle kullan.",
+            "metadata": {
+                "memory_id": "presentation-style",
+                "status": "active",
+                "scope": "project:p",
+                "source_path": "zihin/kaynak.md",
+                "observed_at": "2026-09-21",
+                "confidence": "explicit-user",
+                "rationale": "Dinleyicinin takibini kolaylaştırır.",
+                "conditions": "Yalnız sözlü sunumlarda geçerlidir.",
+            },
+        }
+
+        package = hafiza.context_from_results(
+            [result], query="Nasıl anlatmalıyım?", scope="project:p", char_budget=500
+        )
+
+        self.assertIn("Gerekçe: Dinleyicinin takibini kolaylaştırır.", package["text"])
+        self.assertIn(
+            "Geçerlilik koşulu: Yalnız sözlü sunumlarda geçerlidir.", package["text"]
+        )
+
+    def test_mem0_baglam_kosullari_kanonik_kayittan_tamamlar(self):
+        client = FakeMem0([], search_results=[{
+            "id": "remote-presentation-style",
+            "memory": "Sunumlarda kısa cümle kullan.",
+            "metadata": {
+                "memory_id": "presentation-style",
+                "status": "active",
+                "scope": "project:p",
+                "source_path": "zihin/kaynak.md",
+                "observed_at": "2026-09-21",
+                "confidence": "explicit-user",
+            },
+        }])
+        records = [{
+            "memory_id": "presentation-style",
+            "rationale": "Dinleyicinin takibini kolaylaştırır.",
+            "conditions": "Yalnız sözlü sunumlarda geçerlidir.",
+        }]
+
+        package = hafiza.build_context_package(
+            client,
+            query="Nasıl anlatmalıyım?",
+            scope="project:p",
+            char_budget=500,
+            records=records,
+        )
+
+        self.assertIn("Dinleyicinin takibini kolaylaştırır.", package["text"])
+        self.assertIn("Yalnız sözlü sunumlarda geçerlidir.", package["text"])
+
+    def test_dar_butce_kosullu_kaydi_butun_olarak_atlar(self):
+        result = {
+            "memory": "Sunumlarda kısa cümle kullan.",
+            "metadata": {
+                "memory_id": "presentation-style",
+                "status": "active",
+                "scope": "project:p",
+                "rationale": "Dinleyicinin takibini kolaylaştırır.",
+                "conditions": "Yalnız sözlü sunumlarda geçerlidir.",
+            },
+        }
+
+        package = hafiza.context_from_results(
+            [result], query="Nasıl anlatmalıyım?", scope="project:p", char_budget=80
+        )
+
+        self.assertEqual(0, package["included"])
+        self.assertEqual("", package["text"])
+
     def test_degerlendirme_beklenen_kaydi_top_k_icinde_ister(self):
         client = FakeMem0([], search_results=[
             {
@@ -292,6 +390,42 @@ class HafizaDogrulamaTesti(unittest.TestCase):
 
         self.assertEqual("conflict", assessment["result"])
         self.assertEqual("forn-pref-language", assessment["conflicts_with"])
+
+    def test_ayni_anahtar_farkli_projede_celiski_sayilmaz(self):
+        existing = [{
+            "memory_id": "project-a-style",
+            "scope": "project:a",
+            "subject_key": "presentation.style",
+            "statement": "Sunumlarda kısa cümle kullan.",
+            "status": "active",
+        }]
+        candidate = {
+            "scope": "project:b",
+            "subject_key": "presentation.style",
+            "statement": "Sunumlarda uzun cümle kullan.",
+        }
+
+        assessment = hafiza.assess_candidate(candidate, existing)
+
+        self.assertEqual("eligible", assessment["result"])
+
+    def test_ayni_kapsam_ve_anahtar_gercek_celiski_sayilir(self):
+        existing = [{
+            "memory_id": "project-a-style",
+            "scope": "project:a",
+            "subject_key": "presentation.style",
+            "statement": "Sunumlarda kısa cümle kullan.",
+            "status": "active",
+        }]
+        candidate = {
+            "scope": "project:a",
+            "subject_key": "presentation.style",
+            "statement": "Sunumlarda uzun cümle kullan.",
+        }
+
+        assessment = hafiza.assess_candidate(candidate, existing)
+
+        self.assertEqual("conflict", assessment["result"])
 
     def test_terfi_inceleyen_olmadan_katalog_yazmaz(self):
         with tempfile.TemporaryDirectory() as tmp:

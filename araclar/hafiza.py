@@ -164,7 +164,10 @@ def add_candidate(
             raise ValueError(name + " kaynakta aynen bulunmalı")
     normalized = " ".join(statement.casefold().split())
     for existing in load_jsonl(vault / CANDIDATE_PATH):
-        if " ".join(str(existing.get("statement", "")).casefold().split()) == normalized:
+        if (
+            existing.get("scope", "user") == scope
+            and " ".join(str(existing.get("statement", "")).casefold().split()) == normalized
+        ):
             return {"result": "duplicate", "candidate_id": existing["candidate_id"]}
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     candidate = {
@@ -212,13 +215,14 @@ def assess_candidate(
     for record in records:
         if record.get("status") != "active":
             continue
+        if record.get("scope", "user") != candidate.get("scope", "user"):
+            continue
         current = " ".join(str(record.get("statement", "")).casefold().split())
         if current == normalized:
             return {"result": "duplicate", "duplicate_of": record.get("memory_id")}
         if record.get("subject_key") == candidate.get("subject_key"):
             return {"result": "conflict", "conflicts_with": record.get("memory_id")}
         # Cross-key overlap is a review warning, never an automatic semantic verdict.
-        if record.get("scope", "user") != candidate.get("scope", "user"): continue
         from gorev_baglam import content_words, word_match, inflected
         ignored = ("kullanıcı", "tercih", "eder", "ister", "istiyor", "istiyorum", "kullanır", "kullanıyor")
         def concepts(text):
@@ -566,20 +570,38 @@ def retrievable(metadata: dict[str, Any], scope: str | None = None) -> bool:
     return True
 
 
-def context_from_results(results, *, query, scope, limit=5, char_budget=1200):
+def context_from_results(
+    results, *, query, scope, limit=5, char_budget=1200, records=None
+):
     lines = []
     selected_ids = []
+    canonical = {
+        str(record.get("memory_id")): record
+        for record in (records or [])
+        if record.get("memory_id")
+    }
     for item in results:
-        metadata = item.get("metadata") or {}
+        metadata = dict(item.get("metadata") or {})
         if not retrievable(metadata, scope):
             continue
         memory_id = metadata.get("memory_id") or item.get("id", "unknown")
+        record = canonical.get(str(memory_id), {})
+        for field in ("rationale", "conditions"):
+            if not metadata.get(field) and record.get(field):
+                metadata[field] = record[field]
         source = metadata.get("source_path", "kaynak-yok")
         block = metadata.get("block_id", "")
         suffix = f"#{block}" if block else ""
-        line = (f"- [{memory_id}] {item.get('memory', '')} "
-                f"(kaynak: {source}{suffix}; tarih: {metadata.get('observed_at', 'bilinmiyor')}; "
-                f"güven: {metadata.get('confidence', 'bilinmiyor')})")
+        details = "".join(
+            f" {label}: {metadata[field]}"
+            for field, label in (("rationale", "Gerekçe"), ("conditions", "Geçerlilik koşulu"))
+            if isinstance(metadata.get(field), str) and metadata[field].strip()
+        )
+        line = (
+            f"- [{memory_id}] {item.get('memory', '')}{details} "
+            f"(kaynak: {source}{suffix}; tarih: {metadata.get('observed_at', 'bilinmiyor')}; "
+            f"güven: {metadata.get('confidence', 'bilinmiyor')})"
+        )
         if len("\n".join(lines + [line])) > char_budget:
             continue
         lines.append(line); selected_ids.append(str(memory_id))
@@ -598,6 +620,7 @@ def build_context_package(
     char_budget: int = 1200,
     user_id: str | None = None,
     threshold: float = 0.1,
+    records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     results = client.search_memories(
         query,
@@ -605,7 +628,14 @@ def build_context_package(
         top_k=max(limit * 3, limit),
         threshold=threshold,
     )
-    return context_from_results(results, query=query, scope=scope, limit=limit, char_budget=char_budget)
+    return context_from_results(
+        results,
+        query=query,
+        scope=scope,
+        limit=limit,
+        char_budget=char_budget,
+        records=records,
+    )
 
 
 def evaluate_retrieval(
@@ -1083,7 +1113,14 @@ def main(argv: list[str] | None = None) -> int:
                 mode = 'remote+local'
             except (Exception,) as exc:
                 fallback = type(exc).__name__
-        result = context_from_results(results, query=args.query, scope=args.scope, limit=args.limit, char_budget=args.char_budget)
+        result = context_from_results(
+            results,
+            query=args.query,
+            scope=args.scope,
+            limit=args.limit,
+            char_budget=args.char_budget,
+            records=records,
+        )
         result.update(mode=mode, fallback_reason=fallback, catalog_errors=errors)
         _json_print(result)
         return 1 if errors else 0
