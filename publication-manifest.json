@@ -26,7 +26,7 @@
       "mode": "reviewed-variant",
       "reason": "Public installer supports vault-scoped external Mem0 credentials, optional automatic remote lookup and local override; private runtime retains its current identity and credential source.",
       "local_sha256": "d57a8ff91fb644ae35a8bdb80bddcae679d0f7b0b87214cf496f204ba1de07ed",
-      "public_sha256": "b893171ebf0bccf873a5d2e15160dd490b2a22c2980bd2917554dd1e3dbce975"
+      "public_sha256": "51cf13b00d6482f43269a42365f579690ac5c0cce6ed0336fe4b94c743d8272f"
     },
     {
       "path": "araclar/hafiza_git.py",

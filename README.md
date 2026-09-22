@@ -247,6 +247,11 @@ python3 araclar/hafiza.py --vault . context 'ilgili karar' --limit 5 --char-budg
 
 </details>
 
+## Katkıda bulunma
+
+Kod, test veya dokümantasyon değişikliği için [geliştirme rehberini](CONTRIBUTING.md)
+oku. Kasa kullanımı ile kamu deposu geliştirmesinin yönergeleri burada ayrılır.
+
 ## Lisans
 
 MIT.

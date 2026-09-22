@@ -9,6 +9,19 @@ Komutu kasa kökünde çalıştır veya kasa ve betik için mutlak yol kullan.
 Aynı içerik oturum bağlamında zaten varsa tekrar okuma. Eksik dosyayı uydurma.
 Net görevde önce işe başla; bütün kasa, makbuz listesi ve gündemi yükleme.
 
+## Bu depoda geliştirme yapıyorsan
+
+Bu kamu deposu kişisel hafıza değil, paylaşılabilir kod ve kasa şablonudur.
+Kod, test veya dokümantasyon görevinde önce [CONTRIBUTING.md](CONTRIBUTING.md)
+rehberini oku. Şablon kimlik/öncelik dosyalarını gerçek kullanıcı bilgisi sayma;
+görev sonucunu bu şablonlara veya kişisel kasaya otomatik yazma. Yukarıdaki
+açılış ve aşağıdaki bakım akışı kişisel kullanım içindir; devredilmiş
+geliştirme ajanı yeni bir kişisel ana oturum başlatmaz.
+
+Komut örnekleri Linux/macOS içindir. Windows PowerShell'de `python3` yerine
+`py -3 -X utf8` kullan; POSIX `export` yerine `$env:AD = "değer"` yaz.
+Çalışma kökünü ve `--vault` hedefini her zaman doğrula.
+
 ## Her görevde geçerli
 
 - Kısa, açık ve dürüst konuş; kaynak, öneri, kullanıcı kararı ve doğrulanmış
