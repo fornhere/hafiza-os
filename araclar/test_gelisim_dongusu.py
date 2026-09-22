@@ -14,10 +14,15 @@ class LoopTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.v=Path(self.temp.name); (self.v/'source').write_text('verified source')
         self.out=self.v/'experiments'
-        self.c=dict(schema=1,label_status='agent_labels',source_versions={'source':hashlib.sha256(b'verified source').hexdigest()},
+        self.c=dict(schema=g.VERSION,label_status='agent_labels',
+            label_review=dict(status='reviewed',kind='fixture',reviewed_by='offline-tests'),source_versions={'source':hashlib.sha256(b'verified source').hexdigest()},
             candidates=[dict(id=str(i),title=str(i),statement='fact '+str(i),scope='user',domains=[],families=['family'+str(i)]) for i in range(6)],
             cases=[dict(id=str(i),query='question '+str(i),scope='user',expected=[str(i)],allowed=[str(i)],families=['family'+str(i)],origin='synthetic') for i in range(6)])
         self.c['cases'] += [dict(id=str(i),query='unknown '+str(i),scope='user',expected=[],allowed=[],families=['negative'+str(i)],origin='synthetic') for i in (6,7)]
+        for i in range(6):
+            name='family'+str(i); data=('independent source '+str(i)).encode()
+            (self.v/name).write_bytes(data)
+            self.c['source_versions'][name]=hashlib.sha256(data).hexdigest()
         self.calls=0
 
     def evaluate(self,v,q,rows,**kwargs):

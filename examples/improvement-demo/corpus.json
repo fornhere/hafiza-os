@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "candidates": [
     {
       "id": "shipping",
@@ -140,5 +140,10 @@
     "support.txt": "dfe4913abfa9f64591ffd191917901dec87595eedf0172491a10b2e6a8527f46",
     "payment.txt": "0a635a81b66f08397e871329e92a40e631f9170cb34ce4f50d3f858605ef7a7d"
   },
-  "label_status": "fictional mechanical smoke test, not user outcome"
+  "label_status": "fictional mechanical smoke test, not user outcome",
+  "label_review": {
+    "status": "reviewed",
+    "kind": "fixture",
+    "reviewed_by": "repository-fixture"
+  }
 }
