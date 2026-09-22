@@ -264,6 +264,9 @@ def privacy_ambiguous(prompt):
     patterns = (
         r'\b(?:bunu|bunları|şunu|şunları|bu bilgiyi|şu bilgiyi|anlattığımı|söylediğimi|konuştuklarımızı)\b[^.!?\n]{0,90}\b'+negative+r'\b',
         r'\b(?:hafızaya|hafızanda|belleğe|bellekte|kayıt altına|not olarak)\b[^.!?\n]{0,50}\b'+negative+r'\b',
+        # A whole-session scope inside a compound request ("..., bu oturumu
+        # kaydetme") is not a full-message command; it still needs review.
+        r'\bbu (?:oturumu|konuşmayı|sohbeti)\b[^.!?\n]{0,50}\b'+negative+r'\b',
         r'\b(?:kaydetmeni|saklamanı|hatırlamanı) istemiyorum\b',
         r'\b(?:kaydedilmesin|kaydedilmesini istemiyorum|hafızaya alınmasın|aramızda kalsın)\b',
         r'^(?:\s*(?:kanka|lütfen)[, ]+)*(?:kaydetme|saklama|hatırlama)[.! ]*$',
