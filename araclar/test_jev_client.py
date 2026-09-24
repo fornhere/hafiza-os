@@ -21,7 +21,8 @@ class ClientTests(unittest.TestCase):
         self.assertNotIn('secret_extra',json.dumps(body))
         return dict(answers={q:dict(type='score',score=1.8,confidence='ignored') for q in body['questions']},usage=dict(input_tokens=3,output_tokens=2))
     def run_client(self,**kw):
-        return j.evaluate(self.vault,'question',self.cards,transport=self.transport,**kw)
+        kw.setdefault('transport',self.transport)
+        return j.evaluate(self.vault,'question',self.cards,**kw)
     def test_default_off(self):
         self.assertEqual(self.run_client()['mode'],'off');self.assertFalse(self.calls)
     def test_cache_source_and_scope_binding(self):
@@ -39,6 +40,21 @@ class ClientTests(unittest.TestCase):
         self.config()
         r=self.run_client(facets=['A','B']);self.assertEqual(len(r['facet_scores']),2)
         self.assertEqual(set(self.calls[0]['questions']),{'f0_c0','f1_c0'})
+    def test_choice_and_noul_are_validated_and_cached(self):
+        self.config()
+        choices={'search_memory':.8,'no_memory':.1,'insufficient_context':.1}
+        def gate(*args): return {'answers':{'f0_c0':dict(type='choice',choice='search_memory',probabilities=choices)}}
+        first=self.run_client(purpose='retrieval_gate',transport=gate)
+        self.assertFalse(first['degraded']);self.assertEqual(first['choices']['one'],'search_memory')
+        self.assertEqual(self.run_client(purpose='retrieval_gate',transport=gate)['distributions']['one'],choices)
+        self.assertTrue(self.run_client(purpose='retrieval_gate',transport=gate)['cache_hit'])
+        def noul(*args): return {'answers':{'f0_c0':dict(type='noul',noul=.83)}}
+        result=self.run_client(question_type='noul',transport=noul)
+        self.assertEqual(result['distributions']['one']['true'],.83)
+        self.assertTrue(self.run_client(question_type='noul',transport=noul)['cache_hit'])
+        invalid=self.run_client(purpose='retrieval_gate',source_versions={'new':'1'},
+                                transport=lambda *a:{'answers':{'f0_c0':dict(type='score',score=2)}})
+        self.assertTrue(invalid['degraded']);self.assertIn('answers_invalid',invalid['diagnostics'])
     def test_bad_answers_do_not_cache(self):
         self.config()
         for value in [float('nan'),True,3,-1]:
@@ -198,7 +214,7 @@ class ClientTests(unittest.TestCase):
             raw={'answers':{'x':dict(type='score',score=score,probabilities=probabilities)}}
             with self.assertRaises(ValueError):j._scores(raw,['x'])
             count=[]
-            self.assertEqual(j._scores(raw,['x'],allow_quantized=True,quantized_counter=count),{'x':score})
+            self.assertEqual(j._scores(raw,['x'],allow_quantized=True,quantized_counter=count),{'x':(score,probabilities,None)})
             self.assertEqual(count,['x'])
         self.config(provider='vercel',base_url='https://ai-gateway.vercel.sh/typesafe')
         os.environ['AI_GATEWAY_API_KEY']='test-gateway-key'
@@ -208,6 +224,7 @@ class ClientTests(unittest.TestCase):
         self.assertIn('quantized_probability',result['diagnostics']);self.assertEqual(result['scores'],{'one':.63})
         cached=j.evaluate(self.vault,'q',self.cards,transport=response)
         self.assertTrue(cached['cache_hit']);self.assertEqual(cached['quantized_probability_count'],1)
+        self.assertEqual(cached['distributions'],result['distributions'])
         self.config(provider='typesafe')
         self.assertTrue(j.evaluate(self.vault,'q',self.cards,transport=response)['degraded'])
 
@@ -219,6 +236,6 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(ValueError):j._scores(raw,['x'],allow_quantized=True)
         # A sum above one can also be valid independent rounding, not normalization.
         raw={'answers':{'x':dict(type='score',score=1,probabilities=[.34,.34,.33])}}
-        self.assertEqual(j._scores(raw,['x'],allow_quantized=True),{'x':1.0})
+        self.assertEqual(j._scores(raw,['x'],allow_quantized=True),{'x':(1.0,{'0':.34,'1':.34,'2':.33},None)})
 
 if __name__=='__main__': unittest.main()

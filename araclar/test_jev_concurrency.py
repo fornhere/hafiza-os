@@ -49,7 +49,7 @@ class ConcurrencyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'answers_invalid'):
                 j._scores(raw,['x'],allow_quantized=quantized)
         consistent={'answers':{'x':dict(type='score',score=1.3,probabilities=[0,.7,.3])}}
-        self.assertEqual(j._scores(consistent,['x']),{'x':1.3})
+        self.assertEqual(j._scores(consistent,['x']),{'x':(1.3,{'0':0,'1':.7,'2':.3},None)})
 
     def test_single_flight_threads(self):
         started=[]
