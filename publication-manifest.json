@@ -176,6 +176,14 @@
     {
       "path": "araclar/test_hafiza_rapor.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/proje_harita.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_proje_harita.py",
+      "mode": "shared"
     }
   ]
 }
