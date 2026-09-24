@@ -115,6 +115,36 @@ class NativeSessions(NativeFixture):
         with self.assertRaisesRegex(SourceError, 'receipt_mutated'):
             sessions.review(self.vault, ident, decision, True)
 
+    def test_claude_candidate_promotes_only_with_intact_user_evidence(self):
+        import hafiza as h
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.write()
+        ident = self.register()['id']
+        sessions.review(self.vault, ident, self.semantic_decision(ident), True)
+        candidate = h.load_jsonl(self.vault / h.CANDIDATE_PATH)[0]
+        self.assertTrue(sessions.verify_candidate_evidence(self.vault, candidate['source_path'], candidate['evidence']))
+        with self.assertRaisesRegex(SourceError, 'evidence_not_user_message'):
+            sessions.verify_candidate_evidence(self.vault, candidate['source_path'], 'Gerçek kullanıcı görevi yok')
+        with self.assertRaisesRegex(SourceError, 'claude_evidence_source_required'):
+            sessions.verify_candidate_evidence(self.vault, 'zihin/baska.md', candidate['evidence'])
+        h.promote_candidate(self.vault, candidate['candidate_id'], memory_id='claude-short-summary',
+                            reviewed_by='codex-consolidator', apply=True)
+        self.assertEqual(['claude-short-summary'], [r['memory_id'] for r in h.load_catalog(self.vault)])
+
+    def test_claude_candidate_promotion_blocked_after_source_mutation(self):
+        import hafiza as h
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.write()
+        ident = self.register()['id']
+        sessions.review(self.vault, ident, self.semantic_decision(ident), True)
+        candidate = h.load_jsonl(self.vault / h.CANDIDATE_PATH)[0]
+        self.rows[0]['message']['content'] = 'Tamamen farklı istek.'
+        self.write()
+        with self.assertRaisesRegex(ValueError, 'Claude adayının'):
+            h.promote_candidate(self.vault, candidate['candidate_id'], memory_id='claude-short-summary',
+                                reviewed_by='codex-consolidator', apply=True)
+        self.assertEqual([], h.load_catalog(self.vault))
+
     def test_semantic_rejects_assistant_quote_but_keeps_valid_candidate(self):
         from hafiza import CANDIDATE_PATH, load_jsonl
         self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'

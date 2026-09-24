@@ -348,6 +348,23 @@ def review(vault, ident, decision, apply=False):
                 **({'semantic_candidates': candidate_results} if 'semantic_candidates' in decision else {})}
 
 
+def verify_candidate_evidence(vault, source_path, evidence):
+    """Re-bind a claude-review candidate to a genuine user message of its reviewed prefix."""
+    match = re.fullmatch(r'gelen-kutusu/ajan-oturumlari/([0-9a-f]{64})\.md', str(source_path).replace('\\', '/'))
+    if not match or not isinstance(evidence, str) or not evidence:
+        raise SourceError('claude_evidence_source_required')
+    with locked(vault) as (_, state):
+        item = _item(state, match.group(1))
+        if item.get('status') != 'record':
+            raise SourceError('claude_evidence_not_recorded')
+        source = source_with_policy(state, item['client'], item['session'], item['path'], item['end_line'])
+    if source['prefix_sha256'] != item['prefix_sha256']:
+        raise SourceError('source_mutated')
+    if not any(entry['role'] == 'user' and evidence in entry['quote'] for entry in source['entries']):
+        raise SourceError('evidence_not_user_message')
+    return True
+
+
 def recall(vault, budget=2500, exclude=None, max_age_days=7):
     budget = max(0, min(int(budget), 6500))
     oldest_ns = time.time_ns() - int(max_age_days * 86400 * 1e9)

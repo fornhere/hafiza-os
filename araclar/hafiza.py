@@ -324,6 +324,12 @@ def promote_candidate(
         from capture_source import validate_candidate_evidence
         origin = candidate["evidence_source"]
         validate_candidate_evidence(vault, origin.get("session_id"), origin, origin, candidate.get("evidence"))
+    elif candidate.get("proposed_by") == "claude-review":
+        from client_sessions import verify_candidate_evidence
+        try:
+            verify_candidate_evidence(vault, candidate["source_path"], candidate.get("evidence"))
+        except Exception as error:
+            raise ValueError("Claude adayının özgün kullanıcı mesajı doğrulanamadı: " + str(error)) from error
     elif reviewed_by == "codex-consolidator" and candidate.get("kind") == "semantic":
         raise ValueError("otomatik terfi için özgün kullanıcı mesajı kanıtı gerekli")
     if candidate.get("sensitivity") != "normal" or contains_secret(candidate["statement"]):
