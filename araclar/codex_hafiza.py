@@ -308,7 +308,8 @@ def hook(vault, data):
         turn = data.get('turn_id')
         if not isinstance(turn, str) or not turn:
             raise ValueError('UserPromptSubmit turn_id gerekli')
-        if turn not in state['turns']:
+        new_turn = turn not in state['turns']
+        if new_turn:
             state['turns'].append(turn)
             state['count'] += 1
             state.pop('requested_turn', None)
@@ -318,8 +319,17 @@ def hook(vault, data):
         # this hook local (e.g. for latency or privacy checks).
         import contextlib, jev_client
         advisor = jev_client.disabled() if os.environ.get('HAFIZA_HOOK_JEV') == '0' else contextlib.nullcontext()
+        previous_user = state.get('previous_user') if new_turn else None
         with advisor:
-            package = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'), budget=2000)
+            package = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'), budget=2000,
+                                         previous_user=previous_user)
+        current_user = clean_user(str(data.get('prompt', '')))
+        from client_transcripts import private
+        if new_turn:
+            if not contains_secret(current_user) and not private(current_user):
+                state['previous_user'] = current_user[:800]
+            else:
+                state.pop('previous_user', None)
         lesson_text = package['text']
         # One consecutive repeat may be omitted; the next prompt refreshes it.
         # Hash includes source versions, not only rendered prose.

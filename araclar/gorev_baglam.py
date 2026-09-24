@@ -196,22 +196,70 @@ class RevisionMap(dict):
         for key, value in other.items(): self[key] = value
 
 
-def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view="auto"):
+def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view="auto", previous_user=None):
     from concurrent.futures import ThreadPoolExecutor
     from contextvars import copy_context
     from jev_client import evaluation_context
+    import jev_client
     from is_ve_ders import TASKS, LESSONS
     vault = Path(vault).resolve()
+    previous_user = previous_user if isinstance(previous_user, str) else None
     ledgers = [h.CATALOG_PATH, h.SOURCE_BINDINGS, TASKS, LESSONS,
                Path('komuta/gorev-baglam.json')]
     def revisions():
         return {str(p): digest(vault/p) if (vault/p).is_file() else None for p in ledgers}
     before = revisions()
-    # Readers are independent. Assembly stays ordered in the calling thread.
-    with evaluation_context(vault), ThreadPoolExecutor(max_workers=3) as executor:
-        def submit(function, *args, **kwargs):
-            return executor.submit(copy_context().run, function, *args, **kwargs)
-        result = _build_task_package(vault, query, cwd, budget, history, view, submit)
+    rerank_state = None
+    skip_memory = False
+    gate = None
+    try: rerank_mode = jev_client.purpose_mode(jev_client.load_config(vault), 'retrieval') == 'rerank'
+    except (OSError, ValueError): rerank_mode = False
+    with evaluation_context(vault):
+        if rerank_mode:
+            from client_transcripts import private
+            if any(h.contains_secret(value) or private(value) for value in (query, previous_user or '')):
+                rerank_mode = False
+                private_fallback = True
+            else:
+                private_fallback = False
+                projects, _ = select_projects(config(vault).get('projects', []), query, cwd)
+                project = projects[0] if len(projects) == 1 else None
+                project_context = (str(project.get('id', '')) + ': ' + str(project.get('summary', ''))) if project else ''
+                if h.contains_secret(project_context) or private(project_context): project_context = ''
+                rerank_state = dict(previous_user=(previous_user or '')[:800], project=project_context[:500])
+                from jev_retrieval import rerank_gate
+                explicit_recall = bool(re.search(r'\b(?:memory:|note:)|neye\s+karar\s+ver|ne\s+karar\s+vermiştik|hatırla|hatırlat', query, re.I))
+                if explicit_recall:
+                    needed, gate = True, dict(mode='rerank', requested_mode='rerank', effective_mode='rerank',
+                                              degraded=False, diagnostics=['explicit_recall_bypass'], latency_ms=0)
+                else:
+                    with evaluation_context(vault):
+                        needed, gate = rerank_gate(vault, query, rerank_state)
+                    if not gate.get('degraded') and not needed:
+                        skip_memory = True
+                        if jev_client.load_config(vault)['rerank_gate_scope'] == 'all':
+                            result = dict(text='', selected_ids=[], source_versions={}, assets=[], knowledge=None,
+                                          omitted_reasons=[], project_id=None, jev={'gate': gate},
+                                          history={'mode': history, 'included': False},
+                                          procedure_reading={'paths': [], 'delivered': False},
+                                          summary={'record_ids': [], 'task_ids': [], 'derived': True},
+                                          usage={'context_chars': 0, 'budget_chars': budget, 'selected_count': 0})
+                            result['package_id'] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()[:24]
+                            return result
+        else:
+            private_fallback = False
+        # Readers are independent. Assembly stays ordered in the calling thread.
+        with evaluation_context(vault), ThreadPoolExecutor(max_workers=3) as executor:
+            def submit(function, *args, **kwargs):
+                return executor.submit(copy_context().run, function, *args, **kwargs)
+            if (gate and gate.get('degraded')) or private_fallback:
+                with jev_client.disabled():
+                    result = _build_task_package(vault, query, cwd, budget, history, view, submit, None)
+                result.setdefault('jev', {})['rerank'] = dict(gate or {}, mode='rerank', degraded=True,
+                    diagnostics=(gate or {}).get('diagnostics', []) + (['private_input'] if private_fallback else []))
+            else:
+                result = _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state, skip_memory)
+                if gate: result.setdefault('jev', {})['gate'] = gate
     changed = before != revisions() or getattr(result.get('source_versions'), 'conflict', False)
     for name, version in result.get('source_versions', {}).items():
         try:
@@ -238,7 +286,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     return result
 
 
-def _build_task_package(vault, query, cwd, budget, history, view, submit):
+def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state=None, skip_memory=False):
     if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
     if view not in ("auto", "standard", "resume"): raise ValueError("invalid view")
     query = task_intent(query)
@@ -277,7 +325,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit):
     knowledge_future = None
     from jev_procedures import route as route_procedures
     procedure_future = submit(route_procedures, vault, query, budget=min(1000,budget))
-    if (vault / 'bilgi').is_dir() and len(projects)<=1:
+    if rerank_state is None and (vault / 'bilgi').is_dir() and len(projects)<=1:
         from konu_sentezi import retrieve as read_knowledge
         knowledge_future=submit(read_knowledge,vault,query,project_id=project['id'] if project else None,budget=min(1800,budget))
     decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
@@ -325,11 +373,23 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit):
         eligible.append(row)
         eligible_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
-    from jev_retrieval import catalog as semantic_catalog
-    catalog_future = submit(semantic_catalog, vault, query, eligible, rank_records, scope)
-    ranked_catalog, catalog_evaluation = catalog_future.result()
+    if skip_memory:
+        ranked_catalog, knowledge_data, catalog_evaluation = [], None, None
+    elif rerank_state is None:
+        from jev_retrieval import catalog as semantic_catalog
+        catalog_future = submit(semantic_catalog, vault, query, eligible, rank_records, scope)
+        ranked_catalog, catalog_evaluation = catalog_future.result()
+    else:
+        from jev_retrieval import rerank
+        ranked_catalog, knowledge_data, catalog_evaluation = rerank(
+            vault, query, eligible, project['id'] if project else None, rerank_state, budget)
+        if catalog_evaluation.get('degraded'):
+            from konu_sentezi import _retrieve_local
+            ranked_catalog = rank_records(eligible, query)
+            knowledge_data = _retrieve_local(vault, query, project_id=project['id'] if project else None,
+                                             budget=min(1800, budget)) if (vault / 'bilgi').is_dir() else None
     procedure_data = procedure_future.result()
-    knowledge_data = knowledge_future.result() if knowledge_future else None
+    if knowledge_future: knowledge_data = knowledge_future.result()
     if procedure_data['text']: add('procedure-reading', procedure_data['text'])
     def still_current(row):
         try:
@@ -467,13 +527,14 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit):
         detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'
         if len(detail)>min(600,budget): detail='Bağlam kontrolü: Geçersiz veya değişmiş kaynaklar dışlandı; omitted_reasons alanını incele.'
         candidates.append((0,-1,'context-check',detail))
+    delivered_segments={}
     for _, _, ident, text in sorted(candidates):
         cost=len(text)+(1 if lines else 0)
         if used+cost>budget:
             omitted.append(ident+':budget'); continue
-        lines.append(text);selected.append(ident);used+=cost
+        lines.append(text);selected.append(ident);delivered_segments[ident]=text;used+=cost
     assets=[asset for asset in assets if asset['id'] in selected]
-    result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines)}
+    result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
     if knowledge_data and 'knowledge' in selected:
         source_versions.update(knowledge_data.get('source_versions',{}))
     if 'procedure-reading' in selected:

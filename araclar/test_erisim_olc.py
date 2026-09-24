@@ -71,6 +71,42 @@ class AccessMeasure(unittest.TestCase):
         self.assertEqual(report['metrics']['empty_memory_return_rate'], 1)
         self.assertTrue((self.root / 'erisim-degerlendirme-2026-09-24.md').exists())
 
+    def test_seeded_halves_are_disjoint(self):
+        (self.vault / 'zihin').mkdir()
+        (self.vault / 'bilgi').mkdir()
+        (self.vault / 'zihin/hafıza-kataloğu.jsonl').write_text('')
+        prompts = [dict(id=str(i), client='codex', cwd='', prompt='A synthetic task') for i in range(6)]
+        labels = [dict(id=str(i), relevant_memory_ids=[], relevant_notes=[]) for i in range(6)]
+        self.write_rows(self.root / 'set.jsonl', prompts)
+        self.write_rows(self.root / 'labels.jsonl', labels)
+        package = dict(selected_ids=[], knowledge=None, text='')
+        with patch.object(measure.gorev_baglam, 'build_task_package', return_value=package):
+            first = measure.evaluate(self.vault, self.root / 'set.jsonl', self.root / 'labels.jsonl',
+                                     self.root, split_seed=7, split_half='first', write=False)
+            second = measure.evaluate(self.vault, self.root / 'set.jsonl', self.root / 'labels.jsonl',
+                                      self.root, split_seed=7, split_half='second', write=False)
+        self.assertEqual({r['id'] for r in first['results']} & {r['id'] for r in second['results']}, set())
+        self.assertEqual(len(first['results']) + len(second['results']), 6)
+
+    def test_short_collection_and_prefixed_v2_labels(self):
+        self.assertFalse(measure._valid('Devam'))
+        self.assertTrue(measure._valid('Devam', include_short=True))
+        (self.vault/'zihin').mkdir(); (self.vault/'bilgi').mkdir()
+        self.write_rows(self.vault/'zihin/hafıza-kataloğu.jsonl',[dict(memory_id='m1',status='active')])
+        (self.vault/'bilgi/n1.md').write_text('synthetic')
+        self.write_rows(self.root/'set.jsonl',[dict(id='a',client='claude',cwd='',prompt='Devam',previous_user='Synthetic planning request')])
+        self.write_rows(self.root/'labels.jsonl',[dict(id='a',relevant_memory_ids=['memory:m1'],relevant_notes=['note:n1'])])
+        package=dict(text='memory\nnote\nprocedure\nproject',selected_ids=['m1','knowledge','procedure-reading','p1'],project_id='p1',
+                     summary={'task_ids':[]},knowledge={'records':[{'id':'n1'}]},
+                     delivered_segments={'m1':'memory','knowledge':'note','procedure-reading':'procedure','p1':'project'})
+        with patch.object(measure.gorev_baglam,'build_task_package',return_value=package) as build:
+            report=measure.evaluate(self.vault,self.root/'set.jsonl',self.root/'labels.jsonl',self.root,write=False)
+        self.assertEqual(build.call_args.kwargs['previous_user'],'Synthetic planning request')
+        self.assertEqual(report['metrics']['tp'],2)
+        self.assertEqual(report['metrics']['requested_mode_counts'],{'local':1})
+        self.assertEqual(report['metrics']['effective_mode_counts'],{'local':1})
+        self.assertEqual(report['metrics']['channel_chars'],{'catalog':6,'note':4,'procedure':9,'project':7,'other':0})
+
 
 if __name__ == '__main__':
     unittest.main()

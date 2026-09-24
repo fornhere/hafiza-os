@@ -90,7 +90,7 @@ class RetrievalTests(unittest.TestCase):
             result = b.retrieve(self.v, 'sunum ve kapak tercihleri', budget=3000)
         self.assertEqual(result['jev']['coverage'], {'0': 'covered', '1': 'unresolved'})
         self.assertEqual(result['jev']['facet_scores'][1]['short'], 0)
-        self.assertIn('eksikliği varsayımla doldurma', result['text'])
+        self.assertNotIn('eksikliği varsayımla doldurma', result['text'])
 
     def test_video_umbrella_keeps_narration_and_assist_only_suggests(self):
         self.config('on')

@@ -12,7 +12,7 @@ Kasada `komuta/jev.json` oluşturun:
   "model": "jev-1.13.0",
   "provider": "typesafe",
   "base_url": "https://api.typesafe.ai",
-  "timeout": 3,
+  "timeout": 2.5,
   "max_candidates": 32,
   "max_questions": 96,
   "max_input_chars": 24000,
@@ -28,6 +28,14 @@ Kasada `komuta/jev.json` oluşturun:
 
 Modu `off` yapmak anında geri dönüş yoludur. Değişiklik yeni çağrıda okunur, servis yeniden başlatılmaz.
 
+## 1. aşama: rerank ve hook gölgesi
+
+`retrieval_mode: rerank` önce üç seçenekli bir kapı kullanır: `search_memory`, `no_memory`, `insufficient_context`. Varsayılan `rerank_gate_scope: memory` ayarında son iki karar yalnız katalog kaydı ve bilgi notu seçimini susturur; proje kartı, prosedür ve dersler kendi kurallarıyla devam eder. `rerank_gate_scope: all` tüm paketi susturur ve yalnız kontrollü karşılaştırma içindir. Kapı eşiği `rerank_gate_threshold` (varsayılan 0,70), aday seçimi `rerank_p2` (varsayılan 0,75) ile ayarlanır. Sıralama seviye 2 olasılığını kullanır, en fazla üç kayıt seçer. Eski `rerank_threshold` yalnız uyumluluk kaydıdır. Kapı en fazla 1 saniye, tüm Jev istekleri ortak 2,5 saniyelik son tarihle sınırlanır. Uzak hata yerel sonuca döner ve `degraded` olarak raporlanır.
+
+Claude hook için `claude_hook_mode: off|shadow|on` varsayılanı `shadow`dur. Gölge modunda kullanıcının gördüğü metin yerel kalır; Jev kapı/sıralama tanısı `.cache/jev-golge/*.jsonl` altında tutulur. Günlükte istem metni bulunmaz; yalnız SHA-256 hash, seçilen kimlikler, skorlar, tanılar ve gecikme bulunur. Gizli veya özel istemler Jev'e gönderilmez. `on` modu yapılandırılmış Jev yolunu kullanır. Codex hook'ta `HAFIZA_HOOK_JEV=0` kapatma bayrağı geçerlidir.
+
+`erisim_olc.py` seed 7 ile iki yarı ölçer; kanal başına teslim edilen karakter, p50/p95 gecikme, `degraded`, `abstain`, istenen ve etkili mod raporlanır. 2026-09-24 v2 seti eşik geliştirmesinde kullanıldığı için bağımsız başarı testi sayılmaz.
+
 ## Kaynak ve kapsam
 
 Yalnız mevcut kodun uygun bulduğu incelemeden geçmiş, güncel kaynaklı, yetkili kapsamdaki adaylar gönderilir. Gönderilen alanlar kimlik, başlık, kısa ifade, kapsam ve alandır; ham sohbetler, tam kaynak dosyaları ve örnek varlıklar gönderilmez. Ağ cevabından sonra kaynak sürümleri yeniden kontrol edilir. Jev kaynak kapısını aşamaz.
@@ -36,11 +44,11 @@ Aday havuzu kaynak ve proje kapsamıyla sınırlandırılır; açık alan sözc�
 
 ## Sınırlar ve hata davranışı
 
-Her erişim yüzeyi tek istek yapar; otomatik tekrar yoktur. Varsayılan üst sınır 32 aday, 96 soru ve 24000 girdi karakteridir. Bunlar token veya günlük harcama sınırı değildir. Görev paketi bilgi, katalog ve isteğe bağlı prosedür seçimi için en fazla üç istek yapabilir; üç bağımsız okuyucu paralel çalışır ve ortak varsayılan inference süresi yaklaşık 3 saniyeyle sınırlıdır; buna yerel işlem süresi eklenir. Timeout olmuş uzak istek sağlayıcıda tamamlanıp ücretlenebilir. Sağlayıcıda ayrıca harcama sınırı belirlenmelidir.
+Her erişim yüzeyi tek istek yapar; otomatik tekrar yoktur. Varsayılan üst sınır 32 aday, 96 soru ve 24000 girdi karakteridir. Bunlar token veya günlük harcama sınırı değildir. Görev paketi bilgi, katalog ve isteğe bağlı prosedür seçimi için en fazla üç istek yapabilir; üç bağımsız okuyucu paralel çalışır ve ortak varsayılan inference süresi yaklaşık 2,5 saniyeyle sınırlıdır; buna yerel işlem süresi eklenir. Timeout olmuş uzak istek sağlayıcıda tamamlanıp ücretlenebilir. Sağlayıcıda ayrıca harcama sınırı belirlenmelidir.
 
 Timeout, 401/403/429/5xx, bozuk yanıt, aday/girdi sınırı ve kaynak değişimi yerel geri dönüşle `degraded` olarak görünür; bunlar “kanıt yok” sayılmaz. Geçersiz kaynak geri dönüşte de teslim edilmez. `confidence` seçim veya izin için kullanılmaz.
 
-Önbellek sorgu, sıralı adaylar, alan soruları, kaynak sürümleri, kapsam, istenen model, sağlayıcı, endpoint ve rubrik sürümüne bağlıdır. Boş seçim de bu anahtara bağlıdır; yeni aday eski boş seçimi geçersiz kılar. Önbellek yalnız puan ve sınırlı model metadata'sı saklar, dosyalar 0600'dür. Sağlayıcının döndürdüğü model adı kaydedilir; bir alias'ın arkasındaki gerçek ağırlık sürümünün sabit olduğu garanti edilmez. Alias kullanırken kısa TTL tercih edin.
+Önbellek sorgu, sıralı adaylar, alan soruları, kaynak sürümleri, kapsam, istenen model, sağlayıcı, endpoint ve rubrik sürümüne bağlıdır. Boş seçim de bu anahtara bağlıdır; yeni aday eski boş seçimi geçersiz kılar. Önbellek doğrulanmış puan, olasılık dağılımı, seçim ve sınırlı model metadata'sı saklar, dosyalar 0600'dür. Sağlayıcının döndürdüğü model adı kaydedilir; bir alias'ın arkasındaki gerçek ağırlık sürümünün sabit olduğu garanti edilmez. Alias kullanırken kısa TTL tercih edin.
 
 Gölge modunu açmak arka plan otomasyonu kurmaz; ölçüm, normal erişim çağrıları sırasında çalışır. Üretimde `on` moduna geçmeden yeni kaynak aileleri, çoklu kanıt, desteksiz sorular, final paket teslimi, gecikme ve maliyet birlikte değerlendirilmelidir. Sentetik güvenlik testleri gerçek kullanıcı faydası değildir.
 

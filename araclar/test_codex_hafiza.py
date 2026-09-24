@@ -48,6 +48,18 @@ class Hooks(unittest.TestCase):
         self.assertEqual('off', seen[0])
         self.assertEqual(2, len(seen))
 
+    def test_previous_real_user_turn_reaches_task_package(self):
+        import gorev_baglam
+        seen = []
+        def fake(vault, query, **kwargs):
+            seen.append(kwargs.get('previous_user'))
+            return {'text': '', 'source_versions': {}, 'selected_ids': []}
+        with patch.object(gorev_baglam, 'build_task_package', fake):
+            self.event('UserPromptSubmit', turn='t1', prompt='First genuine task')
+            self.event('UserPromptSubmit', turn='t2', prompt='Continue that task')
+            self.event('UserPromptSubmit', turn='t2', prompt='Continue that task')
+        self.assertEqual(seen, [None, 'First genuine task', None])
+
     def test_worker_environment_skips_all_events_without_state(self):
         for name in ('HAFIZA_ISCI', 'CODEX_WORKER'):
             with self.subTest(name=name), patch.dict(os.environ, {name: '1'}):

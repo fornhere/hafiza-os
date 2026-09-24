@@ -1,4 +1,5 @@
 """Optional semantic selection after local eligibility gates; never a memory writer."""
+import json
 import re
 from pathlib import Path
 import jev_client
@@ -47,6 +48,127 @@ def mode(vault):
     try: return jev_client.purpose_mode(jev_client.load_config(vault), 'retrieval')
     except (ValueError, OSError): return 'invalid'
 
+
+def rerank_gate(vault, query, state):
+    """One narrow judgment before any memory context is assembled."""
+    candidate = dict(id='need', title='Stored context need', statement='Need for stored context',
+                     scope='user', domains=[])
+    result = jev_client.evaluate(vault, query, [candidate], purpose='retrieval_gate', state=state, timeout=1.0)
+    result['requested_mode'] = 'rerank'
+    result['effective_mode'] = 'local' if result.get('degraded') else 'rerank'
+    if result.get('degraded'): return False, result
+    probabilities = result.get('distributions', {}).get('need', {})
+    config = jev_client.load_config(vault)
+    if result.get('choices', {}).get('need') == 'insufficient_context':
+        result['diagnostics'].append('abstain')
+        return False, result
+    return (result.get('choices', {}).get('need') == 'search_memory' and
+            probabilities.get('search_memory', 0) >= config['rerank_gate_threshold']), result
+
+
+def loose_candidates(query, catalog, notes, limit=8):
+    """Shared lexical preselection without rank_records' delivery thresholds."""
+    from gorev_baglam import content_words, word_match
+    terms = content_words(query)
+    pool = []
+    for kind, rows in (('memory', catalog), ('note', notes)):
+        for row in rows:
+            ident = row['memory_id'] if kind == 'memory' else row['id']
+            fields = ' '.join(str(row.get(k, '')) for k in
+                              ('statement', 'subject_key', 'title', 'rationale', 'conditions', 'exceptions'))
+            words = content_words(fields)
+            overlap = sum(any(word_match(term, word) for word in words) for term in terms)
+            pool.append((-overlap, kind, ident, row))
+    return [(kind, row) for _, kind, _, row in sorted(pool)[:limit]]
+
+
+def rerank(vault, query, catalog, project_id, state, budget):
+    """Return one bounded mixed ranking; caller handles local fallback on degradation."""
+    import bilgi_agi as b
+    import hafiza as h
+    vault = Path(vault)
+    config = jev_client.load_config(vault)
+    notes, diagnostics = b._rows(vault) if (vault / 'bilgi').is_dir() else ([], [])
+    notes = [row for row in notes if row['scope'] in ('user', f'project:{project_id}')]
+    chosen = loose_candidates(query + ' ' + state.get('previous_user', ''), catalog, notes,
+                              min(config['rerank_candidates'], 8))
+    cards = []
+    for kind, row in chosen:
+        ident = row['memory_id'] if kind == 'memory' else row['id']
+        cards.append(dict(id=kind + ':' + ident,
+                          title=row.get('subject_key', row.get('title', '')),
+                          statement=row['statement'], scope=row['scope'],
+                          domains=row.get('domains', []), kind=row.get('kind', kind),
+                          subject_key=row.get('subject_key', ''),
+                          valid_from=row.get('valid_from', ''), valid_to=row.get('valid_to', ''),
+                          **{k: row[k] for k in ('rationale', 'conditions', 'exceptions')
+                             if isinstance(row.get(k), str)}))
+    versions = {}
+    try:
+        for kind, row in chosen:
+            if kind == 'memory': versions['memory:' + row['memory_id']] = h.statement_hash(str(row))
+            else: versions['note:' + row['id']] = b.note_version(vault, row)
+    except (OSError, ValueError):
+        return None, None, dict(mode='rerank', degraded=True, diagnostics=['source_changed_before_evaluation'])
+    if not cards:
+        result = dict(mode='rerank', scores={}, degraded=False, diagnostics=[], proposed_ids=[])
+        return [], dict(text='', records=[], transfers=[], source_versions={}, diagnostics=diagnostics,
+                        omitted_record_ids=[], jev=result), result
+    # Shrink the candidate set before calling the provider. The full query and
+    # the candidate evidence remain intact; no silent lexical fallback.
+    while cards:
+        body = dict(model=config['model'], state=dict(query=query, facets=[query],
+                    candidates=cards, **state), questions={
+                    'f0_c'+str(i): jev_client._question('retrieval_rerank', i, 0)
+                    for i in range(len(cards))})
+        if (len(json.dumps(body, ensure_ascii=False)) <= config['max_input_chars'] and
+                len(cards) <= config['max_candidates'] and len(cards) <= config['max_questions']):
+            break
+        cards.pop(); chosen.pop()
+    if not cards:
+        return None, None, dict(mode='rerank', degraded=True, diagnostics=['budget_exceeded'])
+    result = jev_client.evaluate(vault, query, cards, purpose='retrieval_rerank',
+                                 source_versions=versions, state=state)
+    if result.get('degraded'):
+        return None, None, result
+    # An in-flight source change invalidates the entire answer.
+    try:
+        for kind, row in chosen:
+            current = (next((r for r in h.load_catalog(vault) if r['memory_id'] == row['memory_id']), None)
+                       if kind == 'memory' else next((r for r in b._rows(vault)[0] if r['id'] == row['id']), None))
+            if current != row or (kind == 'memory' and h.context_record_errors(vault, current)):
+                raise ValueError('source_changed')
+    except (OSError, ValueError):
+        return None, None, dict(result, degraded=True, diagnostics=result.get('diagnostics', []) + ['source_changed_during_evaluation'])
+    probabilities = result.get('distributions', {}); threshold = config['rerank_p2']
+    ordered = sorted(((probabilities.get(card['id'], {}).get('2', 0), kind, row) for card, (kind, row) in zip(cards, chosen)
+                      if probabilities.get(card['id'], {}).get('2', 0) >= threshold),
+                     key=lambda item: (-item[0], item[1], item[2].get('memory_id', item[2].get('id', ''))))[:config['rerank_limit']]
+    selected_catalog = [row for _, kind, row in ordered if kind == 'memory']
+    selected_notes = [row for _, kind, row in ordered if kind == 'note']
+    note_cards = []; note_versions = {}; delivered_notes = []
+    for row in selected_notes:
+        card = f"Bilgi [{row['kind']}; {', '.join(row['domains'])}; {row['scope']}]: {row['statement']}\nKaynak: bilgi/{row['id']}.md"
+        for key, label in (('rationale', 'Gerekçe'), ('conditions', 'Koşul'), ('exceptions', 'İstisna')):
+            if row.get(key): card += '\n' + label + ': ' + row[key]
+        if len('\n\n'.join(note_cards + [card])) > min(1800, budget): continue
+        note_cards.append(card)
+        delivered_notes.append(row)
+        note_versions.update(versions_for_note(vault, row))
+    result['proposed_ids'] = [kind + ':' + (row['memory_id'] if kind == 'memory' else row['id']) for _, kind, row in ordered]
+    result['requested_mode'] = 'rerank'; result['effective_mode'] = 'rerank'
+    knowledge = dict(text='\n\n'.join(note_cards), records=delivered_notes, transfers=[],
+                     source_versions=note_versions, diagnostics=diagnostics, omitted_record_ids=[], jev=result)
+    return selected_catalog, knowledge, result
+
+
+def versions_for_note(vault, row):
+    import bilgi_agi as b
+    values = {f"bilgi/{row['id']}.md": b.note_version(vault, row)}
+    for item in row['sources'] + row.get('examples', []):
+        values[item['path']] = item['sha256']
+    return values
+
 def versions(vault, rows):
     import bilgi_agi as b
     result = {}
@@ -66,7 +188,7 @@ def _knowledge(vault, query, project_id, budget, local):
     """Same hook for direct knowledge and synthesis; local is a zero-arg fallback."""
     import bilgi_agi as b
     active = mode(vault)
-    if active == 'off': return local()
+    if active in ('off', 'rerank'): return local()
     vault = Path(vault)
     rows, diagnostics = b._rows(vault)
     # Source/scope are hard eligibility gates. A lexical domain mention cannot
@@ -150,7 +272,7 @@ def _knowledge(vault, query, project_id, budget, local):
     out = dict(text='\n\n'.join(cards), records=selected, transfers=[],
                source_versions={k: v for k, v in before.items() if any(k == f"bilgi/{r['id']}.md" or k in [s['path'] for s in r['sources']] + [e['path'] for e in r.get('examples', [])] for r in selected)}, diagnostics=diagnostics,
                omitted_record_ids=omitted, jev=result)
-    if 'unresolved' in result['coverage'].values():
+    if active == 'assist' and 'unresolved' in result['coverage'].values():
         warning = 'İstenen bilginin bir bölümü için yeterli kaynak bulunamadı; eksikliği varsayımla doldurma.'
         if len(out['text']) + len(warning) + 1 <= max(0, budget):
             out['text'] = (out['text'] + '\n' + warning).strip()
@@ -165,7 +287,7 @@ def _catalog(vault, query, eligible, local_rank, scope):
     """Canonical rows have already passed retrievable/source/override checks."""
     import hafiza as h
     active = mode(vault)
-    if active == 'off' or not eligible: return local_rank(eligible, query), None
+    if active in ('off', 'rerank') or not eligible: return local_rank(eligible, query), None
     mapped = [{ 'id':r['memory_id'], 'title':r['subject_key'], 'statement':r['statement'],
                 'scope':r['scope'], 'domains':['all']} for r in eligible]
     source_versions = {r['memory_id']: h.statement_hash(str(r)) for r in eligible}

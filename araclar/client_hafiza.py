@@ -5,9 +5,14 @@ Every runtime failure is a safe stderr diagnostic and a non-blocking response.
 The hook never starts a reviewer or model process.
 """
 import argparse
+import hashlib
 import json
+import os
 from pathlib import Path
 import sys
+import time
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 from client_transcripts import CLIENTS, SourceError, private, sha, source_path, strict_json
 from client_sessions import atomic, enforce_policy, locked, load, recall, register, source_with_policy
@@ -17,12 +22,51 @@ MAX_INPUT = 128000
 CONTEXT_BUDGET = 6500
 
 
-def local_task_package(vault, query, cwd=None):
+def local_task_package(vault, query, cwd=None, previous_user=None):
     """Task-local policy covers all model purposes without changing globals."""
     import jev_client
     from gorev_baglam import build_task_package
     with jev_client.disabled():
-        return build_task_package(vault, query, cwd=cwd, budget=2000)
+        return build_task_package(vault, query, cwd=cwd, budget=2000, previous_user=previous_user)
+
+
+def claude_task_package(vault, query, cwd=None, previous_user=None):
+    import jev_client
+    from gorev_baglam import build_task_package
+    try: mode = jev_client.load_config(vault)['claude_hook_mode']
+    except (ValueError, OSError): mode = 'off'
+    if mode == 'off' or contains_secret(query) or private(query) or (previous_user and (contains_secret(previous_user) or private(previous_user))):
+        return local_task_package(vault, query, cwd, previous_user)
+    if mode == 'on':
+        return build_task_package(vault, query, cwd=cwd, budget=2000, previous_user=previous_user)
+    local = local_task_package(vault, query, cwd, previous_user)
+    original = jev_client.load_config
+    def shadow_config(path):
+        config = original(path)
+        config.update(mode='on', retrieval_mode='rerank', procedure_mode='off')
+        return config
+    started = time.monotonic()
+    try:
+        with patch.object(jev_client, 'load_config', side_effect=shadow_config):
+            shadow = build_task_package(vault, query, cwd=cwd, budget=2000, previous_user=previous_user)
+        evaluations = shadow.get('jev') or {}
+        row = dict(request_hash=hashlib.sha256(query.encode()).hexdigest(),
+                   previous_user_hash=hashlib.sha256(previous_user.encode()).hexdigest() if previous_user else None,
+                   selected_ids=shadow.get('selected_ids', []),
+                   scores={name: data.get('scores', {}) for name,data in evaluations.items() if isinstance(data,dict)},
+                   diagnostics={name: data.get('diagnostics', []) for name,data in evaluations.items() if isinstance(data,dict)},
+                   latency_ms=round((time.monotonic()-started)*1000,3))
+        folder = Path(vault)/'.cache/jev-golge'
+        if folder.is_symlink(): raise OSError('unsafe_shadow_log')
+        folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+        os.chmod(folder,0o700)
+        target=folder/(datetime.now(timezone.utc).date().isoformat()+'.jsonl')
+        descriptor=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_APPEND|os.O_NOFOLLOW,0o600)
+        try: os.write(descriptor,(json.dumps(row,ensure_ascii=False)+'\n').encode())
+        finally: os.close(descriptor)
+    except Exception:
+        pass
+    return local
 
 
 def identity(client, payload):
@@ -31,6 +75,13 @@ def identity(client, payload):
     if client == 'claude':
         return payload.get('session_id'), payload.get('transcript_path')
     return payload.get('conversationId'), payload.get('transcriptPath')
+
+
+def previous_user(source, current_query):
+    users = [entry['quote'] for entry in source['entries'] if entry['role'] == 'user'] if source else []
+    if users and users[-1] == current_query: users.pop()
+    preceding = users[-1] if users else None
+    return None if preceding and (contains_secret(preceding) or private(preceding)) else preceding
 
 
 def context(vault, client, session, source, payload, event):
@@ -66,7 +117,9 @@ def context(vault, client, session, source, payload, event):
         if previous_receipts:
             parts.append(previous_receipts)
     if query:
-        package = local_task_package(vault, query, cwd=payload.get('cwd'))
+        make_package = claude_task_package if client == 'claude' else local_task_package
+        package = make_package(vault, query, cwd=payload.get('cwd'),
+                               previous_user=previous_user(source, query))
         parts.append(package['text'][:2000])
     result = '\n\n'.join(parts)[:CONTEXT_BUDGET]
     if contains_secret(result) or private(result):
