@@ -133,6 +133,13 @@ class RankRelevance(unittest.TestCase):
         query = 'görev bildirimi tamamlandı çıktı dosyası deniz arka plan komutu'
         self.assertEqual([], rank_records(self.rows(), query))
 
+    def test_long_prompt_needs_two_distinguishing_terms(self):
+        rows = self.rows()
+        one = 'bu akşam uzun bir toplantı notunu toparla ve kurgu kısmını ayrıca belirt'
+        self.assertEqual([], rank_records(rows, one))
+        two = 'bu akşam uzun bir toplantı notunu toparla ve kurgu temposu kısmını belirt'
+        self.assertEqual(['r1'], [r['memory_id'] for r in rank_records(rows, two)])
+
     def test_distinguishing_term_still_selects_its_record(self):
         ids = [r['memory_id'] for r in rank_records(self.rows(), 'kurgu temposu nasıl olmalı')]
         self.assertEqual(['r1'], ids)

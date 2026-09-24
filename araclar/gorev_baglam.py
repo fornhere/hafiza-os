@@ -87,6 +87,9 @@ def rank_records(rows, query):
         matched = {term for term in terms if any(word_match(term, word) for word in words)}
         if not matched or (informative and not matched.intersection(informative)): continue
         if not informative and 2 * len(matched) < len(terms): continue
+        # Long prompts share incidental words with almost every record; measured on
+        # real prompts with erisim_olc.py, one overlapping word selected mostly noise.
+        if len(terms) > 3 and len(matched & informative if informative else matched) < 2: continue
         score = sum(1 + math.log((len(rows) + 1) / (frequencies[term] + 1)) for term in matched)
         ranked.append((score, len(matched), row))
     return [row for _, _, row in sorted(ranked, key=lambda item:
