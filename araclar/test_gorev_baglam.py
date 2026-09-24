@@ -123,6 +123,15 @@ class Package(unittest.TestCase):
   self.assertEqual(package['assets'],[]);self.assertEqual(package['workflow_ids'],[])
 
 
+class ArchivedProjects(unittest.TestCase):
+    def test_archived_project_needs_exact_alias(self):
+        from gorev_baglam import select_projects
+        projects=[dict(id='eski',aliases=['eskiproje'],roots=['/tmp/eski'],status='arsiv'),
+                  dict(id='yeni',aliases=['yeniproje'],roots=['/tmp'])]
+        self.assertEqual(['yeni'],[p['id'] for p in select_projects(projects,'devam edelim',cwd='/tmp/eski/alt')[0]])
+        self.assertEqual(['eski'],[p['id'] for p in select_projects(projects,'eskiproje notlarına bak')[0]])
+
+
 class RankRelevance(unittest.TestCase):
     def rows(self):
         return [dict(memory_id=f'r{i}', statement=f'Deniz {topic} tercih eder.')

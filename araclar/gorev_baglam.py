@@ -119,11 +119,13 @@ def select_projects(projects, query, cwd=None):
     def matches(project,fuzzy=False):
         return any(alias_match(alias,words,fuzzy) and not (deictic and set(query_words(alias)) <= _GENERIC)
                    for alias in project.get('aliases',[]))
+    # Archived projects answer only an exact alias, never a fuzzy match or cwd.
+    active=[p for p in projects if p.get('status','aktif')!='arsiv']
     explicit=[p for p in projects if matches(p)]
-    if not explicit: explicit=[p for p in projects if matches(p,True)]
+    if not explicit: explicit=[p for p in active if matches(p,True)]
     specific=[p for p in explicit if any(alias_match(a,words) and not set(query_words(a)) <= _GENERIC for a in p.get('aliases',[]))]
     if specific: explicit=specific
-    located=[p for p in projects if cwd and any(Path(cwd).resolve().is_relative_to(Path(r).resolve()) for r in p.get('roots',[]))]
+    located=[p for p in active if cwd and any(Path(cwd).resolve().is_relative_to(Path(r).resolve()) for r in p.get('roots',[]))]
     # Nested workspaces choose the most specific root, never a sibling by recency.
     if len(located)>1:
         depths={p['id']:max(len(Path(r).resolve().parts) for r in p.get('roots',[]) if Path(cwd).resolve().is_relative_to(Path(r).resolve())) for p in located}
