@@ -197,13 +197,25 @@ def add_candidate(
     for name, value in (("rationale", rationale), ("conditions", conditions)):
         if value is not None and (not isinstance(value, str) or len(value.strip()) < 10 or value not in source_file(vault, source_path).read_text(encoding="utf-8") or contains_secret(value)):
             raise ValueError(name + " kaynakta aynen bulunmalı")
-    # Identical text is a duplicate only within its own scope.
+    # Identical text is a duplicate only within its own scope. A deferred
+    # candidate may be proposed again when its supporting proof changes.
     normalized = " ".join(statement.casefold().split())
-    for existing in load_jsonl(vault / CANDIDATE_PATH):
+    from konsolidasyon import candidate_states
+    states = candidate_states(vault)
+    current = {row['candidate_id']: row for group in states.values() for row in group}
+    supersedes_candidate = None
+    for existing in reversed(load_jsonl(vault / CANDIDATE_PATH)):
         if (
             existing.get("scope", "user") == scope
             and " ".join(str(existing.get("statement", "")).casefold().split()) == normalized
         ):
+            if current[existing['candidate_id']]['state'] == 'blocked' and any((
+                existing.get('evidence') != evidence,
+                existing.get('evidence_source') != evidence_source,
+                existing.get('source_path') != source_path,
+            )):
+                supersedes_candidate = existing['candidate_id']
+                break
             return {"result": "duplicate", "candidate_id": existing["candidate_id"]}
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     candidate = {
@@ -231,6 +243,8 @@ def add_candidate(
     candidate["source_content_hash"] = statement_hash(source_file(vault, source_path).read_text(encoding="utf-8"))
     if evidence_source is not None:
         candidate["evidence_source"] = evidence_source
+    if supersedes_candidate is not None:
+        candidate['supersedes_candidate'] = supersedes_candidate
     _append_jsonl(vault / CANDIDATE_PATH, candidate)
     _append_jsonl(
         vault / EVENT_PATH,
@@ -243,7 +257,9 @@ def add_candidate(
             "schema_version": 1,
         },
     )
-    return {"result": "queued", "candidate_id": candidate["candidate_id"]}
+    return {"result": "requeued" if supersedes_candidate else "queued",
+            "candidate_id": candidate["candidate_id"],
+            **({'supersedes_candidate': supersedes_candidate} if supersedes_candidate else {})}
 
 
 def assess_candidate(

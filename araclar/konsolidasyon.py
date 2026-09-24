@@ -12,16 +12,48 @@ import hafiza as h
 ACTOR = 'codex-consolidator'
 
 
-def pending(vault):
+BLOCKED_RETRY_HOURS = 24
+
+
+def candidate_states(vault, now=None):
+    """Derive each candidate's current state from the append-only review events.
+
+    A deferred candidate is blocked, but returns to pending once a day so a fixed
+    verifier or newly available evidence is not ignored forever.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
     events = h.load_jsonl(vault / h.EVENT_PATH)
-    closed = {e.get('candidate_id') for e in events if e.get('event_type') in
-              ('candidate.promoted', 'candidate.rejected', 'candidate.duplicate')}
-    records = h.load_catalog(vault)
-    result = []
+    reviews = {}
+    reviewed_types = {'candidate.reviewed', 'candidate.promoted', 'candidate.rejected',
+                      'candidate.duplicate', 'candidate.deferred'}
+    for event in events:
+        if event.get('event_type') in reviewed_types and event.get('candidate_id'):
+            reviews[event['candidate_id']] = event
+    states = {'pending': [], 'blocked': [], 'terminal': []}
     for candidate in h.load_jsonl(vault / h.CANDIDATE_PATH):
-        if candidate['candidate_id'] not in closed:
-            result.append(dict(candidate, assessment=h.assess_candidate(candidate, records)))
-    return result
+        event = reviews.get(candidate.get('candidate_id'))
+        kind = event.get('event_type') if event else None
+        state = ('blocked' if kind == 'candidate.deferred' else
+                 'terminal' if kind in reviewed_types else 'pending')
+        retry = False
+        if state == 'blocked':
+            try: reviewed = dt.datetime.fromisoformat(event.get('at'))
+            except (TypeError, ValueError): reviewed = None
+            if reviewed is None or now - reviewed >= dt.timedelta(hours=BLOCKED_RETRY_HOURS):
+                state, retry = 'pending', True
+        row = dict(candidate, state=state, **({'retry': True} if retry else {}))
+        if event:
+            row['last_reviewed_at'] = event.get('at')
+            if state == 'blocked':
+                row['blocked_reason'] = event.get('review', {}).get('reason')
+        states[state].append(row)
+    return states
+
+
+def pending(vault):
+    records = h.load_catalog(vault)
+    return [dict(candidate, assessment=h.assess_candidate(candidate, records))
+            for candidate in candidate_states(vault)['pending']]
 
 
 def review(vault, decision, apply=False):
@@ -168,7 +200,19 @@ def status(vault):
     applied = [json.loads(p.read_text()) for p in receipts]
     applied = [r for r in applied if r.get('payload', {}).get('apply')]
     last = applied[-1] if applied else None
-    return {'pending_candidates': len(pending(vault)),
+    states = candidate_states(vault)
+    now = dt.datetime.now(dt.timezone.utc)
+    ages = []
+    for candidate in states['pending']:
+        try:
+            created = dt.datetime.fromisoformat(candidate['created_at'].replace('Z', '+00:00'))
+            if created.tzinfo and created <= now:
+                ages.append((now - created).total_seconds() / 86400)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return {'pending_candidates': len(states['pending']),
+        'blocked_candidates': len(states['blocked']),
+        'oldest_pending_days': round(max(ages), 2) if ages else None,
         'missing_receipts': len(list((vault / 'gelen-kutusu/codex-oturumları').glob('*.pending.json'))),
         'last_sync': last, 'catalog_count': len(h.load_catalog(vault)),
         'lesson_backlog': __import__('ders_baglam').backlog(vault),
@@ -191,6 +235,8 @@ def health(vault):
         f"| İşletim durumu | {report['operational_health']['status']} |",
         f"| Katalog | {report['catalog_count']} kayıt |",
         f"| Bekleyen semantik aday | {report['pending_candidates']} |",
+        f"| Engellenen semantik aday | {report['blocked_candidates']} |",
+        f"| En eski bekleyen aday (gün) | {report['oldest_pending_days'] if report['oldest_pending_days'] is not None else 'Yok'} |",
         f"| Eksik işaretli makbuz | {report['missing_receipts']} |",
         f"| Hook sayaç dosyası | {len(hook_states)} — sıfırsa canlı çalıştığı doğrulanmış değildir |",
         f"| Son uygulanan Mem0 senkronu | {report['last_sync']['at'] if report['last_sync'] else 'Yok'} |"]

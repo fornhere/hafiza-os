@@ -43,11 +43,14 @@ class WeeklyReport(unittest.TestCase):
             dict(event_type='session.inspected.v2', session_id='s3', outcome='recorded', at=old),
             dict(event_type='candidate.promoted', candidate_id='c1', memory_id='m1', at=recent),
             dict(event_type='candidate.rejected', candidate_id='c2', at=recent),
+            dict(event_type='candidate.deferred', candidate_id='c4', at=(NOW - dt.timedelta(hours=2)).isoformat(),
+                 review=dict(reason='Needs stronger fixture evidence.')),
         ])
         self.write_rows('gelen-kutusu/hafıza-adayları.jsonl', [
             dict(candidate_id='c1', created_at=recent, proposed_by='worker'),
             dict(candidate_id='c2', created_at=recent, proposed_by='worker'),
             dict(candidate_id='c3', created_at=old, proposed_by='reviewer'),
+            dict(candidate_id='c4', created_at=old, proposed_by='reviewer'),
         ])
         self.write_rows('zihin/hafıza-kataloğu.jsonl', [
             dict(memory_id='m1', status='active', valid_from=recent),
@@ -82,7 +85,10 @@ class WeeklyReport(unittest.TestCase):
         self.assertEqual(data['candidates']['proposed_by'], {'worker': 2})
         self.assertEqual(data['candidates']['promoted'], 1)
         self.assertEqual(data['candidates']['pending'], 1)
+        self.assertEqual(data['candidates']['blocked'], 1)
+        self.assertEqual(data['candidates']['terminal'], 2)
         self.assertEqual(data['candidates']['oldest_pending_days'], 10)
+        self.assertIn('engellenen: 1', report.markdown(data))
         self.assertEqual(data['catalog']['status'], dict(active=1, quarantined=1, superseded=1))
         self.assertEqual((data['catalog']['added'], data['catalog']['changed']), (1, 1))
         self.assertEqual(data['context']['per_turn_mean_chars'], 100)
