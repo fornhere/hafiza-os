@@ -312,6 +312,15 @@ class NativeSessions(NativeFixture):
         self.assertNotIn('NEVER_COPY', json.dumps(source))
         self.assertEqual(self.register()['status'], 'pending')
 
+    def test_claude_task_notification_is_not_a_user_message(self):
+        self.rows.insert(1, {'type': 'user', 'uuid': 'notice-1', 'sessionId': self.session,
+                             'isSidechain': False, 'message': {'role': 'user', 'content':
+                             '<task-notification>\n<task-id>x</task-id>\n<status>completed</status>\n</task-notification>'}})
+        self.write()
+        source = parse(self.client, self.session, self.path)
+        self.assertEqual(source['count'], 6)
+        self.assertNotIn('task-notification', json.dumps([e['quote'] for e in source['entries'] if e['role'] == 'user']))
+
     def test_claude_large_tool_result_and_source_limits(self):
         self.rows.insert(1, {'type': 'user', 'uuid': 'tool-large', 'sessionId': self.session,
                              'isSidechain': False, 'message': {'role': 'user', 'content': [

@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import stat
 
-from capture_source import privacy_command, privacy_ambiguous
+from capture_source import clean_user, privacy_command, privacy_ambiguous
 from hafiza import contains_secret
 
 MAX_SOURCE = 64 * 1024 * 1024
@@ -167,7 +167,8 @@ def parse(client, session, path, end_line=None):
                 continue
             seen[ident] = fingerprint
             text, tools = _text(msg.get('content'), user=kind == 'user')
-            genuine = kind == 'user' and not row.get('isMeta') and not tools
+            # Harness notifications arrive as user rows but are not user requests.
+            genuine = kind == 'user' and not row.get('isMeta') and not tools and bool(clean_user(text))
             usable = kind == 'assistant' and not tools and not row.get('isMeta') and not any(row.get(k) or msg.get(k) for k in ('error', 'isApiErrorMessage')) and isinstance(msg.get('model'), str) and msg['model'] not in ('<synthetic>', 'synthetic') and row.get('model') not in ('<synthetic>', 'synthetic')
             terminal = usable and bool(text.strip()) and msg.get('stop_reason') in ('end_turn', 'stop_sequence')
             role = 'user' if genuine else 'assistant' if usable else None
