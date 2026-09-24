@@ -70,11 +70,28 @@ def save_review(vault, candidate_id, action, decision):
 from capture_source import clean_user, snapshot, excluded, validate_source
 
 
+def heartbeat_threads(root):
+    """Thread ids that scheduled heartbeats keep appending to."""
+    import tomllib
+    threads = set()
+    for path in (Path(root) / 'automations').glob('*/automation.toml'):
+        try: config = tomllib.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError, UnicodeError): continue
+        if config.get('kind') == 'heartbeat' and isinstance(config.get('target_thread_id'), str):
+            threads.add(config['target_thread_id'])
+    return threads
+
+
 def sessions(vault, root, since, quiet_minutes=20, diagnostics=None):
     diagnostics = diagnostics if diagnostics is not None else []
     events = h.load_jsonl(vault / h.EVENT_PATH)
     seen = {(e.get('session_id'), e.get('source_hash')) for e in events
             if e.get('event_type') == 'session.inspected.v2'}
+    # A heartbeat thread grows every run; without a new user message there is
+    # nothing new to learn, so its own automation turns are not re-reviewed.
+    heartbeats = heartbeat_threads(root)
+    inspected_users = {e.get('session_id'): e.get('user_digest') for e in events
+                       if e.get('event_type') == 'session.inspected.v2'}
     legacy = {e.get('session_id') for e in events if e.get('event_type') == 'session.inspected'}
     now = dt.datetime.now(dt.timezone.utc).timestamp()
     grouped = {}
@@ -99,6 +116,7 @@ def sessions(vault, root, since, quiet_minutes=20, diagnostics=None):
                 diagnostics.append({'path': str(path), 'error': 'unknown lifecycle or malformed transcript'})
             if excluded(vault, row['session_id']) or row['user_count'] <= 5: continue
             if (row['session_id'], row['source_hash']) in seen: continue
+            if row['session_id'] in heartbeats and inspected_users.get(row['session_id']) == row.get('user_digest'): continue
             row['legacy_review_needed'] = row['session_id'] in legacy
             old = grouped.get(row['session_id'])
             if old and (old['source_hash'] != row['source_hash'] or old['activity_state'] == 'ambiguous'):

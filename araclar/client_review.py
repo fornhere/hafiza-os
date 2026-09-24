@@ -159,7 +159,9 @@ def run(vault, argv, apply=False, timeout=60, limit=10):
             results.append(review(vault, ident, decision, apply=True))
         except Exception as error:
             diagnostic = str(error) if isinstance(error, SourceError) else 'reviewer_failed'
-            results.append({'id': ident, 'status': 'failed', 'diagnostic': diagnostic})
+            # A newer Stop can supersede the item while the reviewer runs; that is not a failure.
+            status = 'skipped' if diagnostic == 'not_pending' else 'failed'
+            results.append({'id': ident, 'status': status, 'diagnostic': diagnostic})
     return results
 
 
