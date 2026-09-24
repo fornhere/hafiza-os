@@ -26,7 +26,7 @@ line_sha256 and quote copied from packet evidence). Do not invent evidence.
 Never record private requests, secrets, reasoning or tool output. You may include
 semantic_candidates (at most 5 objects with statement 10-600 chars,
 subject_key using lowercase letters, digits, dots, underscores or hyphens,
-evidence 10-1500 chars, and optional category). Include only a preference, decision or identity explicitly
+evidence 10-1500 chars, and optional category: one of preference, profile, entity, event, procedure). Include only a preference, decision or identity explicitly
 stated by the user that will still matter in six months. Copy evidence verbatim
 from a user message in the packet; never infer or guess. Never include secrets.
 Write reason, summary and every statement in Turkish, matching the vault language.

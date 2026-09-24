@@ -61,7 +61,7 @@ def semantic_results(decision, source):
     user_texts = [entry['quote'] for entry in source['entries'] if entry['role'] == 'user']
     results = []
     for index, candidate in enumerate(candidates):
-        reasons = []
+        reasons, drop_category = [], False
         if index >= 5:
             reasons.append('candidate_limit')
         if not isinstance(candidate, dict) or set(candidate) - {'statement', 'subject_key', 'evidence', 'category'}:
@@ -82,13 +82,13 @@ def semantic_results(decision, source):
                 reasons.append('unsafe_evidence')
             elif not any(evidence in text for text in user_texts):
                 reasons.append('evidence_not_user_message')
-            if 'category' in candidate:
-                if not isinstance(candidate['category'], str) or category_errors('semantic', candidate['category']):
-                    reasons.append('invalid_category')
+            # Category is optional metadata: an invalid one is dropped, not fatal.
+            drop_category = 'category' in candidate and (
+                not isinstance(candidate['category'], str) or bool(category_errors('semantic', candidate['category'])))
         if decision['decision'] == 'skip':
             reasons.append('skip_decision')
         results.append({'index': index, 'status': 'rejected' if reasons else 'accepted',
-                        'reasons': reasons})
+                        'reasons': reasons, **({'category_dropped': True} if drop_category else {})})
     return results
 
 
@@ -335,7 +335,7 @@ def review(vault, ident, decision, apply=False):
                     kind='semantic', scope='user', subject_key=candidate['subject_key'],
                     source_path=str(note_path.relative_to(Path(vault).absolute())), source_anchor='Kullanıcı beyanı',
                     confidence='explicit-user', sensitivity='normal', proposed_by='claude-review',
-                    evidence=candidate['evidence'], category=candidate.get('category'))
+                    evidence=candidate['evidence'], category=None if result.get('category_dropped') else candidate.get('category'))
                 result['queue_result'] = queued['result']
         if not target.exists():
             atomic(target, receipt)

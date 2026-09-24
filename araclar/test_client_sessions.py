@@ -145,6 +145,18 @@ class NativeSessions(NativeFixture):
                                 reviewed_by='codex-consolidator', apply=True)
         self.assertEqual([], h.load_catalog(self.vault))
 
+    def test_invalid_category_is_dropped_not_rejected(self):
+        from hafiza import CANDIDATE_PATH, load_jsonl
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.write()
+        ident = self.register()['id']
+        decision = self.semantic_decision(ident)
+        decision['semantic_candidates'][0]['category'] = 'uydurma-kategori'
+        result = sessions.review(self.vault, ident, decision, True)
+        self.assertEqual('accepted', result['semantic_candidates'][0]['status'])
+        self.assertTrue(result['semantic_candidates'][0]['category_dropped'])
+        self.assertIsNone(load_jsonl(self.vault / CANDIDATE_PATH)[0].get('category'))
+
     def test_semantic_rejects_assistant_quote_but_keeps_valid_candidate(self):
         from hafiza import CANDIDATE_PATH, load_jsonl
         self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
