@@ -45,7 +45,7 @@ print(json.dumps(dict(decision='record',meaningful=True,reviewer_role='fixture-r
                 ('import sys;sys.stderr.write("private error");sys.exit(2)', 2, 'reviewer_failed'),
                 ('import time;time.sleep(2)', 0.05, 'reviewer_timeout'),
                 ('print("not JSON")', 2, 'reviewer_invalid_output'),
-                ('print("x"*100000)', 2, 'reviewer_output_limit')):
+                (f'print("x"*{runner.MAX_OUTPUT + 1000})', 2, 'reviewer_output_limit')):
             result = runner.run(self.vault, self.command(code), True, timeout)
             with self.subTest(diagnostic=diagnostic):
                 self.assertEqual(result[0]['status'], 'failed')

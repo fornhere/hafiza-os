@@ -284,3 +284,20 @@ yenilenir; elle düzenleme engelini aşmak için dosyayı silme. Kaynak doğrula
 hatası veya konu kaydı yokluğu yeni tercih yazma gerekçesi değildir.
 Bu, mevcut bakım turunun bir adımıdır; ayrıca zamanlayıcı eklenmez. Görev
 bağlamı sayfaların bakım zamanını beklemeden özgün kartları yeniden doğrular.
+
+## Claude adayları ve tekrarlanan ertelemeler
+
+`proposed_by=claude-review` adaylarında `evidence_source` alanı **bulunmaz ve
+gerekmez**. Terfi kapısı (`hafiza.promote_candidate`) adayın kaynak notundan
+(`gelen-kutusu/ajan-oturumlari/<id>.md`) kuyruk kaydına, oradan transcript'in
+incelenen prefix'ine gider; prefix hash'ini ve alıntının gerçek bir kullanıcı
+mesajında birebir geçtiğini yeniden doğrular. Bu yüzden "evidence_source yok"
+Claude adayı için erteleme gerekçesi değildir: `konsolidasyon.py review`
+dry-run başarılıysa kanıt geçerlidir; kalan karar kalıcılık, kapsam, tekrar ve
+çelişki incelemesidir.
+
+Engellenen aday 24 saat sonra yeniden incelemeye döner. Aynı gerekçeyle
+üçüncü kez ertelenecek adayda sonsuz erteleme yapılmaz: ya gerekçesiyle
+reddedilir (ör. iddia zaten incelenmiş bir `bilgi/` notunda kapsamlı duruyor
+ya da kanıt sözleşmesi geriye dönük sağlanamıyor) ya da daha iyi kanıtla
+yeniden önerilir.
