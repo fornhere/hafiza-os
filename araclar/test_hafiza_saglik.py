@@ -49,6 +49,23 @@ class HealthTests(unittest.TestCase):
         self.write(RUN_PATH.with_name('scheduled-scan.json'),dict(status='complete',finished_at=self.now.isoformat()))
         self.assertEqual('healthy',snapshot(self.v,self.now)['status'])
 
+    def test_deferred_candidate_is_listed_without_stale_queue_warning(self):
+        import hafiza as h
+        old = (self.now-dt.timedelta(days=2)).isoformat()
+        self.write(h.CANDIDATE_PATH, dict(candidate_id='deferred', created_at=old))
+        self.write(h.EVENT_PATH, dict(event_type='candidate.deferred', candidate_id='deferred',
+                                      at=self.now.isoformat(), review=dict(reason='Needs fixture evidence.')))
+        self.scan(); self.audit()
+        report = snapshot(self.v, self.now)
+        self.assertEqual('healthy', report['status'])
+        self.assertEqual(1, report['candidate_queue']['blocked_count'])
+        self.assertEqual(0, report['candidate_queue']['pending_count'])
+        self.assertEqual('healthy', next(c for c in report['checks'] if c['name']=='candidate_queue')['status'])
+        self.write(h.CANDIDATE_PATH, dict(candidate_id='pending', created_at=old))
+        report = snapshot(self.v, self.now)
+        self.assertEqual('stale', report['status'])
+        self.assertEqual(1, report['candidate_queue']['pending_count'])
+
 class CatalogHealthTests(unittest.TestCase):
     setUp = HealthTests.setUp
     write = HealthTests.write

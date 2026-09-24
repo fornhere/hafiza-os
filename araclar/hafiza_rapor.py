@@ -11,7 +11,6 @@ from pathlib import Path
 
 UTC = dt.timezone.utc
 HEX_STATE = re.compile(r'[0-9a-f]{64}\.json\Z')
-TERMINAL = {'candidate.promoted', 'candidate.rejected', 'candidate.duplicate'}
 
 
 def rows(path):
@@ -92,14 +91,16 @@ def report(vault, days=7, now=None):
     added = [c for c in candidates if within(c.get('created_at'), cutoff, now)]
     promoted = {e.get('candidate_id') for e in events if e.get('event_type') == 'candidate.promoted'
                 and within(e.get('at'), cutoff, now)}
-    closed = {e.get('candidate_id') for e in events if e.get('event_type') in TERMINAL}
-    pending = [c for c in candidates if c.get('candidate_id') not in closed]
+    from konsolidasyon import candidate_states
+    states = candidate_states(vault, now)
+    pending = states['pending']
     ages = [(now - created).total_seconds() / 86400 for c in pending
             if (created := stamp(c.get('created_at'))) is not None and created <= now]
     proposals = Counter(c.get('proposed_by') or 'unknown' for c in added)
     candidate_report = {
         'added': len(added), 'proposed_by': dict(sorted(proposals.items())),
         'promoted': len(promoted), 'pending': len(pending),
+        'blocked': len(states['blocked']), 'terminal': len(states['terminal']),
         'oldest_pending_days': round(max(ages), 2) if ages else None,
     }
 
@@ -175,7 +176,7 @@ def markdown(data):
              f"- Yeni Codex makbuzu: {capture['new_codex_receipts']}; yeni Claude kaynak notu: {capture['new_claude_source_notes']}",
              '- Claude kuyruk durumu: ' + ', '.join(f'{k}={v}' for k, v in capture['claude_queue'].items()),
              '', '## Adaylar', '',
-             f"- Eklenen: {candidates['added']}; terfi edilen: {candidates['promoted']}; bekleyen: {candidates['pending']}",
+             f"- Eklenen: {candidates['added']}; terfi edilen: {candidates['promoted']}; bekleyen: {candidates['pending']}; engellenen: {candidates['blocked']}; kapanan: {candidates['terminal']}",
              '- Öneren: ' + (', '.join(f'{k}={v}' for k, v in candidates['proposed_by'].items()) or 'yok'),
              f"- En eski bekleyen (gün): {candidates['oldest_pending_days'] if candidates['oldest_pending_days'] is not None else 'bilinmiyor'}",
              '', '## Katalog', '',

@@ -42,6 +42,52 @@ class Pipeline(unittest.TestCase):
             source_checked=True, explicit_user=True, durable=True,
             normal_sensitivity=True, no_semantic_duplicate=True)
 
+    def test_blocked_candidate_returns_to_pending_after_a_day(self):
+        first=self.receipt(); cid=first['candidates'][0]['candidate_id']
+        h._append_jsonl(self.vault/h.EVENT_PATH, dict(event_type='candidate.deferred', candidate_id=cid,
+            at='2026-01-01T00:00:00+00:00', review=dict(decision='defer', reason='Kanıt doğrulanamadı; tekrar denenecek.')))
+        now=dt.datetime(2026,1,1,12,tzinfo=dt.timezone.utc)
+        self.assertEqual([cid],[c['candidate_id'] for c in k.candidate_states(self.vault, now)['blocked']])
+        later=dt.datetime(2026,1,2,1,tzinfo=dt.timezone.utc)
+        retried=k.candidate_states(self.vault, later)['pending']
+        self.assertEqual([cid],[c['candidate_id'] for c in retried]); self.assertTrue(retried[0]['retry'])
+
+    def test_deferred_state_requeue_and_terminal(self):
+        source = self.vault / 'source.txt'
+        source.write_text('First supporting passage. Second supporting passage.', encoding='utf-8')
+        kwargs = dict(statement='Fixture preference is concise.', kind='semantic', scope='user',
+                      subject_key='fixture.preference', source_path='source.txt', source_anchor='',
+                      confidence='explicit-user', sensitivity='normal', proposed_by='test',
+                      evidence='First supporting passage.')
+        first = h.add_candidate(self.vault, **kwargs)
+        cid = first['candidate_id']
+        decision = dict(candidate_id=cid, reviewed_by=k.ACTOR, decision='defer',
+                        reason='Supporting passage lacks an explicit user statement.')
+        k.review(self.vault, decision, True)
+        states = k.candidate_states(self.vault)
+        self.assertEqual([], states['pending'])
+        self.assertEqual(cid, states['blocked'][0]['candidate_id'])
+        self.assertEqual(decision['reason'], states['blocked'][0]['blocked_reason'])
+        self.assertTrue(states['blocked'][0]['last_reviewed_at'])
+        self.assertEqual('duplicate', h.add_candidate(self.vault, **kwargs)['result'])
+        second = h.add_candidate(self.vault, **dict(kwargs, evidence='Second supporting passage.'))
+        self.assertEqual('requeued', second['result'])
+        self.assertEqual(cid, second['supersedes_candidate'])
+        self.assertEqual(cid, h.load_jsonl(self.vault / h.CANDIDATE_PATH)[1]['supersedes_candidate'])
+        self.assertEqual('duplicate', h.add_candidate(self.vault, **dict(kwargs, evidence='Second supporting passage.'))['result'])
+        status = k.status(self.vault)
+        self.assertEqual((1, 1), (status['pending_candidates'], status['blocked_candidates']))
+        self.assertIsNotNone(status['oldest_pending_days'])
+        h._append_jsonl(self.vault / h.EVENT_PATH, dict(event_type='candidate.promoted',
+                        candidate_id=second['candidate_id'], at=dt.datetime.now(dt.timezone.utc).isoformat()))
+        states = k.candidate_states(self.vault)
+        self.assertEqual([], states['pending'])
+        self.assertEqual(1, len(states['blocked']))
+        self.assertEqual(second['candidate_id'], states['terminal'][0]['candidate_id'])
+        status = k.status(self.vault)
+        self.assertEqual((0, 1), (status['pending_candidates'], status['blocked_candidates']))
+        self.assertIsNone(status['oldest_pending_days'])
+
     def test_review_booleans_cannot_replace_original_evidence(self):
         first=self.receipt(); cid=first['candidates'][0]['candidate_id']
         rows=h.load_jsonl(self.vault/h.CANDIDATE_PATH)

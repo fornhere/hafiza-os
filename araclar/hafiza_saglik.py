@@ -141,9 +141,26 @@ def snapshot(vault, now=None):
             add('remote_audit', 'failed', 'Denetim makbuzu okunamadı.')
     catalog, catalog_checks = catalog_health(vault)
     checks.extend(catalog_checks)
+    from konsolidasyon import candidate_states
+    states = candidate_states(vault, now)
+    pending_ages = []
+    for candidate in states['pending']:
+        try:
+            created = dt.datetime.fromisoformat(candidate['created_at'].replace('Z', '+00:00'))
+            if created.tzinfo and created <= now:
+                pending_ages.append((now - created).total_seconds())
+        except (KeyError, TypeError, ValueError):
+            continue
+    candidate_queue = dict(pending_count=len(states['pending']), blocked_count=len(states['blocked']),
+                           terminal_count=len(states['terminal']))
+    add('candidate_queue', 'stale' if any(seconds > 86400 for seconds in pending_ages) else 'healthy',
+        f"İncelenmemiş aday: {candidate_queue['pending_count']}; engellenen aday: {candidate_queue['blocked_count']}. " +
+        ('İncelenmemiş aday 24 saatten eski.' if any(seconds > 86400 for seconds in pending_ages)
+         else 'Engellenen adaylar tek başına sağlık hatası sayılmaz.'))
     rank = {'healthy': 0, 'unknown': 1, 'stale': 2, 'failed': 3}
     return dict(status=max((c['status'] for c in checks), key=rank.get),
                 checked_at=now.isoformat(), checks=checks, catalog=catalog,
+                candidate_queue=candidate_queue,
                 limits='Veri hattı kontrolüdür; modelin uygulaması ve kullanıcı faydası ayrı ölçülür.')
 
 
