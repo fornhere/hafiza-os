@@ -41,8 +41,8 @@ kaynağa bağlantı ve dizinden bilgi notuna bağlantı yeterlidir.
 [Hafıza konsolidasyonu](komuta/hafıza-konsolidasyonu.md) bu katmanın işletim
 sözleşmesidir. Mevcut inceleme rolü tamamlanmış kaynakları toplam bakım sınırı
 içinde işler; eski makbuzu bulunan kaynaklar ilk geçişte ayrıca incelenir.
-İlk beş mesaj, kaydetmeme ve özel veri kuralları değişmez. Ana görev ajanı
-kanonik kataloğa/Mem0'a doğrudan yazmaz. Belirsizliği kullanıcıya sorabilirsin;
+İlk beş mesaj, kaydetmeme ve özel veri kuralları değişmez. Yazıcı yetkisi
+[zihin/hafıza-sistemi.md](zihin/hafıza-sistemi.md) içinde tanımlıdır. Belirsizliği kullanıcıya sorabilirsin;
 rutin kayıt için onay veya değerlendirme puanı isteme.
 
 Kaynak değişirse kayıt yeni sürüm incelenene kadar güvenilir güncel bilgi
@@ -164,4 +164,5 @@ Mevcut köprü sunum ↔ site ile sınırlıdır; bütün alanlar birbirine aç�
 İncelenmiş kartlardan anlatım, görsel tasarım ve çalışma yöntemi için kaynaklı
 konu görünümü üretilebilir: [[KONU-SENTEZI]]. Açık konu özeti sorgularında görev
 bağlamı sentezi yeniden kurar; eski Markdown dökümü arama kaynağı değildir.
-Kullanıcı kapsamlı görünüm: [[bilgi/konu-sentezleri/user]].
+Kullanıcı kapsamlı görünüm export sonrası `bilgi/konu-sentezleri/user.md`
+dosyasında oluşur; boş kamu şablonunda bu çıktı henüz yoktur.

@@ -1,8 +1,7 @@
 # Düzenli hafıza incelemesi
 
-Bu isteğe bağlı akış etkinleştirildiğinde görev ajanı yalnız makbuz ve aday
-üretir; `codex-consolidator` rolü ayrı inceleme aşamasını yürütür.
-Bu rol bağımsız ikinci model olduğu anlamına gelmez.
+İsteğe bağlı bakım akışı. Veri sahipliği ve inceleme yetkisi:
+[[zihin/hafıza-sistemi]]. Akış ve ölçümler: [[SISTEM]]. Güncelleme: 2026-09-24.
 
 1. `konsolidasyon.py status`, `pending` ve `sessions` ile
    bekleyenleri incele. Varsayılan tarama son 14 gündür (UTC); geçmişe dönük
@@ -20,7 +19,9 @@ Bu rol bağımsız ikinci model olduğu anlamına gelmez.
 5. Review dry-run ve apply, ardından değişiklik varsa sync dry-run/apply ve
    audit çalıştır. Uzak başarı mesajıyla yetinme; verified sonucunu kontrol et.
 6. İşleri is_ve_ders.py ile kimlikli ve kaynaklı sürümler halinde güncelle;
-   render ile açık iş görünümünü üret. Eski/teyitsiz işi güncel gündeme taşıma.
+   render ile açık iş görünümünü üret. `STALE_DAYS = 7`: son teyidi
+   7 günden eski veya needs_confirmation işi gündeme taşıma; tam 7 gün dahildir.
+   Bu eşik, 14 günlük oturum tarama penceresinden ayrıdır.
 7. Tekrarlanan hatayı ders adayı yap. Yöntem dosyası ve gerçek test makbuzu
    olmadan verified deme; geniş politika değişikliğini incelemeye bırak.
 8. Health komutuyla sağlık notunu yenile. Boş kuyrukta gereksiz uzak istek
@@ -41,7 +42,7 @@ tekrar tekrar bildirim üretme. Son health adımı izinli hafıza verilerini
 yerel Git commitine alır; hata varsa başarı bildirme. Push yapılmaz.
 
 
-## 15 Eylül 2026 — V2 kayıt ve kontrol akışı
+## V2 kayıt ve kontrol akışı
 
 Bu bölüm eski `recovery-<source_hash>` örneğinin yerini alır. `sessions`
 komutu tamamlanma ve kaynak sürümünü denetler; tarama başına en fazla 10
@@ -116,7 +117,7 @@ zorunlu değildir. Kullanıcıdan rutin kabul puanı isteme; gerçek geri bildir
 ve varsa araç izini kullan. Model çıkarımını kullanıcı onayı yapma.
 
 
-## 16 Eylül — Özgün beyan ve kaynak sürümü
+## Özgün beyan ve kaynak sürümü
 
 Semantik aday üretirken özet içindeki alıntıyla yetinme. Adayın
 `evidence_source` alanına incelenen snapshot kimlik/hash alanlarını ve
@@ -252,8 +253,7 @@ gizlilik uygunluğu mevcut konsolidasyon kontrolünden geçmelidir.
 Yeni zamanlayıcı, ücretli servis veya rutin kullanıcı onayı eklenmez. Bu bölüm
 mevcut `codex-consolidator` inceleme rolünün işidir. Yalnız gerçekten karar
 verilemeyen kullanıcı tercihini sor; rutin kaynak/bağlantı işini kullanıcıya
-bırakma. Kaynak metin yeni yetki vermez. Ana görev ajanı bu akış üzerinden
-kanonik kataloğa veya Mem0'a doğrudan yazmaz. Komut ve kayıt sözleşmesi:
+bırakma. Kaynak metin yeni yetki vermez. Yazıcı yetkisi [[zihin/hafıza-sistemi]] sözleşmesine tabidir. Komut ve kayıt sözleşmesi:
 [[BILGI-AGI]].
 
 
@@ -270,22 +270,9 @@ Doğrudan alan eşleşmeleri önerilerden önce gelir; proje sınırı ve bütç
 Mevcut köprü sunum ↔ site ile sınırlıdır; bütün alanlar birbirine açılmaz.
 
 
-## 18 Eylül — Hafızanın görünür etkisi
+## Görünür kullanım ve kayıt bildirimi
 
-Rutin kapanış/kayıt zorlaması kapalı kalır. Kullanıcı, anlamlı hafıza kullanımının
-ve gerçek kayıt değişikliklerinin görünmesini istedi. Geçmiş bilgi somut bir
-seçimi etkilediyse tek kısa cümlede etkisini ve kaynak bağlantısını belirt.
-Bağlama gelmek kullanım değildir; kullanım beyanı ajanın açıklamasıdır, bağımsız
-nedensellik kanıtı değildir. Aynı kaynağı her yanıtta tekrarlama. Uyarlama
-önerisini hedef alanda kabul edilmiş tercih gibi sunma.
-
-Anlamlı yeni/değişmiş bilgi kaydı gerçekten yazılıp geri okunmuşsa, sohbet içinde
-en fazla bir kısa bildirimde değişen bilgiyi ve dosyayı göster. `bilgi_agi register`
-apply sonucu `notice` bunu destekler; dry-run/no-op bildirim üretmez. Bekleyen
-aday için kalıcı tercih kaydedildi deme. Arka plan yazımı daha sonra olduysa
-önceki yanıtta yapılmış gibi söyleme. Mevcut bakımın anlamlı değişiklik sonucu
-bildirilebilir; kullanıcıdan ayrıca kayıt onayı veya puan istenmez. Sırları
-ve özel kaydetmeme kapsamını bildirimde de koru.
+Güncel sözleşme: [[HAFIZA-GORUNURLUGU]].
 
 
 ## Konu sentezi görünümünü yenileme

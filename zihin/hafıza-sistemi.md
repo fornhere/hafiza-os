@@ -1,8 +1,6 @@
 # Hafıza Sistemi — Kanonik Kayıt ve Mem0 İndeksi
 
-> Bu dosya **isteğe bağlı katmanı** tarif eder. Mem0 kurmadıysan silebilirsin;
-> sistemin geri kalanı bu dosya olmadan çalışır. Kurduysan anayasa madde 6
-> buraya işaret eder.
+Bu belge yerel kayıt sözleşmesidir; Mem0 bağlantısı isteğe bağlıdır.
 
 Bu kasa **kanonik doğruluk kaynağıdır.** Mem0 yalnızca buradaki onaylanmış
 kayıtların yeniden üretilebilir semantik erişim indeksidir. Mem0 ile kasa
@@ -20,18 +18,19 @@ kayıtların yeniden üretilebilir semantik erişim indeksidir. Mem0 ile kasa
 
 ## Tek yazıcı ve aday kuyruğu
 
-Uzman ajanlar (Claude Code, Codex, Antigravity vb.) ortak kalıcı hafızaya veya
-Mem0'a doğrudan yazmaz. Yalnız `gelen-kutusu/hafıza-adayları.jsonl` kuyruğuna
-aday önerir. Kaynağı, altı-ay testini, sırrı, tekrarı ve `subject_key`
-çelişkisini kontrol eden tek merci ana ajandır. Aday ancak `reviewed_by` alanı
-bulunan açık bir terfi işlemiyle kataloğa geçer. Otomatik terfi kapalıdır.
+Ana görev ajanı kanonik kataloğa veya Mem0'a doğrudan yazmaz; kaynaklı aday
+önerir. Ayrı inceleme/yazıcı rolü kaynak beyanını, kalıcılığı, duyarlılığı,
+anlamsal tekrar ve çelişkiyi denetler. Düzenli inceleme rolü
+`codex-consolidator` adını kullanır; ayrı rol, bağımsız ikinci model demek değildir.
+Katalog terfisi açık kaynak kanıtı ve olumlu inceleme koşullarıyla yapılır;
+çelişki veya belirsizlik otomatik onaya çevrilmez. Yerel yazıcılar dosya kilidi kullanır.
 
-İsteğe bağlı Codex düzenli incelemesi ayrıca etkinleştirildiğinde bu inceleme
-rolü `codex-consolidator` olur; kaynak ve açık inceleme kapısı korunur.
-Kurulum adımları: `CODEX.md`; işleyiş: [[komuta/hafıza-konsolidasyonu]].
-
-Kuyruk ve `günlük/hafıza-olayları.jsonl` eklemelidir; geçmiş satırlar silinmez.
-Mem0 silme işlemi ayrıca açık onay ve `forget --apply` gerektirir.
+Kuyruk ve olay defteri eklemelidir; geçmiş satırlar silinmez. Mem0'a elle MCP
+üzerinden yazılmaz; katalog işlemleri `hafiza.py`, inceleme `konsolidasyon.py`
+üzerinden yürür. `sync --apply` uzak yazımı geri okuyarak doğrular.
+Sırlar kaydedilmez; sır deseni taraması bütün özel bilgiyi tanımaz.
+`forget --apply` ayrı açık silme yetkisi gerektirir.
+İşleyiş: [[komuta/hafıza-konsolidasyonu]]; dosya sahipliği haritası: [[SISTEM]].
 
 ## Kayıt şeması
 
@@ -122,10 +121,8 @@ buluta gönderilmez.
 
 ## Bakım ritmi
 
-- Haftalık: salt okunur `audit`; drift, yetim, tekrar ve kaynak hatası.
-- Aylık: insan incelemesi; geçerlilik, gereksizlik, gizlilik ve unutma talepleri.
-- Her şema/erişim değişikliğinde: `araclar/hafıza-testleri.json` regresyonu.
-- Ölçüm yeterli olmadan otomatik terfi açılmaz.
+Güncel bakım adımları [[komuta/hafıza-konsolidasyonu]], zamanlayıcı ve
+ölçüm girişleri [[SISTEM]] içindedir. Eski başarı güncel sağlık kanıtı değildir.
 
 **Bağlantılar:** [[Ana Sayfa]] · [[agents]] · [[zihin/çekirdek]]
 
