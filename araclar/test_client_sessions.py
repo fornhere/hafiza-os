@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import client_hafiza as hooks
 import client_sessions as sessions
-from client_transcripts import SourceError, parse
+from client_transcripts import MAX_LINE, MAX_LINES, MAX_SOURCE, SourceError, parse
 
 
 class NativeFixture(unittest.TestCase):
@@ -194,6 +194,101 @@ class NativeSessions(NativeFixture):
         self.assertEqual(material['user_count'], 6)
         self.assertNotIn('NEVER_COPY', json.dumps(material))
 
+    def test_claude_new_metadata_types_and_boundary_preserve_terminal(self):
+        kinds = ('custom-title', 'bridge-session', 'agent-name', 'ai-title', 'mode',
+                 'pr-link', 'file-history-delta', 'permission-mode', 'relocated',
+                 'cost-state', 'future-meta')
+        self.rows = self.claude_rows()
+        self.rows[1:1] = [
+            {'type': kind, 'sessionId': self.session, 'content': 'NEVER_COPY_METADATA'}
+            for kind in kinds
+        ]
+        self.rows.append({'type': 'future-meta', 'sessionId': self.session,
+                          'content': 'NEVER_COPY_TRAILING_METADATA'})
+        self.write()
+        source = parse(self.client, self.session, self.path)
+        self.assertEqual(source['count'], 6)
+        self.assertTrue(source['terminal'])
+        self.assertEqual(source['total_lines'], 2 * 6 + len(kinds) + 1)
+        self.assertNotIn('NEVER_COPY', json.dumps(source))
+        prefix = parse(self.client, self.session, self.path, end_line=2)
+        self.assertEqual(prefix['count'], 1)
+        self.assertFalse(prefix['terminal'])
+        self.assertEqual(self.register()['status'], 'pending')
+
+    def test_claude_image_and_document_blocks_keep_only_text(self):
+        self.rows[0]['message']['content'] = [
+            {'type': 'image', 'source': {'type': 'base64', 'data': 'NEVER_COPY_IMAGE'}},
+            {'type': 'document', 'source': 'NEVER_COPY_DOCUMENT'},
+            {'type': 'text', 'text': 'Görseli özetle'},
+        ]
+        self.rows[-1]['message']['content'].insert(1, {'type': 'image', 'source': 'NEVER_COPY_IMAGE'})
+        self.rows[-1]['message']['content'].insert(2, {'type': 'document', 'source': 'NEVER_COPY_DOCUMENT'})
+        self.write()
+        source = parse(self.client, self.session, self.path)
+        self.assertEqual(source['count'], 6)
+        self.assertEqual(source['latest_user']['quote'], 'Gerçek kullanıcı görevi 5')
+        self.assertEqual(source['entries'][0]['quote'], 'Görseli özetle')
+        self.assertNotIn('NEVER_COPY', json.dumps(source))
+        self.assertEqual(self.register()['status'], 'pending')
+
+    def test_claude_large_tool_result_and_source_limits(self):
+        self.rows.insert(1, {'type': 'user', 'uuid': 'tool-large', 'sessionId': self.session,
+                             'isSidechain': False, 'message': {'role': 'user', 'content': [
+                                 {'type': 'tool_result', 'content': 'x' * (1024 * 1024)}]}})
+        self.rows.insert(2, {'type': 'future-meta', 'sessionId': self.session,
+                             'content': 'y' * (8 * 1024 * 1024)})
+        self.write()
+        self.assertGreater(self.path.stat().st_size, 9 * 1024 * 1024)
+        source = parse(self.client, self.session, self.path)
+        self.assertEqual(source['count'], 6)
+        self.assertTrue(source['terminal'])
+        self.assertEqual(self.register()['status'], 'pending')
+        self.rows[2]['content'] = 'y' * MAX_LINE
+        self.write()
+        with self.assertRaisesRegex(SourceError, '^line_too_large$'):
+            parse(self.client, self.session, self.path)
+        with self.path.open('wb') as stream:
+            stream.truncate(MAX_SOURCE + 1)
+        with self.assertRaisesRegex(SourceError, '^source_size_or_type$'):
+            parse(self.client, self.session, self.path)
+        with patch('client_transcripts.read_bytes', return_value=b'{"type":"future-meta"}\n' * (MAX_LINES + 1)):
+            with self.assertRaisesRegex(SourceError, '^invalid_source_boundary$'):
+                parse(self.client, self.session, self.path)
+
+    def test_claude_metadata_and_message_security_guards(self):
+        mutations = (
+            (0, {'isSidechain': True}, 'subagent_source'),
+            (0, {'sessionId': 'wrong'}, 'source_identity_mismatch'),
+            (0, {'message': {'role': 'assistant', 'content': 'wrong'}}, 'unknown_claude_message'),
+        )
+        for index, change, error in mutations:
+            self.rows = self.claude_rows()
+            self.rows[index].update(change)
+            self.write()
+            with self.subTest(error=error), self.assertRaisesRegex(SourceError, '^' + error + '$'):
+                parse(self.client, self.session, self.path)
+        for change, error in (({'isSidechain': True}, 'subagent_source'),
+                              ({'sessionId': 'wrong'}, 'source_identity_mismatch'),
+                              ({'truncated': True}, 'truncated_record')):
+            self.rows = self.claude_rows()
+            self.rows.insert(1, dict({'type': 'future-meta', 'sessionId': self.session}, **change))
+            self.write()
+            with self.subTest(metadata=error), self.assertRaisesRegex(SourceError, '^' + error + '$'):
+                parse(self.client, self.session, self.path)
+        self.rows = self.claude_rows()
+        self.rows[0]['message']['content'] = [
+            {'type': 'text', 'text': 'Gerçek istek'}, {'type': 'future-block', 'data': 'ignored?'}]
+        self.write()
+        with self.assertRaisesRegex(SourceError, '^unknown_content_block$'):
+            parse(self.client, self.session, self.path)
+        self.rows = self.claude_rows()
+        self.write()
+        with self.path.open('ab') as stream:
+            stream.write(b'{"type":"future-meta","type":"future-meta"}\n')
+        with self.assertRaisesRegex(SourceError, '^invalid_json$'):
+            parse(self.client, self.session, self.path)
+
     def test_first_five_and_no_invocation_inflation(self):
         for count in range(1, 6):
             self.rows = self.claude_rows(count); self.write()
@@ -348,7 +443,8 @@ class NativeSessions(NativeFixture):
             with self.assertRaises(SourceError): sessions.review(self.vault, ident, bad, True)
 
     def test_unknown_hook_schema_is_visible_and_stop_never_blocks(self):
-        self.rows.append({'type': 'future-schema'}); self.write()
+        self.rows.append({'type': 'user', 'sessionId': self.session, 'isSidechain': False,
+                          'message': {'role': 'user', 'content': 'missing uuid'}}); self.write()
         output, diagnostic = self.cli('Stop')
         self.assertEqual(output, {})
         self.assertIn('unready', diagnostic)

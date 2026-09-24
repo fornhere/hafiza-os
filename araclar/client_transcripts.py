@@ -9,8 +9,9 @@ import stat
 from capture_source import privacy_command, privacy_ambiguous
 from hafiza import contains_secret
 
-MAX_SOURCE = 8 * 1024 * 1024
-MAX_LINE = 256 * 1024
+MAX_SOURCE = 64 * 1024 * 1024
+MAX_LINE = 16 * 1024 * 1024
+MAX_LINES = 200000
 CLIENTS = ('claude', 'antigravity')
 
 
@@ -95,6 +96,8 @@ def _text(content, user=False):
             texts.append(block['text'])
         elif kind in ('tool_use', 'tool_result'):
             tools = True
+        elif kind in ('image', 'document'):
+            pass
         elif kind in ('thinking', 'redacted_thinking') and not user:
             pass
         else:
@@ -122,7 +125,7 @@ def parse(client, session, path, end_line=None):
     if not data or not data.endswith(b'\n'):
         raise SourceError('truncated_source')
     lines = data.splitlines(keepends=True)
-    if len(lines) > 30000 or (end_line is not None and (type(end_line) is not int or not 1 <= end_line <= len(lines))):
+    if len(lines) > MAX_LINES or (end_line is not None and (type(end_line) is not int or not 1 <= end_line <= len(lines))):
         raise SourceError('invalid_source_boundary')
     boundary = end_line or len(lines)
     entries, ids, seen, user_count, prefix_count = [], [], {}, 0, 0
@@ -141,13 +144,15 @@ def parse(client, session, path, end_line=None):
             kind = row.get('type')
             if row.get('sessionId', session) != session:
                 raise SourceError('source_identity_mismatch')
-            if kind in ('system', 'progress', 'file-history-snapshot', 'queue-operation', 'summary', 'attachment', 'atis-latch', 'last-prompt'):
+            if kind not in ('user', 'assistant'):
+                if not isinstance(kind, str) or not kind:
+                    raise SourceError('unknown_claude_schema')
                 if row.get('error') or row.get('subtype') in ('api_error', 'error'):
                     terminal = False
                 if number == boundary:
                     prefix_terminal, prefix_count = terminal, user_count
                 continue
-            if kind not in ('user', 'assistant') or row.get('sessionId') != session or row.get('isSidechain') is not False:
+            if row.get('sessionId') != session or row.get('isSidechain') is not False:
                 raise SourceError('unknown_claude_schema')
             msg = row.get('message')
             ident = row.get('uuid')
