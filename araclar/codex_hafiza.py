@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shlex
+import stat
 import tempfile
 from pathlib import Path
 import sys
@@ -168,7 +169,56 @@ def shared_reviewed_context(vault):
         return ''
 
 
+def worker_run(data, environ=os.environ):
+    """Keep automatic workers out of the memory hook, including its state files."""
+    if any(environ.get(name) == '1' for name in
+           ('HAFIZA_ISCI', 'CODEX_WORKER', 'ORVANT_WORKER')):
+        return True
+    prompt = data.get('prompt')
+    if (isinstance(prompt, str) and
+            prompt.lstrip().casefold().replace('\u0307', '').startswith('işçi koşusu')):
+        return True
+    if environ.get('HAFIZA_EXEC_BAGLAM') == '1':
+        return False
+    transcript = data.get('transcript_path')
+    if not isinstance(transcript, (str, os.PathLike)) or not transcript:
+        return False
+    try:
+        if Path(transcript).is_symlink():
+            return False
+        # O_NOFOLLOW rejects a linked final component; O_NONBLOCK keeps a
+        # non-regular path from stalling the hook before fstat rejects it.
+        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+        fd = os.open(transcript, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return False
+            prefix = os.read(fd, 65536)
+        finally:
+            os.close(fd)
+        lines = prefix.split(b'\n')
+        if len(prefix) == 65536:
+            lines.pop()  # The last line may be truncated at the read limit.
+        for line in lines:
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if entry.get('type') == 'session_meta':
+                payload = entry.get('payload')
+                if not isinstance(payload, dict):
+                    return False
+                source = payload.get('source')
+                return (payload.get('originator') == 'codex_exec' or
+                        source == 'exec' or
+                        isinstance(source, dict) and 'subagent' in source)
+    except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+        pass
+    return False
+
+
 def hook(vault, data):
+    if worker_run(data):
+        return {}
     event = data.get('hook_event_name')
     session = data.get('session_id')
     if not isinstance(session, str) or not session:
@@ -263,9 +313,9 @@ def main():
     if args.cmd == 'latest-session':
         print(latest_session_section(args.vault))
         return
-    queue = args.vault / INBOX
-    queue.mkdir(parents=True, exist_ok=True)
     if args.cmd == 'record':
+        queue = args.vault / INBOX
+        queue.mkdir(parents=True, exist_ok=True)
         data = json.loads(args.input_json.read_text(encoding='utf-8'))
         if 'semantic_candidates' not in data:
             raise ValueError('semantic_candidates gerekli; kalıcı bilgi yoksa [] kullan')
@@ -274,12 +324,15 @@ def main():
             result = record(args.vault, data['session_id'], data['turn_id'], data['summary'], data['semantic_candidates'], data.get('source_snapshot'))
     else:
         data = json.load(sys.stdin)
-        state_dir = queue / '.state'
-        state_dir.mkdir(parents=True, exist_ok=True)
-        # Different sessions can progress independently. Same-session ordering
-        # remains serialized so a late prompt cannot overwrite newer turn state.
-        with exclusive_lock(state_dir / (key(data.get('session_id'), 'state') + '.lock')):
-            result = hook(args.vault, data)
+        if worker_run(data):
+            result = {}
+        else:
+            state_dir = args.vault / INBOX / '.state'
+            state_dir.mkdir(parents=True, exist_ok=True)
+            # Different sessions can progress independently. Same-session ordering
+            # remains serialized so a late prompt cannot overwrite newer turn state.
+            with exclusive_lock(state_dir / (key(data.get('session_id'), 'state') + '.lock')):
+                result = hook(args.vault, data)
     print(json.dumps(result, ensure_ascii=False))
 
 

@@ -30,6 +30,9 @@ def install(vault, codex_home, apply=False):
     if previous.count(START) != previous.count(END) or previous.count(START) > 1:
         raise ValueError('AGENTS.md yönetilen blok işaretleri tutarsız')
     block = (START + '\n# Ortak hafıza\n\n'
+        "Otomatik işçi koşusunda (codex exec işçisi, alt ajan veya istem 'İŞÇİ KOŞUSU'\n"
+        'ile başlıyorsa) açılış okuması, latest-session, context ve kayıt yapma;\n'
+        'yalnız verilen görevi yap.\n'
         f'Hafıza kasası `{vault.resolve()}`. Yeni ana oturumda agents.md, '
         'zihin/son-oturum.md dosyasının en yeni bölümü, zihin/açık-işler.md ve '
         'komuta/bu-hafta.md oku. Selam/gündem sorusunda en fazla 2–3 ilgili, '

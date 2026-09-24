@@ -63,7 +63,10 @@ def instruction_block(vault):
     context = command([sys.executable, '-X', 'utf8', vault / 'araclar/hafiza.py', '--vault', vault,
                        'context', 'göreve ilişkin soru', '--limit', '5', '--char-budget', '1200'], windows)
     language = 'powershell' if windows else 'sh'
-    access = f"""Yeni ana oturumda kasanın kısa agents.md ve zihin/ruh.md kurallarını bir kez oku.
+    access = f"""Otomatik işçi koşusunda (codex exec işçisi, alt ajan veya istem 'İŞÇİ KOŞUSU'
+ile başlıyorsa) açılış okuması, latest-session, context ve kayıt yapma;
+yalnız verilen görevi yap.
+Yeni ana oturumda kasanın kısa agents.md ve zihin/ruh.md kurallarını bir kez oku.
 Bağlamda zaten bulunan içeriği tekrar okuma. Yalnız en yeni oturum bölümünü getir:
 ```{language}
 {latest}

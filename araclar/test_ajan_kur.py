@@ -235,6 +235,14 @@ class InstallerTests(unittest.TestCase):
         ])
         self.assertNotIn('Yerel Windows', block)
 
+    def test_instruction_block_starts_access_with_worker_exception(self):
+        block = bridge.instruction_block(self.vault)
+        exception = "Otomatik işçi koşusunda (codex exec işçisi, alt ajan veya istem 'İŞÇİ KOŞUSU'"
+        self.assertIn(exception, block)
+        self.assertIn('açılış okuması, latest-session, context ve kayıt yapma;',
+                      block.replace('\n', ' '))
+        self.assertLess(block.index(exception), block.index('Yeni ana oturumda'))
+
     def test_cli_invalid_inputs(self):
         base = ['--vault', str(self.vault), '--home', str(self.home)]
         for tail in ([], ['--agent', 'unknown'], ['--agent', 'generic'],

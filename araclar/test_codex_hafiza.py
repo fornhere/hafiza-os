@@ -1,7 +1,11 @@
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import codex_hafiza as h
 
@@ -19,6 +23,104 @@ class Hooks(unittest.TestCase):
     def six(self):
         for n in range(1, 7):
             self.event('UserPromptSubmit', f't{n}', prompt='Gerçek kullanıcı mesajı')
+
+    def transcript(self, payload):
+        path = self.vault / 'transcript.jsonl'
+        path.write_text(json.dumps({'type': 'session_meta', 'payload': payload}) + '\n',
+                        encoding='utf-8')
+        return path
+
+    def assert_no_hook_state(self):
+        self.assertFalse((self.vault / h.INBOX / '.state').exists())
+        self.assertFalse(list((self.vault / h.INBOX).glob('*.pending.json')))
+
+    def test_worker_environment_skips_all_events_without_state(self):
+        for name in ('HAFIZA_ISCI', 'CODEX_WORKER', 'ORVANT_WORKER'):
+            with self.subTest(name=name), patch.dict(os.environ, {name: '1'}):
+                for event in ('SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt'):
+                    with patch('capture_source.apply_prompt_policy') as policy:
+                        self.assertEqual(self.event(event, prompt='gerçek görev'), {})
+                        policy.assert_not_called()
+                self.assert_no_hook_state()
+
+    def test_worker_environment_cli_creates_no_queue_or_lock(self):
+        env = os.environ.copy()
+        env.update(HAFIZA_ISCI='1')
+        for event in ('SessionStart', 'UserPromptSubmit', 'Stop'):
+            data = dict(session_id='worker', turn_id='t1', hook_event_name=event,
+                        prompt='gerçek görev')
+            proc = subprocess.run([sys.executable, str(Path(h.__file__)),
+                                   '--vault', str(self.vault), 'hook'],
+                                  input=json.dumps(data), text=True, capture_output=True,
+                                  env=env, check=True)
+            self.assertEqual(json.loads(proc.stdout), {})
+            self.assertEqual(proc.stderr, '')
+        self.assertFalse((self.vault / h.INBOX).exists())
+
+    def test_worker_prompt_and_transcript_cli_create_no_queue_or_lock(self):
+        transcript = self.transcript({'originator': 'codex_exec', 'source': 'exec'})
+        env = os.environ.copy()
+        for name in ('HAFIZA_ISCI', 'CODEX_WORKER', 'ORVANT_WORKER',
+                     'HAFIZA_EXEC_BAGLAM'):
+            env.pop(name, None)
+        for extra in ({'prompt': 'İŞÇİ KOŞUSU: görev'},
+                      {'prompt': 'görev', 'transcript_path': str(transcript)}):
+            data = dict(session_id='worker', turn_id='t1',
+                        hook_event_name='UserPromptSubmit', **extra)
+            proc = subprocess.run([sys.executable, str(Path(h.__file__)),
+                                   '--vault', str(self.vault), 'hook'],
+                                  input=json.dumps(data), text=True, capture_output=True,
+                                  env=env, check=True)
+            self.assertEqual(json.loads(proc.stdout), {})
+            self.assertEqual(proc.stderr, '')
+        self.assertFalse((self.vault / h.INBOX).exists())
+
+    def test_worker_prompt_prefix_skips_policy_and_state(self):
+        for prefix in ('İŞÇİ KOŞUSU', 'işçi koşusu', 'IŞÇI KOŞUSU'):
+            with self.subTest(prefix=prefix):
+                with patch('capture_source.apply_prompt_policy') as policy:
+                    self.assertEqual(self.event('UserPromptSubmit', prompt='  \n' + prefix + ': görev'), {})
+                    policy.assert_not_called()
+                self.assert_no_hook_state()
+
+    def test_worker_transcript_and_explicit_exec_override(self):
+        transcript = self.transcript({'originator': 'codex_exec', 'source': 'exec'})
+        for event in ('SessionStart', 'UserPromptSubmit', 'Stop'):
+            self.assertEqual(self.event(event, prompt='görev', transcript_path=str(transcript)), {})
+        self.assert_no_hook_state()
+        with patch.dict(os.environ, {'HAFIZA_EXEC_BAGLAM': '1'}):
+            result = self.event('SessionStart', transcript_path=str(transcript))
+        self.assertIn('additionalContext', result['hookSpecificOutput'])
+        self.assertTrue(list((self.vault / h.INBOX / '.state').glob('*.json')))
+
+    def test_worker_transcript_source_dict_and_first_meta_only(self):
+        path = self.transcript({'source': {'subagent': {}}})
+        self.assertTrue(h.worker_run({'transcript_path': str(path)}, {}))
+        self.transcript({'originator': 'Codex Desktop', 'source': 'exec'})
+        self.assertTrue(h.worker_run({'transcript_path': str(path)}, {}))
+        path.write_text(json.dumps({'type': 'session_meta', 'payload': {'source': 'vscode'}})
+                        + '\n' + json.dumps({'type': 'session_meta',
+                                              'payload': {'originator': 'codex_exec'}}) + '\n')
+        self.assertFalse(h.worker_run({'transcript_path': str(path)}, {}))
+
+    def test_exec_override_only_disables_transcript_detection(self):
+        path = self.transcript({'originator': 'codex_exec'})
+        data = {'transcript_path': str(path)}
+        self.assertFalse(h.worker_run(data, {'HAFIZA_EXEC_BAGLAM': '1'}))
+        self.assertTrue(h.worker_run(data, {'HAFIZA_EXEC_BAGLAM': '1', 'HAFIZA_ISCI': '1'}))
+        self.assertTrue(h.worker_run({**data, 'prompt': 'işçi koşusu: görev'},
+                                     {'HAFIZA_EXEC_BAGLAM': '1'}))
+
+    def test_normal_and_bad_transcripts_keep_hook_active(self):
+        normal = self.transcript({'originator': 'Codex Desktop', 'source': 'vscode'})
+        bad = self.vault / 'bad.jsonl'
+        bad.write_text('{broken\n', encoding='utf-8')
+        link = self.vault / 'linked.jsonl'
+        link.symlink_to(normal)
+        for path in (normal, bad, self.vault / 'missing.jsonl', link, self.vault):
+            with self.subTest(path=path):
+                result = self.event('SessionStart', transcript_path=str(path))
+                self.assertIn('additionalContext', result['hookSpecificOutput'])
 
     def test_first_five_do_not_write_or_request_memory(self):
         for n in range(1, 6):
