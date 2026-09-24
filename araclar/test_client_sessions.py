@@ -588,6 +588,13 @@ class NativeSessions(NativeFixture):
         self.assertIn('summary truncated', recalled)
         self.assertLessEqual(len(recalled), 600)
 
+    def test_recall_skips_own_session_and_stale_receipts(self):
+        ident = self.register()['id']; decision = self.judgment(ident)
+        sessions.review(self.vault, ident, decision, True)
+        self.assertIn(decision['summary'], sessions.recall(self.vault))
+        self.assertEqual(sessions.recall(self.vault, exclude=(self.client, self.session)), '')
+        self.assertEqual(sessions.recall(self.vault, max_age_days=0), '')
+
     def test_new_actual_user_turn_reopens_context_without_invocation_inflation(self):
         self.agy()
         out, _ = self.cli('PreInvocation')

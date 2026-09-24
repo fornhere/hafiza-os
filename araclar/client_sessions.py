@@ -348,14 +348,16 @@ def review(vault, ident, decision, apply=False):
                 **({'semantic_candidates': candidate_results} if 'semantic_candidates' in decision else {})}
 
 
-def recall(vault, budget=2500):
+def recall(vault, budget=2500, exclude=None, max_age_days=7):
     budget = max(0, min(int(budget), 6500))
+    oldest_ns = time.time_ns() - int(max_age_days * 86400 * 1e9)
     with locked(vault) as (root, state):
         candidates = []
         for path in scan(state):
             try:
                 item = load(path)
-                if item.get('status') == 'record' and type(item.get('created_ns')) is int:
+                if (item.get('status') == 'record' and type(item.get('created_ns')) is int
+                        and item['created_ns'] >= oldest_ns and (item.get('client'), item.get('session')) != exclude):
                     candidates.append(item)
             except (ValueError, OSError, KeyError, TypeError):
                 continue
