@@ -29,6 +29,9 @@ subject_key using lowercase letters, digits, dots, underscores or hyphens,
 evidence 10-1500 chars, and optional category). Include only a preference, decision or identity explicitly
 stated by the user that will still matter in six months. Copy evidence verbatim
 from a user message in the packet; never infer or guess. Never include secrets.
+Write reason, summary and every statement in Turkish, matching the vault language.
+Phrase each statement as one third-person sentence about the user (e.g. "Kullanıcı ... tercih eder.").
+Prefer skip over a candidate that only applies to the current task.
 This is an episodic candidate, not canonical truth.
 '''
 
