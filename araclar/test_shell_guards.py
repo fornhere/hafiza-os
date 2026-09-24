@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipIf(os.name == 'nt', 'POSIX shell installer and filenames; Windows uses install.ps1')
 class ShellGuards(unittest.TestCase):
     def test_fallback_checks_unusual_filenames_and_staged_content(self):
         with tempfile.TemporaryDirectory() as tmp:
