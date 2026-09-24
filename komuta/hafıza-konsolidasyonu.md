@@ -13,8 +13,10 @@
    Yedek kayıtta aşağıdaki V2 source_snapshot ve recovery-v2 biçimini kullan.
 3. İşlenen oturumu aşağıdaki V2 checkpoint alanları ve outcome ile
    işaretle. Kayıt başarısızsa işlenmiş sayma.
-4. Adayı kaynak beyanla karşılaştır. Altı ay sonra da işe yarayacak açık
-   tercih olmalı; mevcut katalogda anlamsal tekrar/çelişki ara. Aynı bilgiyi
+4. Adayı kaynak beyanla karşılaştır. `scope=user` yalnız işler arası geçerli,
+   altı ay sonra da işe yarayacak açık tercih içindir. Proje kararı veya kısıtı
+   `scope=project:<aktif id>` ile, proje sürdükçe geçerliyse önerilir. Mevcut
+   katalogda aynı kapsamda anlamsal tekrar/çelişki ara. Aynı bilgiyi
    farklı subject_key ile çoğaltma. Belirsizliği defer et; çelişkiyi otomatik çözme.
 5. Review dry-run ve apply, ardından değişiklik varsa sync dry-run/apply ve
    audit çalıştır. Uzak başarı mesajıyla yetinme; verified sonucunu kontrol et.

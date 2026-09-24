@@ -829,6 +829,19 @@ def note_slug(title: str) -> str:
     return re.sub(r"[\s-]+", "-", slug).strip("-")
 
 
+def valid_candidate_scope(vault: Path, scope: str) -> bool:
+    if scope == 'user':
+        return True
+    if not isinstance(scope, str) or not re.fullmatch(r'project:[a-z0-9._-]+', scope):
+        return False
+    try:
+        registry = json.loads((Path(vault) / 'komuta/gorev-baglam.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    return any(p.get('id') == scope[8:] and p.get('status', 'active') == 'active'
+               for p in registry.get('projects', []))
+
+
 def note_sections(path: Path) -> list[dict[str, Any]]:
     """Split a note into H1/H2/H3 blocks, dropping frontmatter and fenced code."""
     try:
@@ -844,13 +857,21 @@ def note_sections(path: Path) -> list[dict[str, Any]]:
     sections: list[dict[str, Any]] = []
     current = {"title": "", "body": []}
     fence: str | None = None
+    generated = False
     for line in lines:
+        if generated:
+            if re.fullmatch(r'<!-- hafiza-os:[\w-]+:bitir -->', line.strip()):
+                generated = False
+            continue
         fence_match = _NOTE_FENCE.match(line)
         if fence_match:
             marker = fence_match.group(1)
             fence = None if fence == marker else (fence or marker)
             continue
         if fence:
+            continue
+        if re.fullmatch(r'<!-- hafiza-os:[\w-]+:basla -->', line.strip()):
+            generated = True
             continue
         heading = _NOTE_HEADING.match(line)
         if heading:

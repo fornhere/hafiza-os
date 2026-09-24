@@ -14,7 +14,7 @@ import sys
 import time
 
 from platform_lock import exclusive_lock
-from hafiza import add_candidate, category_errors, contains_secret
+from hafiza import add_candidate, category_errors, contains_secret, valid_candidate_scope
 from client_transcripts import CLIENTS, SourceError, parse, private, read_bytes, safe_path, sha, strict_json
 
 INBOX = Path('gelen-kutusu/ajan-oturumlari')
@@ -54,7 +54,7 @@ def atomic_text(path, value):
             os.unlink(name)
 
 
-def semantic_results(decision, source):
+def semantic_results(decision, source, vault=None):
     candidates = decision.get('semantic_candidates', [])
     if not isinstance(candidates, list):
         raise SourceError('invalid_semantic_candidates')
@@ -64,9 +64,11 @@ def semantic_results(decision, source):
         reasons, drop_category = [], False
         if index >= 5:
             reasons.append('candidate_limit')
-        if not isinstance(candidate, dict) or set(candidate) - {'statement', 'subject_key', 'evidence', 'category'}:
+        if not isinstance(candidate, dict) or set(candidate) - {'statement', 'subject_key', 'evidence', 'category', 'scope'}:
             reasons.append('invalid_candidate_schema')
         else:
+            if not valid_candidate_scope(vault, candidate.get('scope', 'user')):
+                reasons.append('invalid_scope')
             statement, key, evidence = (candidate.get(name) for name in ('statement', 'subject_key', 'evidence'))
             if not isinstance(statement, str) or not 10 <= len(statement.strip()) <= 600:
                 reasons.append('invalid_statement')
@@ -239,7 +241,14 @@ def _packet(item, state):
     if not evidence:
         raise SourceError('no_bounded_evidence')
     evidence.reverse()
+    try:
+        registry = json.loads((state.parents[2] / 'komuta/gorev-baglam.json').read_text(encoding='utf-8'))
+        active_projects = sorted(p['id'] for p in registry.get('projects', [])
+                                 if p.get('status', 'active') == 'active')
+    except (OSError, ValueError, KeyError, TypeError):
+        active_projects = []
     return dict(id=item['id'], client=item['client'], session=item['session'],
+                active_projects=active_projects,
                 source_path=item['path'], prefix_sha256=item['prefix_sha256'],
                 end_line=item['end_line'], user_count=item['count'], evidence=evidence,
                 omitted_entries=len(source['entries'])-len(evidence),
@@ -285,7 +294,7 @@ def review(vault, ident, decision, apply=False):
             if not entry or not isinstance(ref['quote'], str) or not ref['quote'].strip() or len(ref['quote']) > 6000 or ref['quote'] not in entry['quote'] or ref['line_sha256'] != entry['line_sha256']:
                 raise SourceError('evidence_mismatch')
             refs.append(dict(line=ref['line'], line_sha256=ref['line_sha256'], quote_sha256=sha(ref['quote'].encode())))
-        candidate_results = semantic_results(decision, source)
+        candidate_results = semantic_results(decision, source, vault)
         note = semantic_note(ident, decision, candidate_results)
         note_path = root / (ident + '.md')
         decision_hash = sha(json.dumps(decision, sort_keys=True, ensure_ascii=False).encode())
@@ -308,7 +317,7 @@ def review(vault, ident, decision, apply=False):
                     **({'semantic_candidates': candidate_results} if 'semantic_candidates' in decision else {})}
         # Re-read the original source immediately before publishing the receipt.
         source = _validate(item, state)
-        candidate_results = semantic_results(decision, source)
+        candidate_results = semantic_results(decision, source, vault)
         note = semantic_note(ident, decision, candidate_results)
         receipt = dict(version=1, id=ident, scope='episodic_candidate', decision=decision['decision'],
                        meaningful=decision['meaningful'], reviewer_role=decision['reviewer_role'],
@@ -332,7 +341,7 @@ def review(vault, ident, decision, apply=False):
                     continue
                 candidate = decision['semantic_candidates'][result['index']]
                 queued = add_candidate(Path(vault).absolute(), statement=candidate['statement'],
-                    kind='semantic', scope='user', subject_key=candidate['subject_key'],
+                    kind='semantic', scope=candidate.get('scope', 'user'), subject_key=candidate['subject_key'],
                     source_path=str(note_path.relative_to(Path(vault).absolute())), source_anchor='Kullanıcı beyanı',
                     confidence='explicit-user', sensitivity='normal', proposed_by='claude-review',
                     evidence=candidate['evidence'], category=None if result.get('category_dropped') else candidate.get('category'))

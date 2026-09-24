@@ -85,6 +85,7 @@ def pending(vault, data, event):
 
 def record(vault, session, turn, summary, semantic_candidates=None, source_snapshot=None):
     from capture_source import record_gate, validate_candidate_evidence
+    from hafiza import valid_candidate_scope
     record_gate(vault, session, turn, source_snapshot)
     if not isinstance(summary, str) or not 20 <= len(summary.strip()) <= 6000:
         raise ValueError('Özet 20–6000 karakter olmalı')
@@ -97,6 +98,8 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
         if not isinstance(candidate, dict) or not all(isinstance(candidate.get(k), str) for k in
                 ('statement', 'subject_key', 'evidence')):
             raise ValueError('aday statement, subject_key ve evidence içermeli')
+        if not valid_candidate_scope(vault, candidate.get('scope', 'user')):
+            raise ValueError('invalid_scope')
         if not 10 <= len(candidate['evidence']) <= 1500 or candidate['evidence'] not in summary:
             raise ValueError('aday kanıtı özet içinde açık kullanıcı beyanı olarak bulunmalı')
         if source_snapshot is None:
@@ -125,7 +128,7 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
     queued = []
     for candidate in candidates:
         queued.append(add_candidate(vault, statement=candidate['statement'], kind='semantic',
-            scope='user', subject_key=candidate['subject_key'],
+            scope=candidate.get('scope', 'user'), subject_key=candidate['subject_key'],
             source_path=str(note.relative_to(vault)), source_anchor='Kullanıcı beyanı',
             confidence='explicit-user', sensitivity='normal', proposed_by='codex-receipt',
             evidence=candidate['evidence'], evidence_source=candidate['evidence_source']))

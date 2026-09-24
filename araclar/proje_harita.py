@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import re
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 
 import bilgi_agi
@@ -25,7 +26,7 @@ OPEN = {'active', 'blocked', 'needs_confirmation'}
 
 def _date(value):
     if isinstance(value, (int, float)):
-        return dt.datetime.fromtimestamp(value / 1e9, dt.timezone.utc).date()
+        return dt.datetime.fromtimestamp(value / (1e9 if value > 1e12 else 1), dt.timezone.utc).date()
     try:
         return dt.datetime.fromisoformat(str(value).replace('Z', '+00:00')).date()
     except (ValueError, TypeError):
@@ -59,6 +60,7 @@ def _root_matches(cwd, project):
                for root in project.get('roots', []) if root and Path(root).is_absolute())
 
 
+@lru_cache(maxsize=256)
 def _claude_cwd(path):
     parts = Path(path).parts
     if '.claude' not in parts or 'projects' not in parts:
@@ -67,7 +69,34 @@ def _claude_cwd(path):
     if index + 1 >= len(parts):
         return ''
     encoded = parts[index + 1]
-    return encoded.replace('-', '/') if encoded.startswith('-') else ''
+    home = Path.home()
+    if not encoded.startswith(_claude_encoded(str(home))):
+        return ''
+    # Decode against real directories: both spaces and non-ASCII characters
+    # become '-' in Claude's project directory name.
+    pending = [home]
+    best = ''
+    visited = 0
+    while pending and visited < 1000:
+        parent = pending.pop()
+        visited += 1
+        code = _claude_encoded(str(parent))
+        if code == encoded:
+            best = str(parent)
+            continue
+        if not encoded.startswith(code + '-'):
+            continue
+        try:
+            children = [p for p in parent.glob('*') if p.is_dir() and not p.is_symlink()]
+        except OSError:
+            continue
+        pending.extend(p for p in children if encoded == _claude_encoded(str(p))
+                       or encoded.startswith(_claude_encoded(str(p)) + '-'))
+    return best
+
+
+def _claude_encoded(root):
+    return re.sub(r'[^A-Za-z0-9-]', '-', root)
 
 
 def _claude_root_score(source_path, project):
@@ -80,12 +109,25 @@ def _claude_root_score(source_path, project):
     encoded = parts[index + 1]
     return max((len(root) for root in project.get('roots', [])
                 if root and Path(root).is_absolute() and
-                (encoded == root.replace('/', '-') or encoded.startswith(root.replace('/', '-') + '-'))),
+                (encoded == _claude_encoded(root) or encoded.startswith(_claude_encoded(root) + '-'))),
                default=0)
 
 
 def _receipts(vault):
     rows = []
+    event_dates = {}
+    events = vault / 'günlük/hafıza-olayları.jsonl'
+    if events.is_file():
+        with events.open(encoding='utf-8') as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                    if event.get('event_type') == 'session.inspected.v2' and event.get('receipt_path'):
+                        stamp = _date(event.get('last_modified'))
+                        if stamp:
+                            event_dates[event['receipt_path']] = stamp
+                except (ValueError, TypeError, OverflowError):
+                    continue
     folder = vault / 'gelen-kutusu/codex-oturumları'
     for path in sorted(folder.glob('*.md')):
         if path.is_symlink():
@@ -93,8 +135,11 @@ def _receipts(vault):
         body = path.read_text(encoding='utf-8')
         first = body.splitlines()[0] if body else ''
         match = re.search(r'\d{4}-\d\d-\d\d', first)
-        rows.append(dict(client='codex', path=path.relative_to(vault), text=body,
-                         first=_safe_line(first), date=_date(match.group() if match else None), cwd=''))
+        relative = path.relative_to(vault)
+        event_date = event_dates.get(relative.as_posix())
+        rows.append(dict(client='codex', path=relative, text=body,
+                         first=_safe_line(first), date=event_date or _date(match.group() if match else None),
+                         date_uncertain=event_date is None, cwd=''))
     folder = vault / 'gelen-kutusu/ajan-oturumlari'
     for path in sorted(folder.glob('*.json')):
         state = folder / '.state' / path.name
@@ -108,10 +153,25 @@ def _receipts(vault):
         if source.get('client') != 'claude' or source.get('count', 0) <= 5:
             continue
         summary = receipt.get('summary', '')
+        cwd, occurred = '', None
+        transcript = Path(source.get('path', ''))
+        if transcript.is_file() and not transcript.is_symlink():
+            try:
+                with transcript.open(encoding='utf-8') as stream:
+                    for number, line in enumerate(stream, 1):
+                        if number > source.get('end_line', 0):
+                            break
+                        row = json.loads(line)
+                        if row.get('type') == 'user':
+                            cwd = row.get('cwd') or cwd
+                            occurred = _date(row.get('timestamp')) or occurred
+            except (OSError, ValueError, TypeError):
+                pass
         rows.append(dict(client='claude', path=path.relative_to(vault), text=summary,
                          first=_safe_line(str(summary).splitlines()[0] if summary else ''),
-                         date=_date(receipt.get('reviewed_ns') or source.get('created_ns')),
-                         cwd=_claude_cwd(source.get('path', '')),
+                         date=occurred or _date(receipt.get('reviewed_ns') or source.get('created_ns')),
+                         date_uncertain=occurred is None,
+                         cwd=cwd or _claude_cwd(source.get('path', '')),
                          source_path=source.get('path', '')))
     return rows
 
@@ -122,7 +182,7 @@ def _replace_block(original, start, end, body):
         before, rest = original.split(start, 1)
         _, after = rest.split(end, 1)
         return before + block + after
-    return original + ('' if not original or original.endswith('\n\n') else '\n' if original.endswith('\n') else '\n\n') + block + '\n'
+    return original + ('' if not original or original.endswith('\n') else '\n') + block
 
 
 def _put(vault, relative, start, end, body, write, heading=''):
@@ -147,6 +207,14 @@ def build(vault, write=False, today=None):
     receipts = _receipts(vault)
     claude_scores = {str(r['path']): max((_claude_root_score(r['source_path'], p) for p in projects),
                                        default=0) for r in receipts if r['client'] == 'claude'}
+    task_matches = {}
+    for task in tasks:
+        if task.get('project_id') or task.get('status') not in OPEN:
+            continue
+        text = ' '.join(str(task.get(k, '')) for k in ('title', 'next_step', 'source_path', 'evidence'))
+        matches = [p['id'] for p in projects if p.get('status', 'active') == 'active' and _matches(text, p)]
+        if len(matches) == 1:
+            task_matches[task['id']] = matches[0]
     plan, summaries = [], []
     for project in projects:
         ident = project['id']
@@ -155,13 +223,12 @@ def build(vault, write=False, today=None):
             if task.get('status') not in OPEN:
                 continue
             explicit = task.get('project_id')
-            possible = not explicit and _matches(' '.join(str(task.get(k, '')) for k in
-                ('title', 'next_step', 'source_path', 'evidence')), project)
+            possible = not explicit and task_matches.get(task['id']) == ident
             if explicit == ident or possible:
                 matching_tasks.append((task, possible))
         matching_notes = [n for n in notes if n.get('scope') == 'project:' + ident]
         matching_receipts = [r for r in receipts if
-            ((_claude_root_score(r['source_path'], project) > 0 and
+            ((_root_matches(r['cwd'], project) if r['cwd'] else _claude_root_score(r['source_path'], project) > 0 and
               _claude_root_score(r['source_path'], project) == claude_scores[str(r['path'])])
              if r['client'] == 'claude' else _matches(r['text'], project))]
         matching_receipts.sort(key=lambda r: (r['date'] or dt.date.min, str(r['path'])), reverse=True)
@@ -169,10 +236,11 @@ def build(vault, write=False, today=None):
         dates += [d for task, _ in matching_tasks if (d := _date(task.get('updated_at')))]
         last = max(dates) if dates else None
         active = bool(last and 0 <= (today - last).days <= 30)
+        status = 'arşiv' if project.get('status') == 'archived' else 'aktif' if active else 'arşiv adayı'
         lines = [f'Üretim zamanı: {today.isoformat()}',
                  f'Kayıt: [[komuta/gorev-baglam]] · Takma adlar: {", ".join(project.get("aliases", [])) or "—"}',
                  'Kökler: ' + (', '.join(project.get('roots', [])) or '—'),
-                 f'Durum: {"aktif" if active else "arşiv adayı"}',
+                 f'Durum: {status}',
                  f'Son etkinlik: {last.isoformat() if last else "bilinmiyor"}', '',
                  '### Açık işler']
         for task, possible in matching_tasks:
@@ -184,17 +252,17 @@ def build(vault, write=False, today=None):
         lines += ['', '### Bilgi notları']
         lines += [f'- [[bilgi/{n["id"]}]] · {_safe_line(n["title"])}' for n in matching_notes] or ['- Yok']
         lines += ['', '### Son oturum makbuzları']
-        lines += [f'- {_link(r["path"])} · {r["date"].isoformat() if r["date"] else "tarih bilinmiyor"} · {r["first"]}'
+        lines += [f'- {_link(r["path"])} · {r["date"].isoformat() if r["date"] else "tarih bilinmiyor"}{" (tarih belirsiz)" if r.get("date_uncertain") else ""} · {r["first"]}'
                   for r in matching_receipts[:5]] or ['- Yok']
         relative = Path('projeler') / ident / 'DURUM.md'
         plan.append(_put(vault, relative, PROJECT_START, PROJECT_END, '\n'.join(lines), write,
                          f'# {ident} · Durum\n\n'))
-        summaries.append(dict(id=ident, status='aktif' if active else 'arşiv adayı',
+        summaries.append(dict(id=ident, status=status,
                               last_activity=last.isoformat() if last else None,
                               open_tasks=len(matching_tasks), notes=len(matching_notes),
                               receipts=len(matching_receipts)))
     lines = [f'Üretim zamanı: {today.isoformat()}', 'Kaynak: [[komuta/gorev-baglam]]', '']
-    for status, title in [('aktif', 'Aktif projeler'), ('arşiv adayı', 'Arşiv adayları')]:
+    for status, title in [('aktif', 'Aktif projeler'), ('arşiv adayı', 'Arşiv adayları'), ('arşiv', 'Arşiv')]:
         lines += ['### ' + title]
         group = sorted((s for s in summaries if s['status'] == status),
                        key=lambda s: (s['last_activity'] or '', s['id']), reverse=True)
@@ -218,7 +286,10 @@ def _candidate_root(cwd):
     home = Path.home()
     if path == home or path == Path('/') or path.is_relative_to(Path('/tmp')) or path.is_relative_to(Path('/var/tmp')):
         return None
-    if any(part.casefold() in {'scratch', 'scratchpad', 'workspaces', '.cache'} for part in path.parts):
+    if any(part.casefold() in {'scratch', 'scratchpad', 'workspaces', '.cache'}
+           or 'scratch-workspace' in part.casefold() for part in path.parts):
+        return None
+    if any(re.fullmatch(r'20\d\d-\d\d-\d\d', part) for part in path.parts):
         return None
     if path.name.casefold() in {'chatgpt', 'documents', 'projects'}:
         return None

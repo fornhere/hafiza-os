@@ -25,8 +25,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Shared category, note-search, scope-aware duplicate/conflict and condition-safe context logic; public installer supports vault-scoped external Mem0 credentials and optional automatic remote lookup, while private runtime keeps its fixed identity and legacy credential source with explicit remote lookup.",
-      "local_sha256": "9015a6cf5ae4b39da6e9eaeeab0830538ad2f9e1781f48692538d860043eabbd",
-      "public_sha256": "787275c789351904c8667adcff9d62f89314e4daca68ee4dc937279217bb56b3"
+      "local_sha256": "d26d282c36cfadde02ca9c476197db0d13e9edb9ecc98c2000179569823272b9",
+      "public_sha256": "15884aa09e6b5cdc78cad4056d07e73d9321254caa47e0f4ca898ccee1b3837c"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -40,8 +40,8 @@
       "path": "araclar/is_ve_ders.py",
       "mode": "reviewed-variant",
       "reason": "Only the historical archive link differs in the installed vault; missing-ledger protection is identical.",
-      "local_sha256": "f699508fa7def28b9628c2dcdfda7fbed7147d1d1eee7a2deebc8c366f4614c3",
-      "public_sha256": "cc84e06a90542fa6b2439a1c0826119e44cfc303bbafe55066289a8e55c7320d"
+      "local_sha256": "30a58e3f314e4033d3778c96cb0cc4fc1f9918c051bdec82ec596e803febc502",
+      "public_sha256": "d440cca49620031263c7ea10cb48cc0000f6ef88f1d22c03d511f1f56a920b76"
     },
     {
       "path": "araclar/konsolidasyon.py",
@@ -183,6 +183,10 @@
     },
     {
       "path": "araclar/test_proje_harita.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_akilli_yapi.py",
       "mode": "shared"
     }
   ]

@@ -33,6 +33,14 @@ def put(vault, kind, data):
         raise ValueError('kanıt kaynak notta aynen bulunmalı')
     data['source_content_hash'] = h.statement_hash(source.read_text())
     if kind == 'task':
+        if data.get('project_id') is not None:
+            registry = vault / 'komuta/gorev-baglam.json'
+            try:
+                projects = json.loads(registry.read_text(encoding='utf-8'))['projects']
+            except (OSError, ValueError, KeyError, TypeError):
+                raise ValueError('proje kayıt defteri okunamadı')
+            if not isinstance(data['project_id'], str) or data['project_id'] not in {p.get('id') for p in projects}:
+                raise ValueError('project_id kayıt defterinde yok')
         if data['status'] not in ('active', 'blocked', 'needs_confirmation', 'done', 'cancelled'):
             raise ValueError('geçersiz iş durumu')
         if data['status'] in ('active', 'blocked') and not data.get('next_step'):
@@ -66,8 +74,14 @@ def put(vault, kind, data):
 
 def brief(vault, limit=3):
     result = []
+    try:
+        registry = json.loads((vault / 'komuta/gorev-baglam.json').read_text(encoding='utf-8'))
+        archived = {p['id'] for p in registry.get('projects', []) if p.get('status') == 'archived'}
+    except (OSError, ValueError, KeyError, TypeError):
+        archived = set()
     for row in latest(vault, 'task').values():
         if row['status'] not in ('active', 'blocked'): continue
+        if row.get('project_id') in archived: continue
         try:
             source = h.source_file(vault, row['source_path'])
             content=source.read_text()
