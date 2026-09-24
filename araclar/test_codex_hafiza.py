@@ -35,7 +35,7 @@ class Hooks(unittest.TestCase):
         self.assertFalse(list((self.vault / h.INBOX).glob('*.pending.json')))
 
     def test_worker_environment_skips_all_events_without_state(self):
-        for name in ('HAFIZA_ISCI', 'CODEX_WORKER', 'ORVANT_WORKER'):
+        for name in ('HAFIZA_ISCI', 'CODEX_WORKER'):
             with self.subTest(name=name), patch.dict(os.environ, {name: '1'}):
                 for event in ('SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt'):
                     with patch('capture_source.apply_prompt_policy') as policy:
@@ -60,7 +60,7 @@ class Hooks(unittest.TestCase):
     def test_worker_prompt_and_transcript_cli_create_no_queue_or_lock(self):
         transcript = self.transcript({'originator': 'codex_exec', 'source': 'exec'})
         env = os.environ.copy()
-        for name in ('HAFIZA_ISCI', 'CODEX_WORKER', 'ORVANT_WORKER',
+        for name in ('HAFIZA_ISCI', 'CODEX_WORKER',
                      'HAFIZA_EXEC_BAGLAM'):
             env.pop(name, None)
         for extra in ({'prompt': 'İŞÇİ KOŞUSU: görev'},

@@ -72,7 +72,28 @@ def findings(text):
     return hits
 
 
-def scan(repo, names=None):
+PRIVATE_TERMS_PATH = 'komuta/yayin-yasak-terimler.txt'
+
+
+def private_terms(vault):
+    """Private vault list of personal/channel words that must never be published.
+
+    One case-insensitive whole-word term per line; 'izin: <path>' exempts a file.
+    """
+    terms, allowed = [], set()
+    path = Path(vault) / PRIVATE_TERMS_PATH if vault else None
+    if not path or not path.is_file():
+        return {'patterns': [], 'allowed': allowed}
+    for line in path.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'): continue
+        if line.startswith('izin:'):
+            allowed.add(line[5:].strip()); continue
+        terms.append(re.compile(r'(?<!\w)' + re.escape(line) + r'(?!\w)', re.IGNORECASE))
+    return {'patterns': terms, 'allowed': allowed}
+
+
+def scan(repo, names=None, private=None):
     for name in names if names is not None else run(repo, 'ls-files', '-z').split('\0'):
         if not name: continue
         path = repo / name
@@ -81,12 +102,18 @@ def scan(repo, names=None):
         if Path(name).as_posix() == SELF_PATH: continue
         data = path.read_bytes()
         if b'\0' in data: continue
-        found = findings(data.decode('utf-8', errors='replace'))
+        text = data.decode('utf-8', errors='replace')
+        found = findings(text)
         if found:
             raise ValueError('publication scan rejected file: ' + name + ' (' + found[0] + ')')
+        if private and Path(name).as_posix() not in private['allowed']:
+            for index, pattern in enumerate(private['patterns'], 1):
+                if pattern.search(text):
+                    # The term itself stays private; report only its list position.
+                    raise ValueError('publication scan rejected file: ' + name + f' (private term #{index})')
 
 
-def validate_committed(repo):
+def validate_committed(repo, private=None):
     if run(repo, 'status', '--porcelain'):
         raise ValueError('review and commit all publication changes first')
     head = run(repo, 'rev-parse', 'HEAD')
@@ -96,7 +123,7 @@ def validate_committed(repo):
         tree = Path(tmp)
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
             tar.extractall(tree, filter='data')
-        scan(tree, names)
+        scan(tree, names, private)
         # Test exactly the committed source; bytecode remains only in temporary tree.
         subprocess.run(['python3', '-m', 'unittest', 'discover', '-s', 'araclar', '-p', 'test_*.py'],
                        cwd=tree, check=True)
@@ -108,7 +135,7 @@ def validate_committed(repo):
 def publish(repo, vault, apply=False):
     if apply and vault is None: raise ValueError('--vault required for publish parity')
     if vault: parity(repo, vault)
-    head = validate_committed(repo)
+    head = validate_committed(repo, private_terms(vault))
     if not apply: return {'status': 'validated', 'commit': head}
     remote = run(repo, 'remote', 'get-url', 'origin')
     if not re.fullmatch(r'(https://github\.com/|git@github\.com:)[\w.-]+/[\w.-]+(?:\.git)?', remote):

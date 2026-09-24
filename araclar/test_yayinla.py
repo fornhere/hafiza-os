@@ -103,3 +103,26 @@ class Publication(unittest.TestCase):
              patch.object(y.subprocess,'check_output',return_value=data.getvalue()), \
              patch.object(y.subprocess,'run'), patch.object(y,'scan'):
             with self.assertRaisesRegex(ValueError,'changed during validation'): y.validate_committed(Path('.'))
+
+
+class PrivateTerms(unittest.TestCase):
+    def test_private_vault_terms_block_publication_without_revealing_term(self):
+        import yayinla as y
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); vault = root / 'vault'; repo = root / 'repo'
+            (vault / 'komuta').mkdir(parents=True); repo.mkdir()
+            (vault / y.PRIVATE_TERMS_PATH).write_text('# yorum\nizin: LICENSE\nGizliKanal\n', encoding='utf-8')
+            (repo / 'LICENSE').write_text('Copyright GizliKanal\n', encoding='utf-8')
+            (repo / 'ok.md').write_text('gizlikanalhere/repo adresi\n', encoding='utf-8')
+            private = y.private_terms(vault)
+            y.scan(repo, ['LICENSE', 'ok.md'], private)
+            (repo / 'bad.md').write_text('Bu gizlikanal verisidir.\n', encoding='utf-8')
+            with self.assertRaises(ValueError) as error:
+                y.scan(repo, ['bad.md'], private)
+            self.assertIn('private term #1', str(error.exception))
+            self.assertNotIn('gizlikanal', str(error.exception).lower().replace('bad.md', ''))
+
+    def test_missing_private_list_is_a_noop(self):
+        import yayinla as y
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual([], y.private_terms(Path(tmp))['patterns'])

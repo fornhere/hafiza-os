@@ -125,12 +125,12 @@ class Package(unittest.TestCase):
 
 class RankRelevance(unittest.TestCase):
     def rows(self):
-        return [dict(memory_id=f'r{i}', statement=f'Forn {topic} tercih eder.')
+        return [dict(memory_id=f'r{i}', statement=f'Deniz {topic} tercih eder.')
                 for i, topic in enumerate(('kapakta büyük yazı', 'hızlı kurgu temposu',
                                            'Türkçe başlıklar', 'maskotu saygın poz'))]
 
     def test_shared_name_alone_does_not_select_every_record(self):
-        query = 'görev bildirimi tamamlandı çıktı dosyası forn arka plan komutu'
+        query = 'görev bildirimi tamamlandı çıktı dosyası deniz arka plan komutu'
         self.assertEqual([], rank_records(self.rows(), query))
 
     def test_distinguishing_term_still_selects_its_record(self):

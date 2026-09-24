@@ -245,7 +245,7 @@ def shared_reviewed_context(vault):
 def worker_run(data, environ=os.environ):
     """Keep automatic workers out of the memory hook, including its state files."""
     if any(environ.get(name) == '1' for name in
-           ('HAFIZA_ISCI', 'CODEX_WORKER', 'ORVANT_WORKER')):
+           ('HAFIZA_ISCI', 'CODEX_WORKER')):
         return True
     prompt = data.get('prompt')
     if (isinstance(prompt, str) and
