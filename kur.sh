@@ -49,7 +49,7 @@ temizle() {
   jq '
     def sil:
       map(.hooks |= map(select((.command // "")
-        | test("(oturum-basla|mesaj-say|hafiza-kontrol|oturum-bitir)\\.sh$") | not)))
+        | test("(oturum-basla|mesaj-say|hafiza-kontrol|oturum-bitir)\\.sh\u0027?$") | not)))
       | map(select((.hooks | length) > 0));
     if .hooks then
       .hooks |= with_entries(.value |= sil)
@@ -93,16 +93,16 @@ jq --arg h "$HAFIZA" '
   | .hooks.PreCompact //= []
   | .hooks.SessionEnd //= []
   | .hooks.SessionStart += [{hooks:[{type:"command",
-      command:($h + "/.claude/hooks/oturum-basla.sh"),
+      command:(($h + "/.claude/hooks/oturum-basla.sh") | @sh),
       timeout:15, statusMessage:"Hafıza okunuyor..."}]}]
   | .hooks.UserPromptSubmit += [{hooks:[{type:"command",
-      command:($h + "/.claude/hooks/mesaj-say.sh"), timeout:10}]}]
+      command:(($h + "/.claude/hooks/mesaj-say.sh") | @sh), timeout:10}]}]
   | .hooks.Stop += [{hooks:[{type:"command",
-      command:($h + "/.claude/hooks/hafiza-kontrol.sh"), timeout:15}]}]
+      command:(($h + "/.claude/hooks/hafiza-kontrol.sh") | @sh), timeout:15}]}]
   | .hooks.PreCompact += [{hooks:[{type:"command",
-      command:($h + "/.claude/hooks/hafiza-kontrol.sh"), timeout:15}]}]
+      command:(($h + "/.claude/hooks/hafiza-kontrol.sh") | @sh), timeout:15}]}]
   | .hooks.SessionEnd += [{hooks:[{type:"command",
-      command:($h + "/.claude/hooks/oturum-bitir.sh"), timeout:15}]}]
+      command:(($h + "/.claude/hooks/oturum-bitir.sh") | @sh), timeout:15}]}]
 ' "$AYAR" > "$AYAR.tmp" && mv "$AYAR.tmp" "$AYAR"
 
 yesil "✔ Hook'lar bağlandı ($AYAR)"
