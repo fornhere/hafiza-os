@@ -80,10 +80,13 @@ def rank_records(rows, query):
     frequencies = {term: sum(any(word_match(term, word) for word in words)
                              for _, words in documents) for term in terms}
     informative = {term for term in terms if 0 < frequencies[term] < max(2, len(rows)*0.5)}
+    # Without a distinguishing term, a word shared by most records (e.g. the
+    # user's name) selects only when it covers at least half of the query.
     ranked = []
     for row, words in documents:
         matched = {term for term in terms if any(word_match(term, word) for word in words)}
         if not matched or (informative and not matched.intersection(informative)): continue
+        if not informative and 2 * len(matched) < len(terms): continue
         score = sum(1 + math.log((len(rows) + 1) / (frequencies[term] + 1)) for term in matched)
         ranked.append((score, len(matched), row))
     return [row for _, _, row in sorted(ranked, key=lambda item:

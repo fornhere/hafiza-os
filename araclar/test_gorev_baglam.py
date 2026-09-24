@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from gorev_baglam import build_task_package, digest, validate_inputs
+from gorev_baglam import build_task_package, digest, rank_records, validate_inputs
 from codex_hafiza import hook
 
 class Package(unittest.TestCase):
@@ -121,3 +121,18 @@ class Package(unittest.TestCase):
    if expected=='game': self.assertIn('/tmp/game',package['text'])
   package=build_task_package(self.v,'Ornekaltı devam')
   self.assertEqual(package['assets'],[]);self.assertEqual(package['workflow_ids'],[])
+
+
+class RankRelevance(unittest.TestCase):
+    def rows(self):
+        return [dict(memory_id=f'r{i}', statement=f'Forn {topic} tercih eder.')
+                for i, topic in enumerate(('kapakta büyük yazı', 'hızlı kurgu temposu',
+                                           'Türkçe başlıklar', 'maskotu saygın poz'))]
+
+    def test_shared_name_alone_does_not_select_every_record(self):
+        query = 'görev bildirimi tamamlandı çıktı dosyası forn arka plan komutu'
+        self.assertEqual([], rank_records(self.rows(), query))
+
+    def test_distinguishing_term_still_selects_its_record(self):
+        ids = [r['memory_id'] for r in rank_records(self.rows(), 'kurgu temposu nasıl olmalı')]
+        self.assertEqual(['r1'], ids)

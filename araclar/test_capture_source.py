@@ -18,6 +18,7 @@ class Capture(unittest.TestCase):
     def event(self,typ,turn='t6'): self.rows.append(dict(type='event_msg',payload=dict(type=typ,turn_id=turn)))
     def test_wrapper(self):
         self.assertEqual('kapak yap',c.clean_user('<in-app-browser-context source="ambient">OBS</in-app-browser-context>\n## My request:\nkapak yap'))
+        self.assertEqual('',c.clean_user('<task-notification>\n<task-id>x</task-id>\n<output-file>/tmp/-home-u-ikinci-beyin/x.output</output-file>\n</task-notification>'))
         self.assertEqual('',c.clean_user('<in-app-browser-context>OBS</in-app-browser-context>'))
     def test_late_result_noise_and_gate(self):
         self.event('task_started');self.save();before=c.snapshot(self.p)

@@ -17,7 +17,8 @@ def clean_user(text):
         text = text[len('## My request:'):].strip()
     excluded = ('# AGENTS.md instructions', '<subagent_notification', '<turn_aborted',
         '<hook_prompt', '[HAFIZA_KAPANIS]', '[HAFIZA_OTOMASYON]', '<system-reminder', '<goal>',
-        '<heartbeat', '<collaboration', '<codex_internal_context', '<in-app-browser-context')
+        '<heartbeat', '<collaboration', '<codex_internal_context', '<in-app-browser-context',
+        '<task-notification')
     return '' if text.startswith(excluded) else text
 
 

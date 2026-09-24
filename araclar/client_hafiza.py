@@ -39,7 +39,9 @@ def context(vault, client, session, source, payload, event):
         prompt = payload.get('prompt')
         if not isinstance(prompt, str):
             raise SourceError('prompt_required')
-        query = prompt
+        # Harness notifications and injected wrappers are not user requests.
+        from capture_source import clean_user
+        query = clean_user(prompt)
     with locked(vault) as (_, state):
         enforce_policy(state, client, session, exclude=private(query))
     if contains_secret(query):
