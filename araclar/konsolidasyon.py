@@ -221,7 +221,7 @@ def scan_with_receipt(vault, root, since, scheduled=False):
         errors = max(len(diagnostics), sum(r.get('activity_state') in ('unknown', 'ambiguous') for r in rows))
         eligible = [r for r in rows if r.get('activity_state') == 'completed']
         oldest = min((r['last_modified'] for r in eligible), default=None)
-        receipt = dict(status='complete', started_at=started,
+        receipt = dict(status='complete', started_at=started, since=since.isoformat(),
             finished_at=dt.datetime.now(dt.timezone.utc).isoformat(),
             parse_errors=errors, eligible_count=len(eligible),
             unresolved_count=sum(r.get('activity_state') != 'completed' for r in rows),
@@ -245,7 +245,7 @@ def main():
     p = sub.add_parser('health'); p.add_argument('--check', action='store_true')
     p = sub.add_parser('review'); p.add_argument('--input-json', type=Path, required=True)
     p.add_argument('--apply', action='store_true')
-    p = sub.add_parser('sessions'); p.add_argument('--since', default=dt.date.today().isoformat())
+    p = sub.add_parser('sessions'); p.add_argument('--since')
     p.add_argument('--codex-root', type=Path, default=Path.home() / '.codex')
     p.add_argument('--scheduled', action='store_true', help='Only the scheduled maintenance role uses this flag')
     p = sub.add_parser('checkpoint'); p.add_argument('--input-json', type=Path, required=True)
@@ -258,7 +258,10 @@ def main():
     elif args.cmd == 'health': result = health(vault)
     elif args.cmd == 'review': result = review(vault, json.loads(args.input_json.read_text()), args.apply)
     elif args.cmd == 'checkpoint': result = checkpoint(vault, json.loads(args.input_json.read_text()))
-    else: result = scan_with_receipt(vault, args.codex_root, dt.datetime.fromisoformat(args.since).replace(tzinfo=dt.timezone.utc), scheduled=args.scheduled)
+    else:
+        since = (dt.datetime.fromisoformat(args.since).replace(tzinfo=dt.timezone.utc) if args.since
+                 else dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=21))
+        result = scan_with_receipt(vault, args.codex_root, since, scheduled=args.scheduled)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if args.cmd == 'health' and args.check:
         raise SystemExit({'healthy': 0, 'failed': 1, 'stale': 2, 'unknown': 3}[result['operational_health']['status']])

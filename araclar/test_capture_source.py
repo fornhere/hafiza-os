@@ -144,6 +144,29 @@ class Capture(unittest.TestCase):
         snap=c.snapshot(self.p)
         with self.assertRaises(ValueError): c.validate_source(self.v,'s',snap)
 
+    def test_chatgpt_handoff_uses_codex_user_messages(self):
+        self.event('task_complete')
+        for originator in ('codex_work_desktop', 'Codex Desktop'):
+            with self.subTest(originator=originator):
+                self.rows[0]['payload'].update(source='vscode', thread_source='chatgpt_handoff', originator=originator)
+                self.save(); errors=[]
+                rows=k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,errors)
+                self.assertEqual(['s'], [row['session_id'] for row in rows])
+                self.assertEqual(6,rows[0]['user_count'])
+                self.assertEqual([],errors)
+        self.rows=self.rows[:3]+[self.rows[-1]]; self.save(); errors=[]
+        self.assertEqual([],k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,errors))
+        self.assertEqual([],errors)
+
+    def test_unknown_handoff_owner_remains_diagnostic(self):
+        self.event('task_complete')
+        for source, originator in (('exec','codex_work_desktop'), ('vscode','unknown'), ('vscode',None)):
+            with self.subTest(source=source,originator=originator):
+                self.rows[0]['payload'].update(source=source, thread_source='chatgpt_handoff', originator=originator)
+                self.save(); errors=[]
+                self.assertEqual([],k.sessions(self.v,self.root,dt.datetime(1970,1,1,tzinfo=dt.timezone.utc),0,errors))
+                self.assertEqual(1,len(errors))
+
     def test_unknown_created_task_producer_remains_diagnostic(self):
         self.event('task_complete')
         for source, origin in [('exec','Codex Desktop'), ('vscode','unknown'), ('vscode',None)]:

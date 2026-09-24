@@ -212,6 +212,8 @@ def main_owner(meta):
     """Exec is a main conversation only with explicit user-thread ownership."""
     if not meta.get('id'): return False
     source = meta.get('source')
+    if meta.get('thread_source') == 'chatgpt_handoff':
+        return source == 'vscode' and meta.get('originator') in ('codex_work_desktop', 'Codex Desktop')
     # Desktop create_thread produces a standalone, user-visible task, not a
     # collaboration worker. Accept only the observed explicit metadata tuple;
     # unknown producers and subagent ownership must remain rejected.
