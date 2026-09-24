@@ -1,5 +1,7 @@
 # Hafıza OS
 
+[Sistem haritası](SISTEM.md): veri akışı, sahiplik, komutlar ve H1–H7 ölçüm girişleri.
+
 **Ajanlar değişsin, hafızan aynı yerde kalsın.**
 
 Hafıza OS; tercihlerini, kararlarını, işlerini ve kaynaklarını kendi Markdown

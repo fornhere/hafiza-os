@@ -1,33 +1,8 @@
-# Bu Hafta — Öncelikler
+# Güncel işler
 
-Üç seviye. Bir madde seviye atlayabilir; atladığında tarihi yanına yazılır.
-Bu dosyayı ajan güncel tutar: iş bitince, iş eklenince, öncelik değişince.
-Sormaz, ama her güncelleme bir makbuz bırakır.
+Güncel liste: [[zihin/açık-işler]]. Bu görünüm `zihin/is-durumu.jsonl`
+defterinden `python3 araclar/is_ve_ders.py --vault . render` ile üretilir;
+bu sayfada ikinci bir iş listesi tutulmaz. Güncellik kuralı:
+[[komuta/hafıza-konsolidasyonu]].
 
-Madde biçimi: **Eklendi / Son gün / Sıradaki adım / Makbuzlar**
-Makbuz yoksa madde ilerlememiştir — "üzerinde çalışıyorum" ilerleme değildir.
-
----
-
-## 🔴 Bugün
-
-Bugün dokunulacak olan. Kısa liste; üçten fazlaysa bu liste değil, bir temenni.
-
-<!-- madde yok -->
-
----
-
-## 🟡 Bu Hafta
-
-Bu hafta içinde bitmesi gerekenler. Bugün'e terfi ederek çıkarlar.
-
-<!-- madde yok -->
-
----
-
-## ⚪ Fırsat Olunca Bakalım
-
-Ölmeyen ama acelesi olmayan işler. Buraya düşen bir madde üç hafta
-kıpırdamadıysa ya Bu Hafta'ya çıkar ya `arşiv/`'e iner. Ortada asılı kalmaz.
-
-<!-- madde yok -->
+[[SISTEM]] · [[Ana Sayfa]]

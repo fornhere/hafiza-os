@@ -1,6 +1,6 @@
 # Hafıza OS mimarisi ve paralel çalışma
 
-Kasa kanonik kaynak; Mem0 yeniden üretilebilir bir indeks. Jev dar anlamsal
+Veri sahipliği [kayıt sözleşmesinde](zihin/hafıza-sistemi.md) tanımlıdır. Jev dar anlamsal
 kararlar verir. Dosya/kayıt uygunluğu, kaynak sürümü, izin ve yazma kodla
 kontrol edilir. Jev sonucu kullanıcı kabulü veya kalıcı kayıt değildir.
 

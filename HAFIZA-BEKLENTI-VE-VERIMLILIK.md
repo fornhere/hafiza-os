@@ -20,14 +20,10 @@ garanti etmez.
 
 ## Bağlayıcı ürün kararları
 
-- Yerel Markdown kasa kanoniktir; Mem0 yalnız yeniden üretilebilir indekstir.
-- İlk beş gerçek kullanıcı mesajı kaydedilmez ve kayıt bildirimi yapılmaz.
-  Altıncıdan itibaren yalnız anlamlı, sırsız özetler aday olabilir; basit sorular
-  ve kaydetmeme talepleri kayıt dışındadır.
+- Veri sahipliği ve tek yazıcı: [kayıt sözleşmesi](zihin/hafıza-sistemi.md).
+- Kayıt uygunluğu ve kaynak incelemesi: [bakım sözleşmesi](komuta/hafıza-konsolidasyonu.md).
 - Sırlar ve kişisel içerik kamu deposuna çıkmaz. Uzak servis paylaşımı ayrıca
   gizlilik ve izin sınırlarına tabidir.
-- Makbuz kanonik gerçek değildir. Görev ajanı kataloğa veya Mem0'a doğrudan
-  terfi yapmaz; kaynaklı aday ayrı incelemeden geçer.
 - Jev danışmandır; deterministik doğrulama, insan onayı veya kanıt yerine geçmez.
 - İddia, gerekçe, koşul, kaynak, tarih, kapsam ve güven mümkün olduğunca birlikte
   taşınır. Koşul bütçeye sığmıyorsa koşulu düşürmek yerine kayıt atlanır.
