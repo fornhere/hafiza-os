@@ -45,22 +45,45 @@ def parity(repo, vault):
         raise ValueError('runtime missing from manifest: ' + ', '.join(sorted(required - covered)))
 
 
+# Secret-shaped literals must not reach the public tree. The detector examples
+# live in this module only, so its own source is excluded from the scan below.
+SELF_PATH = 'araclar/yayinla.py'
+SECRET_PATTERNS = [r'\bsk-[A-Za-z0-9_-]{20,}',
+                   r'\bgh[pousr]_[A-Za-z0-9]{30,}',
+                   r'\bAKIA[0-9A-Z]{16}\b',
+                   r'\bxox[abeprs]-[A-Za-z0-9-]{10,}',
+                   r'-----BEGIN (?:[A-Z][A-Z0-9 ]* )?PRIVATE KEY-----',
+                   r'/home/[A-Za-z0-9._-]+/',
+                   r'/Users/[A-Za-z0-9._-]+/']
+EMAIL_PATTERN = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b')
+
+
+def email_allowed(address):
+    # Placeholder and GitHub no-reply addresses carry no personal contact detail.
+    local, _, domain = address.rpartition('@')
+    local, domain = local.lower(), domain.lower()
+    return (local == 'noreply' or domain == 'noreply.github.com'
+            or domain.endswith('.noreply.github.com') or domain.startswith('example.'))
+
+
+def findings(text):
+    hits = [p for p in SECRET_PATTERNS if re.search(p, text)]
+    hits += ['email:' + a for a in EMAIL_PATTERN.findall(text) if not email_allowed(a)]
+    return hits
+
+
 def scan(repo, names=None):
-    # Source may contain detector examples; actual credential-looking literal values do not belong here.
-    patterns = [r'\bsk-[A-Za-z0-9_-]{20,}', r'\bgh[pousr]_[A-Za-z0-9]{30,}',
-                r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
-                r'/home/' + 'forn' + r'(?:/|\b)']
     for name in names if names is not None else run(repo, 'ls-files', '-z').split('\0'):
         if not name: continue
         path = repo / name
         if path.is_symlink() and (not path.resolve().is_relative_to(repo.resolve()) or not path.is_file()):
             raise ValueError('unsafe public symlink: ' + name)
+        if Path(name).as_posix() == SELF_PATH: continue
         data = path.read_bytes()
         if b'\0' in data: continue
-        text = data.decode('utf-8', errors='replace')
-        for pattern in patterns:
-            if re.search(pattern, text):
-                raise ValueError('publication scan rejected file: ' + name)
+        found = findings(data.decode('utf-8', errors='replace'))
+        if found:
+            raise ValueError('publication scan rejected file: ' + name + ' (' + found[0] + ')')
 
 
 def validate_committed(repo):

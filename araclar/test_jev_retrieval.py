@@ -179,7 +179,7 @@ class RetrievalTests(unittest.TestCase):
         self.assertTrue(any('eski yöntem' in f['text'] for f in plan))
 
     def test_new_domain_guards_and_four_domains_single_full_facet(self):
-        for domain,aliases in {'twitter':['Twitter','tweet'],'proje':['proje','Orvant'],
+        for domain,aliases in {'twitter':['Twitter','tweet'],'proje':['proje'],
                               'video':['video','YouTube','çekim']}.items():
             for alias in aliases:self.assertIn(domain,j.requested_domains(alias))
         self.assertFalse(j.requested_domains('x'))

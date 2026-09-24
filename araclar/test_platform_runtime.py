@@ -236,7 +236,8 @@ codex_hafiza.main()
 
     def test_latest_session_stdout_is_utf8_under_legacy_pipe_encoding(self):
         expected='Türkçe oturum: ışıltı, görev ve çıktı.'
-        (self.vault/'zihin/son-oturum.md').write_text('## 2026-09-19\n'+expected,encoding='utf-8')
+        today=codex_hafiza.dt.date.today().isoformat()
+        (self.vault/'zihin/son-oturum.md').write_text(f'## {today}\n'+expected,encoding='utf-8')
         environment=dict(self.environment, PYTHONIOENCODING='cp1252', PYTHONUTF8='0')
         result=subprocess.run([sys.executable, str(self.scripts/'codex_hafiza.py'),
                                '--vault', str(self.vault), 'latest-session'],
@@ -312,8 +313,9 @@ codex_hafiza.main()
         self.assertEqual(result['memory_ids'], ['synthetic-portability'])
         self.assertIn('zihin/örnek kaynak.md', result['text'])
         self.assertEqual(result['catalog_errors'], [])
+        today=codex_hafiza.dt.date.today().isoformat()
         (self.vault / 'zihin/son-oturum.md').write_text(
-            '## 2026-09-19 — Güncel\nÖrnek doğrulama.\n'
+            f'## {today} — Güncel\nÖrnek doğrulama.\n'
             '## 2026-01-01 — Eski\nESKİ İÇERİK\n', encoding='utf-8')
         output = self.run_code('import codex_hafiza; codex_hafiza.main()',
                                '--vault', self.vault, 'latest-session')
@@ -321,7 +323,7 @@ codex_hafiza.main()
         self.assertNotIn('ESKİ İÇERİK', output)
         self.assertLessEqual(len(output.strip()), 2500)
         with (self.vault / 'zihin/son-oturum.md').open('a', encoding='utf-8') as journal:
-            journal.write('## 2026-09-20 — Uzun bölüm\n' + 'Taşınabilir örnek. ' * 500)
+            journal.write(f'## {today} — Uzun bölüm\n' + 'Taşınabilir örnek. ' * 500)
         output = self.run_code('import codex_hafiza; codex_hafiza.main()',
                                '--vault', self.vault, 'latest-session')
         self.assertIn('Kesildi', output)

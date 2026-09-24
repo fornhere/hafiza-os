@@ -89,17 +89,17 @@ class Package(unittest.TestCase):
 
  def test_turkish_routing_independent_phrases(self):
   from gorev_baglam import select_projects
-  projects=[dict(id='cover',aliases=['kapak','thumbnail'],roots=['/tmp/cover']),dict(id='game',aliases=['külaltı'],roots=['/tmp/game']),dict(id='astra',aliases=['astra videosu'],roots=['/tmp/astra'])]
-  cases={'kapağımızı yenileyelim':'cover','kapaklarımızı düzenle':'cover','Külaltına dönelim':'game',"Külaltı’nda ilerleyelim":'game','Astranın videosuna devam':'astra',"Astra’nın videosuna kapak üret":'astra','thumnail üret':'cover','kabak çorbası yap':None,'astral seyahat videosu':None,'dünkü iş':None,'o kapak':None}
+  projects=[dict(id='cover',aliases=['kapak','thumbnail'],roots=['/tmp/cover']),dict(id='game',aliases=['ornekaltı'],roots=['/tmp/game']),dict(id='nova',aliases=['nova videosu'],roots=['/tmp/nova'])]
+  cases={'kapağımızı yenileyelim':'cover','kapaklarımızı düzenle':'cover','Ornekaltına dönelim':'game',"Ornekaltı’nda ilerleyelim":'game','Novanın videosuna devam':'nova',"Nova’nın videosuna kapak üret":'nova','thumnail üret':'cover','kabak çorbası yap':None,'noval seyahat videosu':None,'dünkü iş':None,'o kapak':None}
   for query,expected in cases.items():
    with self.subTest(query=query):
     rows,_=select_projects(projects,query)
     self.assertEqual(rows[0]['id'] if len(rows)==1 else None,expected)
-  rows,reason=select_projects(projects,'Külaltına devam',cwd='/tmp/cover')
+  rows,reason=select_projects(projects,'Ornekaltına devam',cwd='/tmp/cover')
   self.assertEqual([p['id'] for p in rows],['game']);self.assertEqual(reason,'explicit')
   rows,reason=select_projects(projects,'o kapak',cwd='/tmp/cover')
   self.assertEqual([p['id'] for p in rows],['cover']);self.assertEqual(reason,'cwd')
-  rows,_=select_projects(projects,'Külaltı ile Astranın videosu')
+  rows,_=select_projects(projects,'Ornekaltı ile Novanın videosu')
   self.assertEqual(len(rows),2)
 
  def test_unresolved_reference_explained_without_unrelated_noise(self):
@@ -111,13 +111,13 @@ class Package(unittest.TestCase):
   self.assertEqual(build_task_package(self.v,'OBS nasıl açılır')['text'],'')
 
  def test_named_project_keeps_identity_with_cover_workflow(self):
-  cfg={'projects':[self.project,dict(id='game',aliases=['külaltı'],roots=['/tmp/game'],assets=[]),dict(id='astra',aliases=['astra videosu'],roots=[],assets=[dict(self.asset,id='selected',role='selected-cover')])]}
+  cfg={'projects':[self.project,dict(id='game',aliases=['ornekaltı'],roots=['/tmp/game'],assets=[]),dict(id='nova',aliases=['nova videosu'],roots=[],assets=[dict(self.asset,id='selected',role='selected-cover')])]}
   (self.v/'komuta/gorev-baglam.json').write_text(json.dumps(cfg))
-  for query,expected in [('Külaltı için kapak hazırla','game'),('Astra videosuna kapak hazırla','astra')]:
+  for query,expected in [('Ornekaltı için kapak hazırla','game'),('Nova videosuna kapak hazırla','nova')]:
    package=build_task_package(self.v,query)
    self.assertEqual(package['project_id'],expected)
    self.assertEqual(package['workflow_ids'],['youtube'])
    self.assertEqual(validate_inputs(package['assets'],[str(self.image)]),[str(self.image)])
    if expected=='game': self.assertIn('/tmp/game',package['text'])
-  package=build_task_package(self.v,'Külaltı devam')
+  package=build_task_package(self.v,'Ornekaltı devam')
   self.assertEqual(package['assets'],[]);self.assertEqual(package['workflow_ids'],[])

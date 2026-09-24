@@ -56,20 +56,20 @@ class Retrieval(unittest.TestCase):
   import hafiza as h
   with tempfile.TemporaryDirectory() as temp:
    v=Path(temp);(v/'komuta').mkdir();(v/'zihin').mkdir()
-   (v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[{'id':'amber','aliases':['amber']}]}))
+   (v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[{'id':'proje-a','aliases':['proje-a']}]}))
    def row(ident,statement,scope):
     source='zihin/'+ident+'.md';(v/source).write_text(statement)
     return dict(memory_id=ident,kind='semantic',scope=scope,subject_key=ident,statement=statement,status='active',source_path=source,source_content_hash=statement_hash(statement),source_anchor='test',source_hash=statement_hash(statement),observed_at='2026-01-01',valid_from='2026-01-01',valid_to=None,confidence='explicit-user',sensitivity='normal',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
-   target=row('target','Amber ses seviyesi konuşma dengesi','project:amber')
-   noise=[row('noise'+str(i),'Amber ses seviyesi genel kayıt','project:foreign') for i in range(80)]
+   target=row('target','Proje-A ses seviyesi konuşma dengesi','project:proje-a')
+   noise=[row('noise'+str(i),'Proje-A ses seviyesi genel kayıt','project:foreign') for i in range(80)]
    noise.append(row('rare','Sınırlayıcı ayarı','project:foreign'))
    h._write_jsonl(v/h.CATALOG_PATH,[target])
-   self.assertIn('target',g.build_task_package(v,'Amber ses seviyesi sınırlayıcı ayarı')['selected_ids'])
+   self.assertIn('target',g.build_task_package(v,'Proje-A ses seviyesi sınırlayıcı ayarı')['selected_ids'])
    for invalid in (False,True):
     if invalid:
-     for r in noise:r['scope']='project:amber';(v/r['source_path']).write_text('Changed source')
+     for r in noise:r['scope']='project:proje-a';(v/r['source_path']).write_text('Changed source')
     h._write_jsonl(v/h.CATALOG_PATH,[target]+noise)
-    self.assertIn('target',g.build_task_package(v,'Amber ses seviyesi sınırlayıcı ayarı')['selected_ids'])
+    self.assertIn('target',g.build_task_package(v,'Proje-A ses seviyesi sınırlayıcı ayarı')['selected_ids'])
 
  def test_irrelevant_stale_memory_does_not_interrupt_simple_question(self):
   import hafiza as h

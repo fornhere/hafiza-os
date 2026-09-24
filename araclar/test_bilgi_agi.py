@@ -32,7 +32,7 @@ class KnowledgeTests(unittest.TestCase):
         self.d['id']='project-note';self.d['scope']='project:one';b.register(self.v,self.d,True)
         self.assertEqual(len(b.retrieve(self.v,'sunum',project_id='two')['records']),1)
     def test_established_topics_explicit_scope_and_no_generic_dump(self):
-        aliases={'twitter':('Twitter','tweet'), 'proje':('proje','Orvant'),
+        aliases={'twitter':('Twitter','tweet'), 'proje':('proje',),
                  'video':('video','YouTube','çekim')}
         for domain,words in aliases.items():
             for project in ('one','two'):

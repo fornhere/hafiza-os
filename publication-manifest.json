@@ -24,9 +24,9 @@
     {
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
-      "reason": "Public installer supports vault-scoped external Mem0 credentials, optional automatic remote lookup and local override; private runtime retains its current identity and credential source.",
-      "local_sha256": "d57a8ff91fb644ae35a8bdb80bddcae679d0f7b0b87214cf496f204ba1de07ed",
-      "public_sha256": "51cf13b00d6482f43269a42365f579690ac5c0cce6ed0336fe4b94c743d8272f"
+      "reason": "Shared category, note-search, scope-aware duplicate/conflict and condition-safe context logic; public installer supports vault-scoped external Mem0 credentials and optional automatic remote lookup, while private runtime keeps its fixed identity and legacy credential source with explicit remote lookup.",
+      "local_sha256": "4dd2a396ed57d9b5afd51c1e2e776ae50a70ee89588bc5043995a8e0c87c2c58",
+      "public_sha256": "5ad0f594e332205234a43bf3b55834fbc1a013479e4328a55ccc6478cb59aeed"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -72,6 +72,10 @@
     },
     {
       "path": "araclar/yeniden_kullanim.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/ozet.py",
       "mode": "shared"
     },
     {

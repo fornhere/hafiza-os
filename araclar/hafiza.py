@@ -53,6 +53,37 @@ REQUIRED_FIELDS = {
 VALID_KINDS = {"semantic", "episodic", "procedural", "working"}
 VALID_STATUSES = {"active", "quarantined", "superseded", "deleted"}
 VALID_SENSITIVITIES = {"normal", "private", "secret"}
+# İsteğe bağlı kategori: alan yoksa kayıt geçerlidir (geriye uyumluluk).
+CATEGORY_LABELS = {
+    "profile": "profil",
+    "preference": "tercih",
+    "entity": "varlık",
+    "event": "olay",
+    "case": "vaka",
+    "trajectory": "gidişat",
+    "procedure": "yöntem",
+}
+VALID_CATEGORIES = set(CATEGORY_LABELS)
+# Kind ile açıkça çelişen kategoriler; diğer bileşimler serbesttir.
+INCOMPATIBLE_KIND_CATEGORIES = {
+    "semantic": {"case", "trajectory"},
+    "episodic": {"preference", "profile"},
+}
+
+
+def category_errors(kind: Any, category: Any) -> list[str]:
+    """Kategori yoksa hata yok; varsa değer ve kind uyumu denetlenir."""
+    if category is None:
+        return []
+    if category not in VALID_CATEGORIES:
+        return ["geçersiz category"]
+    if category in INCOMPATIBLE_KIND_CATEGORIES.get(kind, set()):
+        return [f"kind {kind} ile category {category} uyumsuz"]
+    return []
+
+
+def category_label(category: Any) -> str | None:
+    return CATEGORY_LABELS.get(category) if category else None
 
 
 def serialized(function):
@@ -140,6 +171,7 @@ def add_candidate(
     confidence: str,
     sensitivity: str,
     proposed_by: str,
+    category: str | None = None,
     evidence: str | None = None,
     evidence_source: dict | None = None,
     rationale: str | None = None,
@@ -151,6 +183,9 @@ def add_candidate(
         raise ValueError("aday kuyruğu yalnız normal duyarlılık kabul eder")
     if kind not in VALID_KINDS or not statement.strip() or not subject_key.strip():
         raise ValueError("geçersiz aday alanları")
+    problems = category_errors(kind, category)
+    if problems:
+        raise ValueError("; ".join(problems))
     if evidence is not None:
         if not 10 <= len(evidence) <= 1500 or contains_secret(evidence):
             raise ValueError("geçersiz veya gizli kaynak kanıtı")
@@ -186,6 +221,8 @@ def add_candidate(
         "created_at": now,
         "schema_version": 1,
     }
+    if category is not None:
+        candidate["category"] = category
     for name, value in (("rationale", rationale), ("conditions", conditions)):
         if value is not None: candidate[name] = value
     if evidence is not None:
@@ -212,6 +249,14 @@ def add_candidate(
 def assess_candidate(
     candidate: dict[str, Any], records: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    def decided(verdict: dict[str, Any]) -> dict[str, Any]:
+        # Category informs the reviewer but never changes duplicate/conflict decisions.
+        category = candidate.get("category")
+        if category is not None:
+            verdict["category"] = category
+            verdict["category_label"] = category_label(category)
+        return verdict
+
     normalized = " ".join(str(candidate["statement"]).casefold().split())
     for record in records:
         if record.get("status") != "active":
@@ -221,9 +266,9 @@ def assess_candidate(
             continue
         current = " ".join(str(record.get("statement", "")).casefold().split())
         if current == normalized:
-            return {"result": "duplicate", "duplicate_of": record.get("memory_id")}
+            return decided({"result": "duplicate", "duplicate_of": record.get("memory_id")})
         if record.get("subject_key") == candidate.get("subject_key"):
-            return {"result": "conflict", "conflicts_with": record.get("memory_id")}
+            return decided({"result": "conflict", "conflicts_with": record.get("memory_id")})
         # Cross-key overlap is a review warning, never an automatic semantic verdict.
         from gorev_baglam import content_words, word_match, inflected
         ignored = ("kullanıcı", "tercih", "eder", "ister", "istiyor", "istiyorum", "kullanır", "kullanıyor")
@@ -233,9 +278,9 @@ def assess_candidate(
         a, b = concepts(candidate["statement"]), concepts(record.get("statement", ""))
         overlap = sum(any(word_match(x,y) for y in b) for x in a)
         if min(len(a),len(b)) >= 2 and overlap >= 2 and overlap / max(1,min(len(a),len(b))) >= 0.6:
-            return {"result": "needs_semantic_review", "related_to": record.get("memory_id"),
-                    "reason": "Farklı anahtarda benzer konu; tekrar/çelişki insan veya kaynak incelemesi gerektirir."}
-    return {"result": "eligible"}
+            return decided({"result": "needs_semantic_review", "related_to": record.get("memory_id"),
+                    "reason": "Farklı anahtarda benzer konu; tekrar/çelişki insan veya kaynak incelemesi gerektirir."})
+    return decided({"result": "eligible"})
 
 
 @serialized
@@ -312,7 +357,7 @@ def promote_candidate(
         "schema_version": 1,
     }
     record["source_content_hash"] = statement_hash(source.read_text(encoding="utf-8"))
-    for field in ("evidence", "evidence_hash", "evidence_source", "rationale", "conditions"):
+    for field in ("category", "evidence", "evidence_hash", "evidence_source", "rationale", "conditions"):
         if field in candidate: record[field] = candidate[field]
     if not apply:
         return {"result": "planned", "record": record}
@@ -358,6 +403,8 @@ def memory_metadata(vault: Path, record: dict[str, Any]) -> dict[str, Any]:
         "supersedes",
     )
     metadata = {key: record.get(key) for key in keys}
+    if record.get("category") is not None:
+        metadata["category"] = record["category"]
     metadata.update(
         {
             "source": "obsidian",
@@ -613,8 +660,10 @@ def context_from_results(
         source = metadata.get("source_path", "kaynak-yok")
         block = metadata.get("block_id", "")
         suffix = f"#{block}" if block else ""
+        label = category_label((record if record is not None else metadata).get("category"))
+        tag = f"({label}) " if label else ""
         line = (
-            f"- [{memory_id}] {item.get('memory', '')}{details} "
+            f"- [{memory_id}] {tag}{item.get('memory', '')}{details} "
             f"(kaynak: {source}{suffix}; tarih: {metadata.get('observed_at', 'bilinmiyor')}; "
             f"güven: {metadata.get('confidence', 'bilinmiyor')})"
         )
@@ -625,6 +674,282 @@ def context_from_results(
             break
     return dict(query=query, scope=scope, included=len(lines), memory_ids=selected_ids,
                 char_budget=char_budget, text="\n".join(lines))
+
+
+NOTE_DENIED_DIRS = ("günlük", "gelen-kutusu", "arşiv", "araclar")
+NOTE_DEFAULT_URIS = ("projeler", "zihin", "komuta")
+NOTE_SUMMARY_SUFFIX = ".ozet.md"
+NOTE_SEPARATOR = "— Notlar —"
+NOTE_EXCERPT_LIMIT = 240
+NOTE_WEIGHT_TITLE = 6
+NOTE_WEIGHT_PATH = 4
+NOTE_BODY_CAP = 3
+_NOTE_HEADING = re.compile(r"^(#{1,3})\s+(.*\S)\s*$")
+_NOTE_FENCE = re.compile(r"^\s*(```|~~~)")
+_NOTE_SUMMARY_FILE = re.compile(r"^\s*-\s+`([^`]+\.md)`\s*(.*)$")
+
+
+def turkish_lower(text: str) -> str:
+    """Lowercase with Turkish dotted/dotless I handled before the generic fold."""
+    return text.replace("I", "ı").replace("İ", "i").lower()
+
+
+def note_terms(text: str) -> list[str]:
+    return sorted({word for word in re.findall(r"\w+", turkish_lower(text)) if len(word) >= 3})
+
+
+def note_words(text: str) -> list[str]:
+    return [word for word in re.findall(r"\w+", turkish_lower(text)) if len(word) >= 3]
+
+
+def note_term_matches(term: str, word: str) -> bool:
+    """Cheap Turkish suffix tolerance: shared prefix (first five characters)."""
+    if term == word:
+        return True
+    if word.startswith(term) or term.startswith(word):
+        return True
+    return term[:5] == word[:5]
+
+
+def _note_term_hits(term: str, words: list[str]) -> int:
+    return sum(1 for word in words if note_term_matches(term, word))
+
+
+def note_uri_targets(vault: Path, uris: list[str] | None, scope: str | None) -> list[Path]:
+    """Resolve --uri values (or the scope default) into safe directories."""
+    requested = [str(uri) for uri in (uris or []) if str(uri).strip()]
+    if not requested:
+        if scope and scope.startswith("project:") and scope.split(":", 1)[1].strip():
+            requested = [f"projeler/{scope.split(':', 1)[1].strip()}"]
+        else:
+            requested = list(NOTE_DEFAULT_URIS)
+    targets: list[Path] = []
+    for raw in requested:
+        relative = raw.strip().replace("\\", "/").strip("/")
+        if not relative or Path(relative).is_absolute():
+            raise ValueError(f"geçersiz --uri: {raw}")
+        parts = [part for part in relative.split("/") if part not in ("", ".")]
+        if any(part == ".." for part in parts):
+            raise ValueError(f"kasa dışına çıkan --uri: {raw}")
+        for part in parts:
+            if part in NOTE_DENIED_DIRS:
+                raise ValueError(f"taranması yasak dizin: {part}")
+        candidate = vault.joinpath(*parts)
+        if candidate.is_dir() and candidate not in targets:
+            targets.append(candidate)
+    return targets
+
+
+def note_markdown_files(targets: list[Path]) -> dict[Path, list[Path]]:
+    """Group scannable .md files by directory, pruning hidden and denied folders."""
+    grouped: dict[Path, list[Path]] = {}
+    for root in targets:
+        for current, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(
+                name for name in dirnames
+                if name not in NOTE_DENIED_DIRS and not name.startswith(".")
+            )
+            files = sorted(
+                Path(current) / name for name in filenames
+                if name.endswith(".md") and not name.endswith(NOTE_SUMMARY_SUFFIX)
+            )
+            if files:
+                grouped[Path(current)] = files
+    return grouped
+
+
+def note_summary_path(directory: Path) -> Path | None:
+    exact = directory / NOTE_SUMMARY_SUFFIX
+    if exact.is_file():
+        return exact
+    matches = sorted(path for path in directory.glob(f"*{NOTE_SUMMARY_SUFFIX}") if path.is_file())
+    return matches[0] if matches else None
+
+
+def note_summary_lines(path: Path) -> dict[str, str]:
+    """Map `DOSYA.md` -> description text from a sibling .ozet.md file listing."""
+    listing: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return listing
+    for line in text.splitlines():
+        match = _NOTE_SUMMARY_FILE.match(line)
+        if match:
+            listing[match.group(1).strip()] = match.group(2).strip()
+    return listing
+
+
+def note_prefilter(directory: Path, files: list[Path], terms: list[str]) -> list[Path]:
+    """Summary hits open first; files the summary never lists are always kept."""
+    summary = note_summary_path(directory)
+    if summary is None:
+        return files
+    listing = note_summary_lines(summary)
+    if not listing:
+        return files
+    matching: list[Path] = []
+    unlisted: list[Path] = []
+    for path in files:
+        description = listing.get(path.name)
+        if description is None:
+            unlisted.append(path)
+            continue
+        words = note_words(f"{path.name} {description}")
+        if any(_note_term_hits(term, words) for term in terms):
+            matching.append(path)
+    return matching + unlisted if matching else files
+
+
+def note_slug(title: str) -> str:
+    """Obsidian-style anchor: plain lowercase, so "AI" stays "ai", not "aı"."""
+    slug = re.sub(r"[^\w\s-]", "", title.replace("İ", "i").lower(), flags=re.UNICODE)
+    return re.sub(r"[\s-]+", "-", slug).strip("-")
+
+
+def note_sections(path: Path) -> list[dict[str, Any]]:
+    """Split a note into H1/H2/H3 blocks, dropping frontmatter and fenced code."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    lines = raw.splitlines()
+    if lines and lines[0].strip() == "---":
+        for index in range(1, len(lines)):
+            if lines[index].strip() == "---":
+                lines = lines[index + 1:]
+                break
+    sections: list[dict[str, Any]] = []
+    current = {"title": "", "body": []}
+    fence: str | None = None
+    for line in lines:
+        fence_match = _NOTE_FENCE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            fence = None if fence == marker else (fence or marker)
+            continue
+        if fence:
+            continue
+        heading = _NOTE_HEADING.match(line)
+        if heading:
+            sections.append(current)
+            current = {"title": heading.group(2), "body": []}
+            continue
+        current["body"].append(line)
+    sections.append(current)
+    return [item for item in sections if item["title"] or "".join(item["body"]).strip()]
+
+
+def note_excerpt(section: dict[str, Any]) -> str:
+    body = re.sub(r"\s+", " ", " ".join(section["body"])).strip()
+    return (body or section["title"])[:NOTE_EXCERPT_LIMIT].strip()
+
+
+def note_modified(path: Path) -> str:
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        return "bilinmiyor"
+    return dt.datetime.fromtimestamp(stamp, dt.timezone.utc).date().isoformat()
+
+
+def search_notes(vault: Path, query: str, *, scope: str | None = None,
+                 uris: list[str] | None = None) -> list[dict[str, Any]]:
+    """Deterministic heading-block search over note bodies; no vectors, no model."""
+    terms = note_terms(query)
+    if not terms:
+        return []
+    found: list[dict[str, Any]] = []
+    grouped = note_markdown_files(note_uri_targets(vault, uris, scope))
+    for directory in sorted(grouped):
+        for path in note_prefilter(directory, grouped[directory], terms):
+            relative = path.relative_to(vault).as_posix()
+            path_words = note_words(f"{path.stem} {path.parent.name}")
+            for section in note_sections(path):
+                body = " ".join(section["body"])
+                if contains_secret(f"{section['title']}\n{body}"):
+                    continue
+                title_words = note_words(section["title"])
+                body_words = note_words(body)
+                score = 0.0
+                matched = 0
+                for term in terms:
+                    hits = 0
+                    if _note_term_hits(term, title_words):
+                        hits += NOTE_WEIGHT_TITLE
+                    if _note_term_hits(term, path_words):
+                        hits += NOTE_WEIGHT_PATH
+                    hits += min(_note_term_hits(term, body_words), NOTE_BODY_CAP)
+                    if hits:
+                        matched += 1
+                    score += hits
+                if not score:
+                    continue
+                found.append({
+                    "path": relative,
+                    "anchor": note_slug(section["title"] or path.stem),
+                    "score": round(score + matched, 3),
+                    "excerpt": note_excerpt(section),
+                    "modified": note_modified(path),
+                })
+    return sorted(found, key=lambda item: (-item["score"], item["path"], item["anchor"]))
+
+
+def note_line(note: dict[str, Any]) -> str:
+    return (f"- [not] {note['path']}#{note['anchor']} — {note['excerpt']} "
+            f"(değişme: {note['modified']})")
+
+
+def attach_notes(package: dict[str, Any], notes: list[dict[str, Any]], *,
+                 limit: int = 5, char_budget: int = 1200) -> dict[str, Any]:
+    """Append note hits under a separator, keeping char_budget a total budget."""
+    base = [package["text"]] if package.get("text") else []
+    chosen: list[dict[str, Any]] = []
+    lines: list[str] = []
+    for note in notes:
+        if len(chosen) >= limit:
+            break
+        line = note_line(note)
+        if len("\n".join(base + [NOTE_SEPARATOR] + lines + [line])) > char_budget:
+            continue
+        chosen.append(note)
+        lines.append(line)
+    if lines:
+        package["text"] = "\n".join(base + [NOTE_SEPARATOR] + lines)
+    package["notes"] = [
+        {key: note[key] for key in ("path", "anchor", "score", "excerpt")} for note in chosen
+    ]
+    return package
+
+
+NOTE_BUDGET_SHARE = 40  # yüzde
+
+
+def catalog_budget(char_budget: int, has_notes: bool) -> int:
+    """Not bulunduysa bütçenin %40'ı notlara ayrılır; yoksa katalog hepsini kullanır."""
+    if not has_notes:
+        return char_budget
+    return char_budget - char_budget * NOTE_BUDGET_SHARE // 100
+
+
+def context_with_notes(vault: Path, package: dict[str, Any], *, scope: str | None = None,
+                       uris: list[str] | None = None, limit: int = 5,
+                       char_budget: int = 1200) -> dict[str, Any]:
+    notes = search_notes(vault, package["query"], scope=scope, uris=uris)
+    return attach_notes(package, notes, limit=limit, char_budget=char_budget)
+
+
+def context_package_with_notes(vault: Path, results: list[dict[str, Any]], *, query: str,
+                               scope: str | None = None, uris: list[str] | None = None,
+                               limit: int = 5, char_budget: int = 1200,
+                               records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Katalog ve not satırları ayrı paylarla; notlar tek havuzda ezilmez."""
+    notes = search_notes(vault, query, scope=scope, uris=uris)
+    package = context_from_results(results, query=query, scope=scope, limit=limit,
+                                   char_budget=catalog_budget(char_budget, bool(notes)),
+                                   records=records)
+    package["char_budget"] = char_budget
+    return attach_notes(package, notes, limit=limit, char_budget=char_budget)
 
 
 def build_context_package(
@@ -735,6 +1060,26 @@ def forget_remote(
     return {"result": "deleted", "mem0_id": memory_id, "approved_by": approved_by}
 
 
+def category_report(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aktif kayıtların kategori dağılımı; etiketleme yapmaz, yalnız sayar."""
+    active = [record for record in records if record.get("status") == "active"]
+    distribution = {name: 0 for name in sorted(VALID_CATEGORIES)}
+    uncategorized = 0
+    for record in active:
+        category = record.get("category")
+        if category in distribution:
+            distribution[category] += 1
+        else:
+            uncategorized += 1
+    return {
+        "active_total": len(active),
+        "uncategorized": uncategorized,
+        "categorized": len(active) - uncategorized,
+        "distribution": distribution,
+        "labels": dict(CATEGORY_LABELS),
+    }
+
+
 def validate_catalog(vault: Path, records: list[dict[str, Any]]) -> list[str]:
     errors: list[str] = []
     memory_ids: set[str] = set()
@@ -759,6 +1104,8 @@ def validate_catalog(vault: Path, records: list[dict[str, Any]]) -> list[str]:
             errors.append(f"{memory_id}: geçersiz status")
         if record["sensitivity"] not in VALID_SENSITIVITIES:
             errors.append(f"{memory_id}: geçersiz sensitivity")
+        for problem in category_errors(record.get("kind"), record.get("category")):
+            errors.append(f"{memory_id}: {problem}")
         if record["schema_version"] != 1:
             errors.append(f"{memory_id}: desteklenmeyen schema_version")
         statement = str(record["statement"])
@@ -1009,6 +1356,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("validate")
     sub.add_parser("audit")
+    sub.add_parser("category-report")
     binding = sub.add_parser("bind-source")
     binding.add_argument("--input-json", type=Path, required=True)
     binding.add_argument("--apply", action="store_true")
@@ -1025,6 +1373,8 @@ def _build_parser() -> argparse.ArgumentParser:
     candidate.add_argument("--confidence", default="explicit-user")
     candidate.add_argument("--sensitivity", default="normal", choices=sorted(VALID_SENSITIVITIES))
     candidate.add_argument("--proposed-by", required=True)
+    candidate.add_argument("--category", default=None, choices=sorted(VALID_CATEGORIES),
+                           help="İsteğe bağlı hafıza kategorisi (OpenViking sınıfları)")
     candidate.add_argument("--evidence", help="Kaynak dosyada aynen bulunan kısa kullanıcı beyanı")
 
     candidate.add_argument("--rationale")
@@ -1045,6 +1395,8 @@ def _build_parser() -> argparse.ArgumentParser:
     context.add_argument("--local", action="store_true", help="Bu çağrıda Mem0 erişimini kapat")
     context.add_argument("--remote", action="store_true", help="İsteğe bağlı Mem0 sıralaması; hata halinde yerel erişim")
     context.add_argument("--scope", default="user")
+    context.add_argument("--uri", action="append", default=[],
+                         help="Not gövdesi taraması için kasa köküne göreli dizin (tekrarlanabilir)")
     context.add_argument("--limit", type=int, default=5)
     context.add_argument("--char-budget", type=int, default=1200)
     context.add_argument("--threshold", type=float, default=0.1)
@@ -1075,6 +1427,10 @@ def main(argv: list[str] | None = None) -> int:
         _json_print({"catalog_errors": errors, "record_count": len(records)})
         return 1 if errors else 0
 
+    if args.command == "category-report":
+        _json_print(category_report(records))
+        return 0
+
     if args.command == "candidate-add":
         result = add_candidate(
             vault,
@@ -1087,6 +1443,7 @@ def main(argv: list[str] | None = None) -> int:
             confidence=args.confidence,
             sensitivity=args.sensitivity,
             proposed_by=args.proposed_by,
+            category=args.category,
             evidence=args.evidence, rationale=args.rationale, conditions=args.conditions,
         )
         _json_print(result)
@@ -1129,13 +1486,9 @@ def main(argv: list[str] | None = None) -> int:
                 mode = 'remote+local'
             except (Exception,) as exc:
                 fallback = type(exc).__name__
-        result = context_from_results(
-            results,
-            query=args.query,
-            scope=args.scope,
-            limit=args.limit,
-            char_budget=args.char_budget,
-            records=records,
+        result = context_package_with_notes(
+            vault, results, query=args.query, scope=args.scope, uris=args.uri,
+            limit=args.limit, char_budget=args.char_budget, records=records,
         )
         result.update(mode=mode, fallback_reason=fallback, catalog_errors=errors)
         _json_print(result)

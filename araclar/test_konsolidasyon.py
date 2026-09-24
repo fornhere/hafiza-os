@@ -18,9 +18,9 @@ class Pipeline(unittest.TestCase):
         self.vault = Path(self.tmp.name)
         for i in range(6):
             hook.hook(self.vault, dict(session_id="s", turn_id="t" if i == 5 else str(i), hook_event_name="UserPromptSubmit", prompt="Gerçek test isteği"))
-        self.evidence = 'Videolarımın açıklaması yapay zekâ odaklı olsun.'
-        self.proposal = dict(statement='Forn video açıklamalarında yapay zekâ odağını tercih eder.',
-                             subject_key='channel.seo-focus', evidence=self.evidence)
+        self.evidence = 'Belgelerin başlıkları kısa olsun.'
+        self.proposal = dict(statement='Kullanıcı belgelerde kısa başlık tercih eder.',
+                             subject_key='docs.title-style', evidence=self.evidence)
 
     def receipt(self):
         path=self.vault/'original.jsonl'
@@ -88,8 +88,8 @@ class Pipeline(unittest.TestCase):
         h.promote_candidate(self.vault, cid, memory_id='old', reviewed_by='test', apply=True)
         client = FakeMem0([])
         h.sync_existing(self.vault, h.load_catalog(self.vault), client, apply=True)
-        second = h.add_candidate(self.vault, statement='Forn yeni bir kanal odağı seçti.', kind='semantic',
-            scope='user', subject_key='channel.seo-focus', source_path=str(Path(first['saved']).relative_to(self.vault)),
+        second = h.add_candidate(self.vault, statement='Kullanıcı yeni bir başlık biçimi seçti.', kind='semantic',
+            scope='user', subject_key='docs.title-style', source_path=str(Path(first['saved']).relative_to(self.vault)),
             source_anchor='beyan', confidence='explicit-user', sensitivity='normal', proposed_by='test')
         with self.assertRaisesRegex(ValueError, 'eşleşmeli'):
             h.promote_candidate(self.vault, second['candidate_id'], memory_id='new', reviewed_by='test', supersedes='wrong', apply=True)

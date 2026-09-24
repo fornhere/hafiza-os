@@ -27,6 +27,37 @@ class Publication(unittest.TestCase):
             (repo/'araclar/missing.py').write_text('')
             with self.assertRaises(ValueError): y.parity(repo,vault)
 
+    def scan_tree(self, name, body):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        repo = Path(directory.name)
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(body, encoding='utf-8')
+        return repo
+
+    def test_scan_rejects_personal_email_and_absolute_home_paths(self):
+        # Literals are assembled at runtime so this file stays publishable itself.
+        rejected = {'note.md': 'yazan ada.lovelace' + '@' + 'mail.gorunur.tr adresi',
+                    'mac.md': 'kasa /Users' + '/someone/Hafiza altinda',
+                    'linux.md': 'kasa /home' + '/someone/Hafiza altinda',
+                    'aws.txt': 'anahtar AKIA' + 'IOSFODNN7GORUNUR burada'}
+        for name, body in rejected.items():
+            with self.subTest(name=name):
+                repo = self.scan_tree(name, body)
+                with self.assertRaisesRegex(ValueError, 'publication scan rejected'):
+                    y.scan(repo, [name])
+
+    def test_scan_allows_placeholder_and_noreply_addresses(self):
+        body = ('test@example.invalid ve 1+kullanici@users.noreply.github.com ve '
+                'noreply@anthropic.com adresleri paylasilabilir')
+        repo = self.scan_tree('ok.md', body)
+        y.scan(repo, ['ok.md'])
+        self.assertEqual(y.findings(body), [])
+
+    def test_scan_skips_its_own_detector_source(self):
+        repo = self.scan_tree(y.SELF_PATH, Path(y.__file__).read_text(encoding='utf-8'))
+        y.scan(repo, [y.SELF_PATH])
+
     def test_dirty_tree_is_rejected_before_tests(self):
         from unittest.mock import patch
         with patch.object(y,'run',return_value=' M file'):

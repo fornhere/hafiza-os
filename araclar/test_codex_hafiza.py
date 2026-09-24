@@ -148,13 +148,28 @@ class Hooks(unittest.TestCase):
         (self.vault/'zihin').mkdir()
         path=self.vault/'zihin/son-oturum.md'
         path.write_text('## 2026-09-16 — güncel\n'+('güncel '*1000)+'\n## 2026-01-01 — eski\nESKİ BİLGİ')
-        text=h.latest_session_section(self.vault)
+        text=h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 18))
         self.assertLessEqual(len(text),2500)
         self.assertNotIn('ESKİ BİLGİ',text)
         self.assertIn('Kesildi',text)
         opening=self.event('SessionStart')['hookSpecificOutput']['additionalContext']
         self.assertIn('latest-session',opening)
         self.assertIn('Kısa agents.md açılış sözleşmesi geçerlidir',opening)
+
+    def test_latest_section_old_date_returns_one_line_and_cli_agrees(self):
+        import contextlib
+        import io
+        (self.vault/'zihin').mkdir()
+        (self.vault/'zihin/son-oturum.md').write_text('## 2000-01-01 — eski\nÖzel eski içerik\n')
+        message=h.latest_session_section(self.vault, today=h.dt.date(2000, 1, 5))
+        self.assertEqual('Son oturum kaydı 2000-01-01 tarihli (4 gün eski); güncel durum kanıtı değil, açık işler özetini kullan.', message)
+        self.assertNotIn('Özel eski içerik', message)
+        output=io.StringIO()
+        from unittest.mock import patch
+        with contextlib.redirect_stdout(output), patch.object(h.sys, 'argv', ['codex_hafiza.py', '--vault', str(self.vault), 'latest-session']):
+            self.assertIsNone(h.main())
+        self.assertIn('Son oturum kaydı 2000-01-01 tarihli (', output.getvalue())
+        self.assertNotIn('Özel eski içerik', output.getvalue())
 
 if __name__ == '__main__':
     unittest.main()

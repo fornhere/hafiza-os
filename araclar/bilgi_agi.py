@@ -14,7 +14,7 @@ DOMAIN_ALIASES = {'site':('site','web','website'),
                   'sunum':('sunum','slayt','slideshow'),
                   'thumbnail':('thumbnail','kapak'),
                   'twitter':('twitter','tweet'),
-                  'proje':('proje','orvant'),
+                  'proje':('proje',),
                   'video':('video','youtube','çekim')}
 
 

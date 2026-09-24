@@ -132,7 +132,7 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
     return {'saved': str(note), 'candidates': queued}
 
 
-def latest_session_section(vault, limit=2500):
+def latest_session_section(vault, limit=2500, today=None):
     """Read the newest dated section without sending the whole journal to the model."""
     path = vault / 'zihin/son-oturum.md'
     if not path.exists(): return 'Son oturum notu yok.'
@@ -140,6 +140,11 @@ def latest_session_section(vault, limit=2500):
     matches = list(re.finditer(r'^## (\d{4}-\d{2}-\d{2})[^\n]*', text, re.M))
     if not matches: return 'Tarihli son oturum bölümü bulunamadı; gerekirse kaynakta ara.'
     index = max(range(len(matches)), key=lambda i: (matches[i].group(1), i))
+    date_text = matches[index].group(1)
+    age = ((today or dt.date.today()) - dt.date.fromisoformat(date_text)).days
+    if age > 3:
+        return (f'Son oturum kaydı {date_text} tarihli ({age} gün eski); '
+                'güncel durum kanıtı değil, açık işler özetini kullan.')
     section = text[matches[index].start():matches[index+1].start() if index+1<len(matches) else len(text)].strip()
     if len(section)>limit:
         section=section[:max(0,limit-90)]+'\n[Kesildi; yalnız gereken ayrıntı için kaynak bölümü aç.]'
