@@ -168,6 +168,14 @@
     {
       "path": "araclar/test_erisim_olc.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/hafiza_rapor.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_hafiza_rapor.py",
+      "mode": "shared"
     }
   ]
 }
