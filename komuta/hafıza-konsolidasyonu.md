@@ -5,7 +5,7 @@ Bu isteğe bağlı akış etkinleştirildiğinde görev ajanı yalnız makbuz ve
 Bu rol bağımsız ikinci model olduğu anlamına gelmez.
 
 1. `konsolidasyon.py status`, `pending` ve `sessions` ile
-   bekleyenleri incele. Varsayılan tarama son 21 gündür (UTC); geçmişe dönük
+   bekleyenleri incele. Varsayılan tarama son 14 gündür (UTC); geçmişe dönük
    inceleme için `--since YYYY-AA-GG` ver. Beş mesajı aşmayan,
    otomatik bağlamlardan oluşan veya kaydedilmesi istenmeyen konuşmayı aktarma.
 2. Kaynak konuşmada anlamlı karar/sonuç varsa kısa makbuz üret. Ham konuşma,

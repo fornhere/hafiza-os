@@ -182,14 +182,14 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(['second'], [r['session_id'] for r in k.sessions(self.vault, root, since, 0)])
 
 class ScheduledScan(unittest.TestCase):
-    def test_cli_default_since_is_last_21_days_utc(self):
-        before=dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=21)
+    def test_cli_default_since_is_last_14_days_utc(self):
+        before=dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=14)
         with tempfile.TemporaryDirectory() as directory, patch.object(sys,'argv',[
                 'konsolidasyon.py','--vault',directory,'sessions','--codex-root',directory]), \
                 patch.object(k,'scan_with_receipt',return_value=[]) as scan, \
                 contextlib.redirect_stdout(io.StringIO()):
             k.main()
-        after=dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=21)
+        after=dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=14)
         self.assertLessEqual(before,scan.call_args.args[2])
         self.assertLessEqual(scan.call_args.args[2],after)
 

@@ -260,7 +260,7 @@ def main():
     elif args.cmd == 'checkpoint': result = checkpoint(vault, json.loads(args.input_json.read_text()))
     else:
         since = (dt.datetime.fromisoformat(args.since).replace(tzinfo=dt.timezone.utc) if args.since
-                 else dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=21))
+                 else dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=14))
         result = scan_with_receipt(vault, args.codex_root, since, scheduled=args.scheduled)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if args.cmd == 'health' and args.check:
