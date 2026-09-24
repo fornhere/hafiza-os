@@ -71,6 +71,15 @@ class NativeFixture(unittest.TestCase):
                 'summary': 'Yerel uygulama tamamlandı; kullanıcı kabulü bekleniyor.',
                 'evidence': [{k: evidence[k] for k in ('line', 'line_sha256', 'quote')}]}
 
+    def semantic_decision(self, ident, count=1, record=True):
+        decision = self.judgment(ident, record=record)
+        decision['semantic_candidates'] = [
+            {'statement': f'Kullanıcı kalıcı tercih {index} belirtti.',
+             'subject_key': f'user.preference.{index}',
+             'evidence': 'Kalıcı tercih: kısa özet kullan.'}
+            for index in range(count)]
+        return decision
+
     def cli(self, event, payload=None):
         process = subprocess.run([sys.executable, '-X', 'utf8', str(Path(hooks.__file__)),
                                   '--vault', str(self.vault), '--client', self.client, '--event', event],
@@ -81,6 +90,77 @@ class NativeFixture(unittest.TestCase):
 
 
 class NativeSessions(NativeFixture):
+    def test_verified_semantic_candidate_queues_and_source_note_replays(self):
+        from hafiza import CANDIDATE_PATH, load_jsonl
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.write()
+        ident = self.register()['id']
+        decision = self.semantic_decision(ident)
+        self.assertEqual(sessions.review(self.vault, ident, decision)['semantic_candidates'][0]['status'], 'accepted')
+        result = sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(result['semantic_candidates'][0]['queue_result'], 'queued')
+        note = self.vault / sessions.INBOX / (ident + '.md')
+        self.assertIn('Durum: episodik makbuz; kanonik değil', note.read_text(encoding='utf-8'))
+        self.assertIn(decision['semantic_candidates'][0]['evidence'], note.read_text(encoding='utf-8'))
+        queued = load_jsonl(self.vault / CANDIDATE_PATH)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]['source_path'], str(note.relative_to(self.vault)))
+        self.assertEqual(queued[0]['source_anchor'], 'Kullanıcı beyanı')
+        self.assertEqual(queued[0]['proposed_by'], 'claude-review')
+        self.assertNotIn('evidence_source', queued[0])
+        self.assertTrue(sessions.review(self.vault, ident, decision, True)['replay'])
+        self.assertEqual(load_jsonl(self.vault / CANDIDATE_PATH), queued)
+        note.write_text(note.read_text(encoding='utf-8') + 'tampered', encoding='utf-8')
+        self.assertEqual(sessions.recall(self.vault), '')
+        with self.assertRaisesRegex(SourceError, 'receipt_mutated'):
+            sessions.review(self.vault, ident, decision, True)
+
+    def test_semantic_rejects_assistant_quote_but_keeps_valid_candidate(self):
+        from hafiza import CANDIDATE_PATH, load_jsonl
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.write()
+        ident = self.register()['id']
+        decision = self.semantic_decision(ident)
+        decision['semantic_candidates'].append(dict(statement='Asistanın sözünü kullanıcı tercihi say.',
+            subject_key='user.invalid', evidence='Uygulama sonucu 5'))
+        result = sessions.review(self.vault, ident, decision, True)['semantic_candidates']
+        self.assertEqual([item['status'] for item in result], ['accepted', 'rejected'])
+        self.assertIn('evidence_not_user_message', result[1]['reasons'])
+        self.assertEqual(len(load_jsonl(self.vault / CANDIDATE_PATH)), 1)
+
+    def test_semantic_skip_limit_and_secret_are_individual_rejections(self):
+        from hafiza import CANDIDATE_PATH, load_jsonl
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.write()
+        ident = self.register()['id']
+        decision = self.semantic_decision(ident, record=False)
+        result = sessions.review(self.vault, ident, decision, True)['semantic_candidates']
+        self.assertIn('skip_decision', result[0]['reasons'])
+        self.assertFalse((self.vault / CANDIDATE_PATH).exists())
+        self.assertFalse((self.vault / sessions.INBOX / (ident + '.md')).exists())
+        self.rows = self.claude_rows()
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.rows[-1]['message']['content'][1]['text'] = 'Yeni tamamlanan iş'
+        self.write()
+        ident = self.register()['id']
+        decision = self.semantic_decision(ident, count=6)
+        decision['semantic_candidates'][1]['statement'] = 'sk-' + 'a' * 48
+        result = sessions.review(self.vault, ident, decision, True)['semantic_candidates']
+        self.assertIn('secret_candidate', result[1]['reasons'])
+        self.assertIn('candidate_limit', result[5]['reasons'])
+        self.assertEqual(len(load_jsonl(self.vault / CANDIDATE_PATH)), 4)
+
+    def test_semantic_source_note_conflict_blocks_queue(self):
+        from hafiza import CANDIDATE_PATH
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.write()
+        ident = self.register()['id']
+        note = self.vault / sessions.INBOX / (ident + '.md')
+        note.write_text('another decision', encoding='utf-8')
+        with self.assertRaisesRegex(SourceError, 'receipt_conflict'):
+            sessions.review(self.vault, ident, self.semantic_decision(ident), True)
+        self.assertFalse((self.vault / CANDIDATE_PATH).exists())
+
     def test_six_messages_pending_review_reopen_both_clients(self):
         for client in ('claude', 'antigravity'):
             with self.subTest(client=client):
@@ -362,7 +442,7 @@ class NativeSessions(NativeFixture):
     def test_changed_prefix_evidence_and_review_gates(self):
         ident = self.register()['id']; original = self.judgment(ident)
         for field, value in (('meaningful', False), ('reviewer_role', ''), ('summary', 'x'*4001),
-                             ('summary', 'sk-' + 'a'*48), ('evidence', []), ('semantic_candidates', [])):
+                             ('summary', 'sk-' + 'a'*48), ('evidence', []), ('semantic_candidates', {})):
             decision = dict(original, **{field: value})
             with self.subTest(field=field), self.assertRaises(SourceError): sessions.review(self.vault, ident, decision, True)
         bad = dict(original, evidence=[dict(original['evidence'][0], quote='not present')])

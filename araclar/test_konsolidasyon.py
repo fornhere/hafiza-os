@@ -1,9 +1,13 @@
 import datetime as dt
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import hafiza as h
 import codex_hafiza as hook
@@ -178,6 +182,25 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(['second'], [r['session_id'] for r in k.sessions(self.vault, root, since, 0)])
 
 class ScheduledScan(unittest.TestCase):
+    def test_cli_default_since_is_last_21_days_utc(self):
+        before=dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=21)
+        with tempfile.TemporaryDirectory() as directory, patch.object(sys,'argv',[
+                'konsolidasyon.py','--vault',directory,'sessions','--codex-root',directory]), \
+                patch.object(k,'scan_with_receipt',return_value=[]) as scan, \
+                contextlib.redirect_stdout(io.StringIO()):
+            k.main()
+        after=dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=21)
+        self.assertLessEqual(before,scan.call_args.args[2])
+        self.assertLessEqual(scan.call_args.args[2],after)
+
+    def test_cli_explicit_since_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(sys,'argv',[
+                'konsolidasyon.py','--vault',directory,'sessions','--since','2026-09-12']), \
+                patch.object(k,'scan_with_receipt',return_value=[]) as scan, \
+                contextlib.redirect_stdout(io.StringIO()):
+            k.main()
+        self.assertEqual(dt.datetime(2026,9,12,tzinfo=dt.timezone.utc),scan.call_args.args[2])
+
     def test_manual_scan_never_refreshes_scheduled_receipt(self):
         from hafiza_saglik import RUN_PATH
         with tempfile.TemporaryDirectory() as directory:
@@ -188,6 +211,7 @@ class ScheduledScan(unittest.TestCase):
             self.assertFalse(target.exists())
             k.scan_with_receipt(vault,vault/'empty',since,scheduled=True)
             before=target.read_bytes()
+            self.assertEqual(since.isoformat(),json.loads(before)['since'])
             k.scan_with_receipt(vault,vault/'empty',since)
             self.assertEqual(before,target.read_bytes())
 

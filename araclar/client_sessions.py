@@ -8,12 +8,13 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import sys
 import time
 
 from platform_lock import exclusive_lock
-from hafiza import contains_secret
+from hafiza import add_candidate, category_errors, contains_secret
 from client_transcripts import CLIENTS, SourceError, parse, private, read_bytes, safe_path, sha, strict_json
 
 INBOX = Path('gelen-kutusu/ajan-oturumlari')
@@ -35,6 +36,73 @@ def atomic(path, value):
     finally:
         if os.path.exists(name):
             os.unlink(name)
+
+
+def atomic_text(path, value):
+    safe_path(path)
+    fd, name = tempfile.mkstemp(prefix='.write-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as out:
+            os.chmod(name, 0o600)
+            out.write(value)
+            out.flush()
+            os.fsync(out.fileno())
+        safe_path(path)
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def semantic_results(decision, source):
+    candidates = decision.get('semantic_candidates', [])
+    if not isinstance(candidates, list):
+        raise SourceError('invalid_semantic_candidates')
+    user_texts = [entry['quote'] for entry in source['entries'] if entry['role'] == 'user']
+    results = []
+    for index, candidate in enumerate(candidates):
+        reasons = []
+        if index >= 5:
+            reasons.append('candidate_limit')
+        if not isinstance(candidate, dict) or set(candidate) - {'statement', 'subject_key', 'evidence', 'category'}:
+            reasons.append('invalid_candidate_schema')
+        else:
+            statement, key, evidence = (candidate.get(name) for name in ('statement', 'subject_key', 'evidence'))
+            if not isinstance(statement, str) or not 10 <= len(statement.strip()) <= 600:
+                reasons.append('invalid_statement')
+            elif contains_secret(statement):
+                reasons.append('secret_candidate')
+            if not isinstance(key, str) or not re.fullmatch(r'[a-z0-9._-]+', key):
+                reasons.append('invalid_subject_key')
+            elif contains_secret(key):
+                reasons.append('secret_candidate')
+            if not isinstance(evidence, str) or not 10 <= len(evidence) <= 1500:
+                reasons.append('invalid_evidence')
+            elif contains_secret(evidence) or private(evidence):
+                reasons.append('unsafe_evidence')
+            elif not any(evidence in text for text in user_texts):
+                reasons.append('evidence_not_user_message')
+            if 'category' in candidate:
+                if not isinstance(candidate['category'], str) or category_errors('semantic', candidate['category']):
+                    reasons.append('invalid_category')
+        if decision['decision'] == 'skip':
+            reasons.append('skip_decision')
+        results.append({'index': index, 'status': 'rejected' if reasons else 'accepted',
+                        'reasons': reasons})
+    return results
+
+
+def semantic_note(ident, decision, results):
+    accepted = [decision['semantic_candidates'][result['index']] for result in results
+                if result['status'] == 'accepted']
+    if not accepted:
+        return None
+    sections = [f'# Oturum incelemesi {ident}', '',
+                'Durum: episodik makbuz; kanonik değil', '', decision['summary'].strip(), '']
+    for index, candidate in enumerate(accepted, 1):
+        sections.extend([f'## Kullanıcı beyanı {index}', '', candidate['statement'].strip(), '',
+                         'Kullanıcı beyanı:', '', candidate['evidence'], ''])
+    return '\n'.join(sections) + '\n'
 
 
 def layout(vault):
@@ -194,15 +262,14 @@ def review(vault, ident, decision, apply=False):
             raise SourceError('invalid_review_schema')
         if len(json.dumps(decision, ensure_ascii=False).encode('utf-8')) > 32000:
             raise SourceError('review_too_large')
-        if 'semantic_candidates' in decision:
-            raise SourceError('semantic_candidates_unsupported')
         if decision.get('decision') not in ('record', 'skip') or type(decision.get('meaningful')) is not bool:
             raise SourceError('explicit_judgment_required')
         for field, maximum in (('reviewer_role', 100), ('reason', 1000), ('summary', 4000)):
             value = decision.get(field)
             if not isinstance(value, str) or not value.strip() or len(value) > maximum:
                 raise SourceError('invalid_review_' + field)
-        if contains_secret(json.dumps(decision, ensure_ascii=False)) or private(decision['summary']):
+        episodic = {key: value for key, value in decision.items() if key != 'semantic_candidates'}
+        if contains_secret(json.dumps(episodic, ensure_ascii=False)) or private(decision['summary']):
             raise SourceError('unsafe_review')
         if decision['decision'] == 'record' and decision['meaningful'] is not True:
             raise SourceError('meaningful_judgment_required')
@@ -218,6 +285,9 @@ def review(vault, ident, decision, apply=False):
             if not entry or not isinstance(ref['quote'], str) or not ref['quote'].strip() or len(ref['quote']) > 6000 or ref['quote'] not in entry['quote'] or ref['line_sha256'] != entry['line_sha256']:
                 raise SourceError('evidence_mismatch')
             refs.append(dict(line=ref['line'], line_sha256=ref['line_sha256'], quote_sha256=sha(ref['quote'].encode())))
+        candidate_results = semantic_results(decision, source)
+        note = semantic_note(ident, decision, candidate_results)
+        note_path = root / (ident + '.md')
         decision_hash = sha(json.dumps(decision, sort_keys=True, ensure_ascii=False).encode())
         target = root / (ident + '.json')
         if item['status'] in ('record', 'skip'):
@@ -225,27 +295,57 @@ def review(vault, ident, decision, apply=False):
                 raise SourceError('already_reviewed')
             if sha(read_bytes(target, 128000)) != item.get('receipt_sha256'):
                 raise SourceError('receipt_mutated')
-            return {'id': ident, 'status': item['status'], 'replay': True}
+            if note is not None and (not note_path.exists() or
+                    read_bytes(note_path, 128000) != note.encode('utf-8') or
+                    sha(read_bytes(note_path, 128000)) != item.get('note_sha256')):
+                raise SourceError('receipt_mutated')
+            return {'id': ident, 'status': item['status'], 'replay': True,
+                    **({'semantic_candidates': candidate_results} if 'semantic_candidates' in decision else {})}
         if item['status'] != 'pending':
             raise SourceError('not_pending')
         if not apply:
-            return {'id': ident, 'status': 'dry_run', 'decision': decision['decision']}
+            return {'id': ident, 'status': 'dry_run', 'decision': decision['decision'],
+                    **({'semantic_candidates': candidate_results} if 'semantic_candidates' in decision else {})}
         # Re-read the original source immediately before publishing the receipt.
-        _validate(item, state)
+        source = _validate(item, state)
+        candidate_results = semantic_results(decision, source)
+        note = semantic_note(ident, decision, candidate_results)
         receipt = dict(version=1, id=ident, scope='episodic_candidate', decision=decision['decision'],
                        meaningful=decision['meaningful'], reviewer_role=decision['reviewer_role'],
                        reason=decision['reason'], summary=decision['summary'], evidence=refs,
+                       semantic_candidates=[dict(result) for result in candidate_results],
                        decision_sha256=decision_hash, reviewed_ns=time.time_ns())
         if target.exists():
             previous_receipt = load(target)
             if any(previous_receipt.get(k) != value for k, value in receipt.items() if k != 'reviewed_ns'):
                 raise SourceError('receipt_conflict')
-        else:
+            if note is not None and not note_path.exists():
+                raise SourceError('receipt_mutated')
+        if note is not None:
+            if note_path.exists():
+                if read_bytes(note_path, 128000) != note.encode('utf-8'):
+                    raise SourceError('receipt_conflict')
+            else:
+                atomic_text(note_path, note)
+            for result in candidate_results:
+                if result['status'] != 'accepted':
+                    continue
+                candidate = decision['semantic_candidates'][result['index']]
+                queued = add_candidate(Path(vault).absolute(), statement=candidate['statement'],
+                    kind='semantic', scope='user', subject_key=candidate['subject_key'],
+                    source_path=str(note_path.relative_to(Path(vault).absolute())), source_anchor='Kullanıcı beyanı',
+                    confidence='explicit-user', sensitivity='normal', proposed_by='claude-review',
+                    evidence=candidate['evidence'], category=candidate.get('category'))
+                result['queue_result'] = queued['result']
+        if not target.exists():
             atomic(target, receipt)
         item.update(status=decision['decision'], decision_sha256=decision_hash,
                     receipt_sha256=sha(read_bytes(target, 128000)))
+        if note is not None:
+            item['note_sha256'] = sha(read_bytes(note_path, 128000))
         atomic(state / (ident + '.json'), item)
-        return {'id': ident, 'status': item['status']}
+        return {'id': ident, 'status': item['status'],
+                **({'semantic_candidates': candidate_results} if 'semantic_candidates' in decision else {})}
 
 
 def recall(vault, budget=2500):
@@ -271,6 +371,8 @@ def recall(vault, budget=2500):
                 _validate(item, state)
                 receipt_path = root / (item['id'] + '.json')
                 if sha(read_bytes(receipt_path, 128000)) != item.get('receipt_sha256'):
+                    continue
+                if item.get('note_sha256') and sha(read_bytes(root / (item['id'] + '.md'), 128000)) != item['note_sha256']:
                     continue
                 receipt = load(receipt_path)
                 if receipt.get('decision_sha256') != item['decision_sha256'] or receipt.get('meaningful') is not True or receipt.get('decision') != 'record' or receipt.get('id') != item['id']:

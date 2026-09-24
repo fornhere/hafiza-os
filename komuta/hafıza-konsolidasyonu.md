@@ -4,8 +4,9 @@ Bu isteğe bağlı akış etkinleştirildiğinde görev ajanı yalnız makbuz ve
 üretir; `codex-consolidator` rolü ayrı inceleme aşamasını yürütür.
 Bu rol bağımsız ikinci model olduğu anlamına gelmez.
 
-1. `konsolidasyon.py status`, `pending` ve `sessions --since YYYY-AA-GG` ile
-   bekleyenleri incele. Başlangıç tarihini kurulumda seç. Beş mesajı aşmayan,
+1. `konsolidasyon.py status`, `pending` ve `sessions` ile
+   bekleyenleri incele. Varsayılan tarama son 21 gündür (UTC); geçmişe dönük
+   inceleme için `--since YYYY-AA-GG` ver. Beş mesajı aşmayan,
    otomatik bağlamlardan oluşan veya kaydedilmesi istenmeyen konuşmayı aktarma.
 2. Kaynak konuşmada anlamlı karar/sonuç varsa kısa makbuz üret. Ham konuşma,
    sır ve özel yazışma aktarma. `codex_hafiza.py record --input-json DOSYA`
@@ -101,7 +102,7 @@ Yarım JSON aktif devamdaysa eski tamamlanan bölüm korunur; tamamlanan
 bölümdeki bozukluk açık hata olur. Hook kaçmış açık kaydetmeme komutu da
 kayıt kapısında denetlenir; karmaşık gizlilik isteğini inceleyen değerlendirir.
 
-Zamanlanmış rol `sessions --since YYYY-AA-GG --scheduled` kullanır; manuel
+Zamanlanmış rol `sessions --scheduled` kullanır; manuel
 kontrol bu bayrağı kullanmaz. İnceleme sonunda tekrar tara, sonra health
 çalıştır. Bir bakımda en fazla 20 kaynak incele; kalanları sonraki bakıma bırak.
 `komuta/hafıza-işletim.json` içinde `require_scheduled_scan: true` varsa

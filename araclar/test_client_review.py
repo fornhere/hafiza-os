@@ -1,5 +1,7 @@
 """Explicit subprocess reviewer tests using local Python fixture commands."""
 import json
+import os
+import subprocess
 import unittest
 from pathlib import Path
 import sys
@@ -42,7 +44,7 @@ print(json.dumps(dict(decision='record',meaningful=True,reviewer_role='fixture-r
         for code, timeout, diagnostic in (
                 ('import sys;sys.stderr.write("private error");sys.exit(2)', 2, 'reviewer_failed'),
                 ('import time;time.sleep(2)', 0.05, 'reviewer_timeout'),
-                ('print("not JSON")', 2, 'invalid_json'),
+                ('print("not JSON")', 2, 'reviewer_invalid_output'),
                 ('print("x"*100000)', 2, 'reviewer_output_limit')):
             result = runner.run(self.vault, self.command(code), True, timeout)
             with self.subTest(diagnostic=diagnostic):
@@ -79,7 +81,6 @@ print(json.dumps(dict(decision='record',meaningful=True,reviewer_role='fixture-r
         self.assertEqual(sessions.recall(self.vault), '')
 
     def test_runner_cli_dry_run_contract(self):
-        import subprocess
         self.register()
         result = subprocess.run([sys.executable, '-X', 'utf8', str(Path(runner.__file__)),
                                  '--vault', str(self.vault), '--reviewer-argv-json',
@@ -87,6 +88,30 @@ print(json.dumps(dict(decision='record',meaningful=True,reviewer_role='fixture-r
                                 capture_output=True, text=True, encoding='utf-8', timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)[0]['status'], 'dry_run')
+
+    def test_reviewer_argv_environment_fallback_and_missing_error(self):
+        self.register()
+        command = [sys.executable, '-X', 'utf8', str(Path(runner.__file__)),
+                   '--vault', str(self.vault)]
+        env = dict(os.environ, HAFIZA_REVIEWER_ARGV=json.dumps(self.command('raise SystemExit(99)')))
+        result = subprocess.run(command, env=env, capture_output=True, text=True, encoding='utf-8', timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)[0]['status'], 'dry_run')
+        env.pop('HAFIZA_REVIEWER_ARGV')
+        result = subprocess.run(command, env=env, capture_output=True, text=True, encoding='utf-8', timeout=15)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout)['diagnostic'], 'missing_reviewer_argv')
+
+    def test_invoke_uses_last_complete_json_from_noisy_stdout(self):
+        code = '''import json
+print('startup text')
+print(json.dumps({'decision': 'old'}))
+print('progress {not json}')
+print(json.dumps({'decision': 'record', 'nested': {'value': 1}}, indent=2))
+print('finished')
+'''
+        self.assertEqual(runner.invoke(self.command(code), 'prompt', 3),
+                         {'decision': 'record', 'nested': {'value': 1}})
 
 
 class WindowsCommandBudget(unittest.TestCase):

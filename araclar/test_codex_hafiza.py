@@ -178,7 +178,7 @@ class Hooks(unittest.TestCase):
         self.six()
         self.assertEqual(h.hook(self.vault, dict(session_id='other', turn_id='t1', hook_event_name='Stop')), {})
 
-    def test_opening_includes_priorities_and_first_prompt_fallback(self):
+    def test_session_start_prevents_first_prompt_opening_repeat(self):
         (self.vault / 'komuta').mkdir()
         (self.vault / 'zihin').mkdir()
         (self.vault / 'komuta/bu-hafta.md').write_text('# Öncelik\nKaynaklı işi bitir')
@@ -186,10 +186,15 @@ class Hooks(unittest.TestCase):
         start = self.event('SessionStart')['hookSpecificOutput']['additionalContext']
         self.assertNotIn('Kaynaklı işi bitir', start)
         self.assertNotIn('Gerçek uygulama testi bekliyor', start)
+        self.assertIn('AÇILIŞ HATIRLATMASI', start)
         first = self.event('UserPromptSubmit', 't1', prompt='selam')
-        self.assertIn('AÇILIŞ HATIRLATMASI', first['hookSpecificOutput']['additionalContext'])
+        self.assertNotIn('AÇILIŞ HATIRLATMASI', first.get('hookSpecificOutput', {}).get('additionalContext', ''))
         self.assertEqual(self.event('UserPromptSubmit', 't2', prompt='devam'), {})
         self.assertEqual(self.event('Stop', 't2'), {})
+
+    def test_first_prompt_without_session_start_keeps_opening_fallback(self):
+        first = self.event('UserPromptSubmit', 't1', prompt='selam')
+        self.assertIn('AÇILIŞ HATIRLATMASI', first['hookSpecificOutput']['additionalContext'])
 
     def test_opening_size_does_not_grow_with_receipt_history(self):
         queue = self.vault / h.INBOX
@@ -272,6 +277,64 @@ class Hooks(unittest.TestCase):
             self.assertIsNone(h.main())
         self.assertIn('Son oturum kaydı 2000-01-01 tarihli (', output.getvalue())
         self.assertNotIn('Özel eski içerik', output.getvalue())
+
+    def test_old_session_uses_recent_codex_receipt(self):
+        (self.vault/'zihin').mkdir()
+        (self.vault/'zihin/son-oturum.md').write_text('## 2026-09-10\nEski ayrıntı')
+        queue = self.vault/h.INBOX
+        queue.mkdir(parents=True)
+        (queue/'README.md').write_text('# Codex görev makbuzu — 2026-09-23T10:00:00+00:00\nDurum: test\nYANLIŞ')
+        (queue/'fresh.md').write_text('# Codex görev makbuzu — 2026-09-22T10:00:00+00:00\n\nDurum: görev özeti\n\nGerçek görev özeti.\n\n[[gelen-kutusu/codex-oturumları/README]]')
+        result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+        self.assertIn('2026-09-22 Codex: Gerçek görev özeti.', result)
+        self.assertNotIn('Eski ayrıntı', result)
+        self.assertNotIn('YANLIŞ', result)
+
+    def test_invalid_claude_receipt_is_skipped(self):
+        queue = self.vault/'gelen-kutusu/ajan-oturumlari'
+        state = queue/'.state'
+        state.mkdir(parents=True)
+        receipt = dict(id='abc', decision='record', meaningful=True,
+                       decision_sha256='decision', summary='Bozuk makbuz özeti',
+                       reviewed_ns=1760000000000000000)
+        (queue/'abc.json').write_text(json.dumps(receipt))
+        (state/'abc.json').write_text(json.dumps(dict(status='record',
+            decision_sha256='decision', receipt_sha256='wrong')))
+        self.assertEqual(h.latest_session_section(self.vault, today=h.dt.date(2025, 10, 9)),
+                         'Son oturum notu yok.')
+
+    def test_valid_claude_receipt_is_included(self):
+        import hashlib
+        queue = self.vault/'gelen-kutusu/ajan-oturumlari'
+        state = queue/'.state'
+        state.mkdir(parents=True)
+        timestamp = int(h.dt.datetime(2026, 9, 23, tzinfo=h.dt.timezone.utc).timestamp()*1_000_000_000)
+        receipt = dict(id='abc', decision='record', meaningful=True,
+                       decision_sha256='decision', summary='Claude görev özeti', reviewed_ns=timestamp)
+        raw = json.dumps(receipt).encode()
+        (queue/'abc.json').write_bytes(raw)
+        (state/'abc.json').write_text(json.dumps(dict(status='record',
+            decision_sha256='decision', receipt_sha256=hashlib.sha256(raw).hexdigest())))
+        result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+        self.assertIn('2026-09-23 Claude: Claude görev özeti', result)
+
+    def test_receipt_summary_obeys_budget(self):
+        queue = self.vault/h.INBOX
+        queue.mkdir(parents=True)
+        (queue/'fresh.md').write_text('# Codex görev makbuzu — 2026-09-24T10:00:00+00:00\n\nDurum: görev özeti\n\n' + 'A'*1000)
+        result = h.latest_session_section(self.vault, limit=140, today=h.dt.date(2026, 9, 24))
+        self.assertLessEqual(len(result), 140)
+        self.assertIn('2026-09-24 Codex:', result)
+
+    def test_fresh_session_section_takes_priority_over_receipts(self):
+        (self.vault/'zihin').mkdir()
+        (self.vault/'zihin/son-oturum.md').write_text('## 2026-09-23\nTaze bölüm')
+        queue = self.vault/h.INBOX
+        queue.mkdir(parents=True)
+        (queue/'fresh.md').write_text('# Codex görev makbuzu — 2026-09-24T10:00:00+00:00\n\nDurum: görev özeti\n\nMakbuz özeti')
+        result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+        self.assertIn('Taze bölüm', result)
+        self.assertNotIn('Makbuz özeti', result)
 
 if __name__ == '__main__':
     unittest.main()

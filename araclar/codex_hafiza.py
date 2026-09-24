@@ -134,22 +134,95 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
 
 
 def latest_session_section(vault, limit=2500, today=None):
-    """Read the newest dated section without sending the whole journal to the model."""
+    """Read a fresh journal section, otherwise recent non-canonical receipts."""
+    today = today or dt.date.today()
+    limit = max(0, limit)
     path = vault / 'zihin/son-oturum.md'
-    if not path.exists(): return 'Son oturum notu yok.'
-    text = path.read_text(encoding='utf-8')
+    text = path.read_text(encoding='utf-8') if path.exists() else ''
     matches = list(re.finditer(r'^## (\d{4}-\d{2}-\d{2})[^\n]*', text, re.M))
-    if not matches: return 'Tarihli son oturum bölümü bulunamadı; gerekirse kaynakta ara.'
-    index = max(range(len(matches)), key=lambda i: (matches[i].group(1), i))
-    date_text = matches[index].group(1)
-    age = ((today or dt.date.today()) - dt.date.fromisoformat(date_text)).days
-    if age > 3:
-        return (f'Son oturum kaydı {date_text} tarihli ({age} gün eski); '
-                'güncel durum kanıtı değil, açık işler özetini kullan.')
-    section = text[matches[index].start():matches[index+1].start() if index+1<len(matches) else len(text)].strip()
-    if len(section)>limit:
-        section=section[:max(0,limit-90)]+'\n[Kesildi; yalnız gereken ayrıntı için kaynak bölümü aç.]'
-    return section
+    warning = 'Son oturum notu yok.' if not path.exists() else 'Tarihli son oturum bölümü bulunamadı; gerekirse kaynakta ara.'
+    if matches:
+        index = max(range(len(matches)), key=lambda i: (matches[i].group(1), i))
+        date_text = matches[index].group(1)
+        try:
+            age = (today - dt.date.fromisoformat(date_text)).days
+        except ValueError:
+            age = 8
+        if 0 <= age <= 3:
+            section = text[matches[index].start():matches[index+1].start() if index+1<len(matches) else len(text)].strip()
+            if len(section) > limit:
+                suffix = '\n[Kesildi; yalnız gereken ayrıntı için kaynak bölümü aç.]'
+                section = section[:max(0, limit-len(suffix))] + suffix if limit >= len(suffix) else section[:limit]
+            return section
+        warning = (f'Son oturum kaydı {date_text} tarihli ({age} gün eski); '
+                   'güncel durum kanıtı değil, açık işler özetini kullan.')
+
+    receipts = []
+    codex_dir = vault / INBOX
+    for note in codex_dir.glob('*.md'):
+        if note.name == 'README.md' or note.is_symlink():
+            continue
+        try:
+            raw = note.read_text(encoding='utf-8')
+            heading = re.match(r'^# Codex görev makbuzu — (\S+)', raw)
+            status = re.search(r'^Durum:[^\n]*\n', raw, re.M)
+            if not heading or not status:
+                continue
+            summary = raw[status.end():].strip()
+            summary = re.sub(r'(?m)^<!--[^\n]*-->\s*', '', summary)
+            summary = re.split(r'(?m)^\[\[gelen-kutusu/codex-oturumları/README\]\]', summary)[0].strip()
+            stamp = dt.datetime.fromisoformat(heading.group(1).replace('Z', '+00:00'))
+            date = stamp.date()
+            if summary and not contains_secret(summary) and 0 <= (today-date).days <= 7:
+                receipts.append((stamp.timestamp(), date, 'Codex', summary))
+        except (OSError, UnicodeError, ValueError, OverflowError):
+            continue
+
+    claude_dir = vault / 'gelen-kutusu/ajan-oturumlari'
+    for note in claude_dir.glob('*.json'):
+        if note.is_symlink():
+            continue
+        try:
+            raw = note.read_bytes()
+            if len(raw) > 128000:
+                continue
+            receipt = json.loads(raw)
+            ident = note.stem
+            state_path = claude_dir / '.state' / (ident + '.json')
+            if state_path.is_symlink():
+                continue
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+            if (state.get('receipt_sha256') != hashlib.sha256(raw).hexdigest() or
+                    state.get('status') != 'record' or
+                    receipt.get('id') != ident or receipt.get('decision') != 'record' or
+                    receipt.get('meaningful') is not True or
+                    receipt.get('decision_sha256') != state.get('decision_sha256')):
+                continue
+            summary = receipt.get('summary')
+            if not isinstance(summary, str) or not summary.strip() or contains_secret(summary):
+                continue
+            stamp = receipt.get('reviewed_ns')
+            timestamp = stamp / 1_000_000_000 if type(stamp) is int else note.stat().st_mtime
+            date = dt.datetime.fromtimestamp(timestamp, dt.timezone.utc).date()
+            if 0 <= (today-date).days <= 7:
+                receipts.append((timestamp, date, 'Claude', summary.strip()))
+        except (OSError, UnicodeError, ValueError, TypeError, OverflowError, AttributeError):
+            continue
+
+    if not receipts:
+        return warning[:limit]
+    header = 'Son oturum makbuzları (otomatik; kanonik değil, güncel durum kanıtı değil):'
+    parts = [header]
+    used = len(header)
+    for _, date, client, summary in sorted(receipts, reverse=True):
+        prefix = f'\n- {date.isoformat()} {client}: '
+        available = limit - used - len(prefix)
+        if available <= 0:
+            break
+        excerpt = summary[:min(600, available)]
+        parts.append(prefix + excerpt)
+        used += len(prefix) + len(excerpt)
+    return ''.join(parts)[:limit]
 
 
 def account_context(state, emitted, suppressed=0):
@@ -254,7 +327,7 @@ def hook(vault, data):
         original_chars = len(lesson_text)
         if suppress: lesson_text = ''
         state['package_cache'] = {'hash': package_hash, 'suppressed': suppress}
-        parts = ([opening_brief(vault)] if state['count'] == 1 else [])
+        parts = ([opening_brief(vault)] if state['count'] == 1 and not state.get('opening_brief_sent') else [])
         if lesson_text:
             parts.append(lesson_text)
             if package.get('source_versions'):
@@ -271,13 +344,14 @@ def hook(vault, data):
         return {}
     if event == 'SessionStart':
         state.pop('package_cache', None)
+        state['opening_brief_sent'] = True
         queue = vault / INBOX
         missing = len(list(queue.glob('*.pending.json')))
         receipt_count = sum(p.name != 'README.md' for p in queue.glob('*.md'))
         from hafiza_saglik import notice
         health_notice = notice(vault)
-        context = (f'Hafıza kasası: {vault}. Önce {vault}/agents.md ve '
-            f'{vault}/zihin/son-oturum.md dosyasının yalnız en yeni bölümünü oku. '
+        context = (f'Hafıza kasası: {vault}. Önce {vault}/agents.md oku; '
+            'son oturum özeti için şu komutu çalıştır. '
             f'Bütçeli okuma ({"PowerShell" if os.name == "nt" else "POSIX shell"}):\n'
             f'{latest_session_command(vault)}\n'
             f'Kısa agents.md açılış sözleşmesi geçerlidir; ayrıntılar yalnız gerektiğinde okunur. '
