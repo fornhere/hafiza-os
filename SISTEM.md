@@ -135,7 +135,6 @@ içindedir; `yayinla.py --apply` ölçüm komutu değildir, yayın yapar.
 
 ## Hook bağlamında uzak danışman
 
-Claude ve Codex hook'ları görev paketini yerel kurar; uzak semantik danışman
-(Jev) hook yolunda kapalıdır. Gerçek istemlerle ölçümde (`erisim_olc.py`)
-uzak danışman doğruluğu düşürdü ve gecikme ekledi. İsteyen `HAFIZA_HOOK_JEV=1`
-ile hook'ta yeniden açabilir; açık CLI kullanımı etkilenmez.
+Codex hook'u Jev danışmanını `komuta/jev.json` ayarına göre kullanır; Claude hook'u
+şu an yereldir. `HAFIZA_HOOK_JEV=0` Codex hook'unu yerel tutar. Jev'in hafızaya
+tam entegrasyonu ölçümle yeniden tasarlanıyor (hedef belgesi).
