@@ -314,7 +314,12 @@ def hook(vault, data):
             state.pop('requested_turn', None)
             atomic(state_path, json.dumps(state))
         from gorev_baglam import build_task_package
-        package = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'), budget=2000)
+        # Hooks stay local like the Claude adapter: on a real prompt set the remote
+        # advisor lowered precision and added latency. HAFIZA_HOOK_JEV=1 opts back in.
+        import contextlib, jev_client
+        advisor = contextlib.nullcontext() if os.environ.get('HAFIZA_HOOK_JEV') == '1' else jev_client.disabled()
+        with advisor:
+            package = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'), budget=2000)
         lesson_text = package['text']
         # One consecutive repeat may be omitted; the next prompt refreshes it.
         # Hash includes source versions, not only rendered prose.

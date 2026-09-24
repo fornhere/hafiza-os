@@ -132,3 +132,10 @@ içindedir; `yayinla.py --apply` ölçüm komutu değildir, yayın yapar.
 - Koşullu ders ve cevap kontrolü: [HAFIZA-DONGUSU](HAFIZA-DONGUSU.md).
 - Ayrı deney/migrasyon: [GOREV-PLANI](GOREV-PLANI.md), [GELISIM-DONGUSU](GELISIM-DONGUSU.md), [KAYIT-UZLASTIRMA](KAYIT-UZLASTIRMA.md).
 - Geliştirme ve test: [CONTRIBUTING](CONTRIBUTING.md); genel başlangıç: [README](README.md).
+
+## Hook bağlamında uzak danışman
+
+Claude ve Codex hook'ları görev paketini yerel kurar; uzak semantik danışman
+(Jev) hook yolunda kapalıdır. Gerçek istemlerle ölçümde (`erisim_olc.py`)
+uzak danışman doğruluğu düşürdü ve gecikme ekledi. İsteyen `HAFIZA_HOOK_JEV=1`
+ile hook'ta yeniden açabilir; açık CLI kullanımı etkilenmez.

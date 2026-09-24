@@ -34,6 +34,20 @@ class Hooks(unittest.TestCase):
         self.assertFalse((self.vault / h.INBOX / '.state').exists())
         self.assertFalse(list((self.vault / h.INBOX).glob('*.pending.json')))
 
+    def test_prompt_package_runs_without_remote_advisor_unless_opted_in(self):
+        import gorev_baglam, jev_client
+        seen = []
+        def fake(vault, query, **kwargs):
+            seen.append(jev_client.load_config(vault)['mode'])
+            return {'text': '', 'source_versions': {}, 'selected_ids': []}
+        with patch.object(gorev_baglam, 'build_task_package', fake), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('HAFIZA_HOOK_JEV', None)
+            self.event('UserPromptSubmit', turn='t1', prompt='Gerçek görev isteği burada')
+            os.environ['HAFIZA_HOOK_JEV'] = '1'
+            self.event('UserPromptSubmit', turn='t2', prompt='İkinci gerçek görev isteği')
+        self.assertEqual('off', seen[0])
+        self.assertEqual(2, len(seen))
+
     def test_worker_environment_skips_all_events_without_state(self):
         for name in ('HAFIZA_ISCI', 'CODEX_WORKER'):
             with self.subTest(name=name), patch.dict(os.environ, {name: '1'}):
