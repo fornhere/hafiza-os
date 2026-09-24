@@ -31,6 +31,23 @@ class KnowledgeTests(unittest.TestCase):
         self.assertFalse(b.retrieve(self.v,'sevdiğim tarz')['records'])
         self.d['id']='project-note';self.d['scope']='project:one';b.register(self.v,self.d,True)
         self.assertEqual(len(b.retrieve(self.v,'sunum',project_id='two')['records']),1)
+    def test_inflected_topic_without_domain_and_unrelated_query(self):
+        self.d.update(id='screen-flow',title='Akış ve ekran',scope='project:course',
+                      statement='Sunum akışını ekran görüntüleriyle birlikte planla.')
+        self.register()
+        result=b.retrieve(self.v,'Ekranları ve akışı sırala')
+        self.assertEqual([r['id'] for r in result['records']],['screen-flow'])
+        self.assertIn('project:course',result['text'])
+        self.assertFalse(b.retrieve(self.v,'Veritabanı şemasını kur')['records'])
+
+    def test_other_project_requires_topic_beyond_domain(self):
+        self.d.update(id='screen-flow',title='Ekran akışı',scope='project:course',
+                      statement='Sunum ekranlarını ayrı sırayla planla.')
+        self.register()
+        self.assertFalse(b.retrieve(self.v,'Sunum yöntemi',project_id='other')['records'])
+        result=b.retrieve(self.v,'Sunum ekranlarını sırala',project_id='other')
+        self.assertEqual([r['id'] for r in result['records']],['screen-flow'])
+        self.assertIn('başka projenin kaynaklı örneğidir',result['text'])
     def test_established_topics_explicit_scope_and_no_generic_dump(self):
         aliases={'twitter':('Twitter','tweet'), 'proje':('proje',),
                  'video':('video','YouTube','çekim')}

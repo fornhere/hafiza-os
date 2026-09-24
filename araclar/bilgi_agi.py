@@ -225,9 +225,21 @@ def retrieve(vault,query,project_id=None,budget=1800):
 
 def _retrieve_local(vault,query,project_id=None,budget=1800):
     from gorev_baglam import content_words,word_match
+    def note_match(left,right):
+        # Apostrophized three-letter names keep their Turkish case ending after
+        # query tokenization (e.g. ABC'yi). Do not loosen catalog ranking.
+        return (word_match(left,right) or
+                any(len(base)==3 and longer.startswith(base) and
+                    longer[len(base):] in {'ı','i','u','ü','a','e','yı','yi','yu','yü'}
+                    for base,longer in ((left,right),(right,left))))
     vault=Path(vault);rows,diagnostics=_rows(vault);terms=content_words(query)
     domain_aliases=DOMAIN_ALIASES
     requested={domain for domain,aliases in domain_aliases.items() if any(word_match(alias,word) for alias in aliases for word in terms)}
+    domain_words=content_words(' '.join(alias for aliases in domain_aliases.values() for alias in aliases))
+    from gorev_baglam import config
+    project_words=content_words(' '.join(str(value) for project in config(vault).get('projects', [])
+                                        for value in [project.get('id', ''), *project.get('aliases', [])]))
+    generic=domain_words|project_words|content_words('bilgi yöntem kaynak gerçek konu')
     ranked=[]
     # These are candidate analogies, never new user preferences. Only features
     # actually named in the reviewed statement can support a transfer.
@@ -239,19 +251,28 @@ def _retrieve_local(vault,query,project_id=None,budget=1800):
               ('yerleşim',('boşluk','hiyerarşi','kompozisyon','yerleşim')),
               ('hareket',('animasyon','hareket'))]
     for d in rows:
-        if d['scope']!='user' and d['scope']!=f'project:{project_id}':continue
+        scoped=d['scope'] not in ('user',f'project:{project_id}')
         transfer=None
         if requested and 'all' not in d['domains'] and not requested.intersection(d['domains']):
             targets=sorted({target for source in d['domains'] for target in requested if (source,target) in bridges})
             words=content_words(d['statement'])
             aspects=[label for label,aliases in features if any(word_match(t,w) for alias in aliases for t in content_words(alias) for w in words)]
-            if d['kind']!='preference' or not targets or not aspects:continue
+            if scoped or d['kind']!='preference' or not targets or not aspects:continue
             transfer=dict(status='proposed',source_record_id=d['id'],source_domains=d['domains'],target_domains=targets,
                           aspects=aspects,reason='İki işte de '+', '.join(aspects)+' kararları bulunabilir; uygunluğu bu görevde değerlendirilmelidir.')
-        # Domain-specific knowledge needs an explicit domain query; do not generalize taste.
-        if not requested and 'all' not in d['domains']:continue
-        words=content_words(d['title']+' '+d['statement']+' '+' '.join(d['domains']))
-        score=sum(any(word_match(t,w) for w in words) for t in terms)
+        words=content_words(' '.join(d.get(k,'') for k in ('title','statement','rationale','conditions','exceptions'))
+                            +' '+' '.join(d['domains']))
+        matched={t for t in terms if any(note_match(t,w) for w in words)}
+        topical={min(w for w in words if note_match(t,w)) for t in matched
+                 if not any(note_match(t,w) for w in generic)}
+        # Scoped notes outside the selected project are only historical evidence
+        # for a concrete matching topic. They never become a general preference.
+        if scoped and (len(topical)<2 if project_id is None else
+                       not requested.intersection(d['domains']) or not topical):continue
+        # Without an explicit domain, require two independent topical anchors.
+        if not requested and 'all' not in d['domains'] and len(topical)<2:continue
+        if len(terms)>8 and not topical and not transfer:continue
+        score=len(matched)
         if score or transfer:ranked.append((score,d,transfer))
     ranked.sort(key=lambda item:(item[2] is not None,-item[0],item[1]['id']))
     selected=[];transfers=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
@@ -259,7 +280,9 @@ def _retrieve_local(vault,query,project_id=None,budget=1800):
         try: revision=note_version(vault,d)
         except (OSError,ValueError):
             diagnostics.append(d['id']+':source_changed_during_read');continue
-        card=f"Bilgi [{d['kind']}; {', '.join(d['domains'])}]: {d['statement']}\nKaynak: bilgi/{d['id']}.md"
+        card=f"Bilgi [{d['kind']}; {', '.join(d['domains'])}; {d['scope']}]: {d['statement']}\nKaynak: bilgi/{d['id']}.md"
+        if d['scope'] not in ('user',f'project:{project_id}'):
+            card+='\nBu başka projenin kaynaklı örneğidir; bu görev için tercih veya onay değildir.'
         if transfer:
             card='Uyarlama önerisi ['+', '.join(d['domains'])+' → '+', '.join(transfer['target_domains'])+']: '+d['statement']+'\nAktarılabilecek özellik: '+', '.join(transfer['aspects'])+'. '+transfer['reason']+' Yeni alanda kullanıcı onayı değildir; renk/font gibi belirtilmeyen özellikleri çıkarma.\nKaynak: bilgi/'+d['id']+'.md'
         for key,label in (('rationale','Gerekçe'),('conditions','Koşul'),('exceptions','İstisna')):
