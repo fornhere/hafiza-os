@@ -12,6 +12,9 @@ TASKS = Path('zihin/is-durumu.jsonl')
 LESSONS = Path('zihin/ders-durumu.jsonl')
 
 
+STALE_DAYS = 7
+
+
 def latest(vault, kind):
     rows = h.load_jsonl(vault / (TASKS if kind == 'task' else LESSONS))
     return {r['id']: r for r in rows}
@@ -72,7 +75,8 @@ def brief(vault, limit=3):
             if row.get('source_content_hash') and row['source_content_hash'] != h.statement_hash(content): continue
         except (OSError, ValueError): continue
         verified = row.get('last_verified')
-        if not verified or (dt.date.today() - dt.date.fromisoformat(verified)).days > 14:
+        # Kullanıcı kuralı (2026-09-24): bir haftadır teyit edilmeyen iş aktif sayılmaz.
+        if not verified or (dt.date.today() - dt.date.fromisoformat(verified)).days > STALE_DAYS:
             continue
         result.append(row)
     return sorted(result, key=lambda r: r['updated_at'], reverse=True)[:limit]

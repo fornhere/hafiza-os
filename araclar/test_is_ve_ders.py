@@ -40,6 +40,14 @@ class Work(unittest.TestCase):
         w.put(self.vault, 'task', dict(self.row, expected_version=1, status='needs_confirmation'))
         self.assertEqual([], w.brief(self.vault))
 
+    def test_week_old_confirmation_is_not_current(self):
+        eight = (w.dt.date.today() - w.dt.timedelta(days=8)).isoformat()
+        six = (w.dt.date.today() - w.dt.timedelta(days=6)).isoformat()
+        w.put(self.vault, 'task', dict(self.row, last_verified=six))
+        self.assertEqual(1, len(w.brief(self.vault)))
+        w.put(self.vault, 'task', dict(self.row, last_verified=eight, expected_version=1))
+        self.assertEqual([], w.brief(self.vault))
+
     def test_task_source_change_invalidates_current_summary_even_with_quote(self):
         row=w.put(self.vault, 'task', self.row)
         self.assertIn('source_content_hash',row)
