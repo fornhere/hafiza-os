@@ -42,7 +42,7 @@ def atomic_text(path, value):
     safe_path(path)
     fd, name = tempfile.mkstemp(prefix='.write-', dir=path.parent)
     try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as out:
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='') as out:
             os.chmod(name, 0o600)
             out.write(value)
             out.flush()
