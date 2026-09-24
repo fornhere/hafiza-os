@@ -160,6 +160,14 @@
     {
       "path": "araclar/gelisim_dongusu.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/erisim_olc.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_erisim_olc.py",
+      "mode": "shared"
     }
   ]
 }
