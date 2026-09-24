@@ -13,7 +13,7 @@ class AccessMeasure(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.root = Path(tmp.name)
+        self.root = Path(tmp.name).resolve()
         self.vault = self.root / 'vault'
         self.vault.mkdir()
         self.claude = self.root / 'claude' / 'project'

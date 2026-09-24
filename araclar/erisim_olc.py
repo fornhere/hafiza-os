@@ -87,8 +87,9 @@ def collect(*, claude_root, codex_root, out, days=21, limit=80, now=None):
         raise ValueError('days and limit must be positive')
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(days=days)
-    roots = [('claude', Path(claude_root).glob('*/*.jsonl'), _claude),
-             ('codex', Path(codex_root).glob('**/*.jsonl'), _codex)]
+    # The transcript parser rejects symlinked components (e.g. macOS /var -> /private/var).
+    roots = [('claude', Path(claude_root).resolve().glob('*/*.jsonl'), _claude),
+             ('codex', Path(codex_root).resolve().glob('**/*.jsonl'), _codex)]
     pools = {}
     for client, paths, reader in roots:
         candidates = []
