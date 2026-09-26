@@ -5,6 +5,10 @@ from hafiza import statement_hash, source_file
 
 
 def context(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
+    return context_details(vault,prompt,budget,project_id,workflow_ids)['text']
+
+
+def context_details(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
     """Project-owned lessons require matching project or explicitly selected workflow.
 
     Legacy rows with neither scope nor project_id retain their global behavior.
@@ -14,8 +18,9 @@ def context(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
     """
     from gorev_baglam import alias_match, query_words
     header="İlgili çalışma dersleri; kullanıcı isteğinin kapsamını genişletmez. Teknik test estetik kabul değildir.\n"
-    text=prompt.casefold(); output=[]; used=len(header)
+    text=prompt.casefold(); output=[]; lessons=[]; used=len(header)
     for ident,row in sorted(latest(vault,'lesson').items()):
+        if 'review_required' in row: continue
         if row['status']=='rejected': continue
         if row.get('outcome_id') and row['status']!='verified': continue
         if row.get('verification_hash'):
@@ -49,9 +54,17 @@ def context(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
         if row.get('proposal'): block+='Doğrulanmış ders: '+row['proposal']+'\n'
         if used+len(block)+(1 if output else 0)>budget: continue
         used+=len(block)+(1 if output else 0);output.append(block)
-    return (header+'\n'.join(output)) if output else ''
+        lessons.append(dict(id=row['id'],version=row.get('version'),status=row['status']))
+    return dict(text=(header+'\n'.join(output)) if output else '',lessons=lessons)
 
 def backlog(vault):
-    return [{'id': r['id'], 'status': r['status'], 'implementation_status': r.get('implementation_status','not_applied'),
-             'next_step':r.get('next_step',r.get('proposal','Yöntem değişikliği ve gerçek doğrulama belirle.'))}
-            for r in latest(vault,'lesson').values() if r['status']=='proposed']
+    output=[]
+    for r in latest(vault,'lesson').values():
+        if r['status']!='proposed': continue
+        entry=dict(id=r['id'],status=r['status'],implementation_status=r.get('implementation_status','not_applied'),
+                   next_step=r.get('next_step',r.get('proposal','Yöntem değişikliği ve gerçek doğrulama belirle.')))
+        if 'review_required' in r:
+            review=r['review_required'];entry['review_required']=review
+            entry['next_step']=f"Fayda incelemesi: zarar {review['harm']} > yardım {review['help']}; dersi yeniden incele (otomatik silinmedi)."
+        output.append(entry)
+    return output

@@ -109,6 +109,201 @@ class Lifecycle(unittest.TestCase):
         raw=json.dumps(receipt);(self.v/'test.json').write_text(raw)
         return dict(task_id='t',title='Sunum dersi',lesson='Sunumda bu yöntem sınandı.',conditions='Yalnız bu sunumun koşullarında.',method_path='method.md',verification_path='test.json',verification_hash=b.digest(self.v/'test.json'),verification_evidence=raw,verification_kind='test_result',observed_result='failed' if failed else 'passed',actor='worker',triggers=['sunum'])
 
+    def reviewed_outcome_fixture(self):
+        data=self.outcome_fixture();row=d.outcome(self.v,data,True)['row']
+        review=dict(receipt_id=row['receipt_id'],reviewed_by='reviewer',reason='Test makbuzu ve dersin koşulları kaynakla karşılaştırıldı.',evidence_checked=True,conditions_checked=True)
+        return data,d.review_lesson(self.v,review,True)['lesson']
+
+    def applied_outcome_fixture(self,data,lesson,task_id,result='failed',version=None):
+        work.put(self.v,'task',dict(id=task_id,title='Sunum testi',status='done',source_path='source.md',evidence=self.quote,actor='worker',project_id='p'))
+        raw=json.dumps(dict(task_id=task_id,exit_code=0 if result=='passed' else 1,passed=result=='passed',command=['python3','test.py'],finished_at='2026-09-19T12:00:00Z')) if result in ('passed','failed') else 'Kullanıcı sunumun sonucunu bildirdi: '+result
+        path=task_id+'.json';(self.v/path).write_text(raw)
+        return d.outcome(self.v,dict(data,task_id=task_id,observed_result=result,verification_kind='test_result' if result in ('passed','failed') else 'user_acceptance',verification_path=path,verification_hash=b.digest(self.v/path),verification_evidence=raw,applied_lessons=[dict(id=lesson['id'],version=lesson['version'] if version is None else version)]),True)['row']
+
+    def test_outcome_applied_lessons_validation_and_sorting(self):
+        data,lesson=self.reviewed_outcome_fixture()
+        applied=dict(id=lesson['id'],version=lesson['version'])
+        for value in (None,{},'lesson',[{}],[dict(applied,id='missing')],[dict(applied,version=2)],[dict(applied,version=0)],[dict(applied,version=True)],[dict(applied,version=1.0)],[dict(applied,id=[])],[dict(applied,extra=True)],[applied,applied],[applied]*21):
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'applied_lessons_invalid'):
+                d.outcome(self.v,dict(data,applied_lessons=value),True)
+        other=work.put(self.v,'lesson',dict(lesson,id='z-lesson'))
+        work.put(self.v,'lesson',dict(lesson,expected_version=lesson['version']))
+        values=[dict(id=other['id'],version=other['version']),applied]
+        row=d.outcome(self.v,dict(data,applied_lessons=values),True)['row']
+        self.assertEqual(row['applied_lessons'],[applied,values[0]])
+        self.assertEqual(values[0]['id'],'z-lesson')
+        self.assertFalse(d.outcome(self.v,dict(data,applied_lessons=list(reversed(values))),True)['changed'])
+        self.assertEqual(len(h.load_jsonl(self.v/d.OUTCOMES)),2)
+
+    def test_outcome_without_applied_lessons_keeps_legacy_receipt_id(self):
+        data=self.outcome_fixture();task=work.latest(self.v,'task')['t']
+        expected=dict(data,task_version=task['version'],scope='project:p',project_id='p',method_hash=h.statement_hash((self.v/'method.md').read_text()),source_path=task['source_path'],source_content_hash=task['source_content_hash'],evidence=task['evidence'],status='proposed')
+        row=d.outcome(self.v,data)['row']
+        self.assertNotIn('applied_lessons',row)
+        self.assertEqual(row['receipt_id'],d.fingerprint(expected))
+        self.assertEqual(row,dict(expected,receipt_id=d.fingerprint(expected)))
+        explicit=d.outcome(self.v,dict(data,applied_lessons=[]))['row']
+        self.assertEqual(explicit['applied_lessons'],[])
+        self.assertNotEqual(explicit['receipt_id'],row['receipt_id'])
+
+    def test_outcome_applied_lessons_twenty_item_limit(self):
+        data,lesson=self.reviewed_outcome_fixture();applied=[]
+        for i in range(21):
+            row=work.put(self.v,'lesson',dict(lesson,id='lesson-'+str(i)))
+            applied.append(dict(id=row['id'],version=row['version']))
+        self.assertEqual(len(d.outcome(self.v,dict(data,applied_lessons=applied[:20]))['row']['applied_lessons']),20)
+        with self.assertRaisesRegex(ValueError,'applied_lessons_invalid'):d.outcome(self.v,dict(data,applied_lessons=applied))
+
+    def test_review_lesson_fresh_outcome_preserves_applied_lessons(self):
+        data,lesson=self.reviewed_outcome_fixture()
+        row=self.applied_outcome_fixture(data,lesson,'next',result='passed')
+        review=dict(receipt_id=row['receipt_id'],reviewed_by='independent',reason='Kaynak sonuç ve uygulama koşulları ayrıca incelendi.',evidence_checked=True,conditions_checked=True)
+        result=d.review_lesson(self.v,review,True)
+        self.assertEqual(result['lesson']['outcome_id'],row['receipt_id'])
+        self.assertEqual(result['lesson']['status'],'verified')
+        self.assertFalse(d.review_lesson(self.v,review,True)['changed'])
+
+    def test_lesson_utility_dry_run_apply_and_idempotence(self):
+        data,lesson=self.reviewed_outcome_fixture();ident=lesson['id']
+        receipts=[self.applied_outcome_fixture(data,lesson,task)['receipt_id'] for task in ('first','second')]
+        before={p.relative_to(self.v):p.read_bytes() for p in self.v.rglob('*') if p.is_file()}
+        dry=self.cli('lesson-utility')
+        self.assertEqual(dry['lessons'][ident],dict(help=0,harm=2,outcome_ids=sorted(receipts),action='review_required'))
+        self.assertEqual(dry['review_required'],[ident]);self.assertFalse(dry['applied'])
+        self.assertEqual(before,{p.relative_to(self.v):p.read_bytes() for p in self.v.rglob('*') if p.is_file()})
+        applied=self.cli('lesson-utility','--apply');new=work.latest(self.v,'lesson')[ident]
+        self.assertTrue(applied['applied']);self.assertEqual(applied['failures'],[]);self.assertEqual(applied['canonical_deletes'],0)
+        self.assertEqual(new['status'],'proposed');self.assertEqual(new['actor'],'lesson-utility')
+        self.assertEqual(new['review_required'],dict(reason='harm_exceeds_help',help=0,harm=2,outcome_ids=sorted(receipts)))
+        self.assertEqual(new['version'],lesson['version']+1)
+        history=h.load_jsonl(self.v/work.LESSONS)
+        self.assertEqual(history,[lesson,new])
+        self.assertEqual(len(h.load_jsonl(self.v/d.OUTCOMES)),3)
+        self.assertEqual(ders_baglam.context(self.v,'sunum',project_id='p'),'')
+        self.assertEqual(build_task_package(self.v,'sunum')['lessons'],dict(applied=[]))
+        view=json.loads((self.v/'zihin/ders-faydasi.json').read_text())
+        self.assertEqual(view['lessons'],applied['lessons']);self.assertEqual(view['min_harm'],2);self.assertTrue(view['generated_at'])
+        second=self.cli('lesson-utility','--apply')
+        self.assertEqual(second['review_required'],[])
+        self.assertEqual(h.load_jsonl(self.v/work.LESSONS),history)
+
+    def test_lesson_utility_min_harm_and_balanced_results(self):
+        data,lesson=self.reviewed_outcome_fixture();ident=lesson['id']
+        self.applied_outcome_fixture(data,lesson,'one')
+        self.assertEqual(d.lesson_utility(self.v)['review_required'],[])
+        self.assertEqual(self.cli('lesson-utility','--min-harm','1')['review_required'],[ident])
+        self.applied_outcome_fixture(data,lesson,'two',result='rejected')
+        self.assertEqual(self.cli('lesson-utility','--min-harm','3')['review_required'],[])
+        self.applied_outcome_fixture(data,lesson,'three',result='accepted')
+        self.applied_outcome_fixture(data,lesson,'four',result='passed')
+        result=d.lesson_utility(self.v)
+        self.assertEqual(result['lessons'][ident]['harm'],2);self.assertEqual(result['lessons'][ident]['help'],2)
+        self.assertEqual(result['review_required'],[])
+        for value in (0,-1,True):
+            with self.assertRaisesRegex(ValueError,'min_harm_invalid'):d.lesson_utility(self.v,min_harm=value)
+
+    def test_lesson_utility_deduplicates_and_excludes_own_outcome(self):
+        data,lesson=self.reviewed_outcome_fixture();ident=lesson['id']
+        own=h.load_jsonl(self.v/d.OUTCOMES)[0]
+        h._append_jsonl(self.v/d.OUTCOMES,dict(own,applied_lessons=[dict(id=ident,version=lesson['version'])]))
+        row=self.applied_outcome_fixture(data,lesson,'one')
+        h._append_jsonl(self.v/d.OUTCOMES,row)
+        h._append_jsonl(self.v/d.OUTCOMES,dict(row,receipt_id='another-receipt-same-verification'))
+        result=d.lesson_utility(self.v)
+        self.assertEqual(result['lessons'][ident],dict(help=0,harm=1,outcome_ids=[row['receipt_id']],action='none'))
+
+    def test_lesson_utility_reapproval_ignores_old_harm_but_harmless_revisions_do_not(self):
+        data,lesson=self.reviewed_outcome_fixture();ident=lesson['id']
+        self.applied_outcome_fixture(data,lesson,'one')
+        revised=work.put(self.v,'lesson',dict(lesson,expected_version=lesson['version']))
+        self.applied_outcome_fixture(data,revised,'two')
+        self.assertEqual(d.lesson_utility(self.v,True)['review_required'],[ident])
+        demoted=work.latest(self.v,'lesson')[ident]
+        reviewed=dict(demoted,status='verified',actor='reviewer',expected_version=demoted['version'])
+        reviewed.pop('review_required');reviewed=work.put(self.v,'lesson',reviewed)
+        self.assertIn('Sunum yöntemi',ders_baglam.context(self.v,'sunum',project_id='p'))
+        self.applied_outcome_fixture(data,lesson,'old-delayed')
+        self.applied_outcome_fixture(data,demoted,'at-cutoff')
+        fresh=d.lesson_utility(self.v,True)
+        self.assertEqual(fresh['lessons'][ident],dict(help=0,harm=0,outcome_ids=[],action='none'))
+        self.assertEqual(work.latest(self.v,'lesson')[ident]['version'],reviewed['version'])
+        self.applied_outcome_fixture(data,reviewed,'after-one')
+        self.assertEqual(d.lesson_utility(self.v)['review_required'],[])
+        self.applied_outcome_fixture(data,reviewed,'after-two')
+        self.assertEqual(d.lesson_utility(self.v,True)['review_required'],[ident])
+        self.assertEqual(d.lesson_utility(self.v)['lessons'][ident]['harm'],0)
+
+    def test_lesson_utility_only_demotes_eligible_statuses(self):
+        data,lesson=self.reviewed_outcome_fixture();ident=lesson['id']
+        self.applied_outcome_fixture(data,lesson,'one');self.applied_outcome_fixture(data,lesson,'two')
+        rejected=work.put(self.v,'lesson',dict(lesson,status='rejected',expected_version=lesson['version']))
+        self.assertEqual(d.lesson_utility(self.v,True)['review_required'],[])
+        proposed=work.put(self.v,'lesson',dict(rejected,status='proposed',expected_version=rejected['version']))
+        self.assertEqual(d.lesson_utility(self.v,True)['review_required'],[ident])
+        flagged=work.latest(self.v,'lesson')[ident]
+        self.assertEqual(flagged['version'],proposed['version']+1)
+        flagged=work.put(self.v,'lesson',dict(flagged,status='verified',expected_version=flagged['version']))
+        self.applied_outcome_fixture(data,flagged,'three');self.applied_outcome_fixture(data,flagged,'four')
+        self.assertEqual(d.lesson_utility(self.v,True)['review_required'],[])
+        self.assertEqual(work.latest(self.v,'lesson')[ident],flagged)
+
+    def test_lesson_utility_reports_put_failure_and_continues(self):
+        data,lesson=self.reviewed_outcome_fixture();ident=lesson['id']
+        self.applied_outcome_fixture(data,lesson,'one');self.applied_outcome_fixture(data,lesson,'two')
+        other=work.put(self.v,'lesson',dict(lesson,id='z-lesson'))
+        self.applied_outcome_fixture(data,other,'three');self.applied_outcome_fixture(data,other,'four')
+        original=work.put
+        def put(vault,kind,row):
+            if row['id']==ident:raise ValueError('source_changed')
+            return original(vault,kind,row)
+        with patch.object(work,'put',side_effect=put):result=d.lesson_utility(self.v,True)
+        self.assertEqual(result['failures'],[dict(id=ident,reason='demotion_failed:source_changed')])
+        self.assertEqual(result['lessons'][ident]['action'],'demotion_failed:source_changed')
+        self.assertEqual(result['review_required'],[other['id']])
+        self.assertEqual(work.latest(self.v,'lesson')[ident],lesson)
+        self.assertEqual(work.latest(self.v,'lesson')[other['id']]['status'],'proposed')
+
+    def test_lesson_utility_never_rebinds_changed_source(self):
+        data,lesson=self.reviewed_outcome_fixture();ident=lesson['id']
+        self.applied_outcome_fixture(data,lesson,'one');self.applied_outcome_fixture(data,lesson,'two')
+        (self.v/'source.md').write_text(self.quote+' Kaynak artık değişti.')
+        result=d.lesson_utility(self.v,True)
+        self.assertEqual(result['failures'],[dict(id=ident,reason='demotion_failed:lesson_source_changed')])
+        self.assertEqual(work.latest(self.v,'lesson')[ident],lesson)
+        self.assertEqual(ders_baglam.context(self.v,'sunum',project_id='p'),'')
+
+    def test_task_package_applied_lessons_follow_delivered_methods(self):
+        data,lesson=self.reviewed_outcome_fixture()
+        package=build_task_package(self.v,'sunum',budget=5000)
+        self.assertIn('methods',package['selected_ids'])
+        self.assertEqual(package['lessons'],dict(applied=[dict(id=lesson['id'],version=lesson['version'])]))
+        self.assertIn(ders_baglam.context(self.v,'sunum',project_id='p'),package['text'])
+        self.assertEqual(build_task_package(self.v,'sunum',budget=30)['lessons'],dict(applied=[]))
+        with patch('ders_baglam.context_details',wraps=ders_baglam.context_details) as call:
+            method_budget=len(ders_baglam.context(self.v,'sunum',project_id='p'))
+            package=build_task_package(self.v,'sunum',budget=method_budget)
+            self.assertTrue(call.called)
+        self.assertNotIn('methods',package['selected_ids']);self.assertEqual(package['lessons'],dict(applied=[]))
+
+    def test_task_package_clears_applied_lessons_on_source_change(self):
+        data,lesson=self.reviewed_outcome_fixture();original=ders_baglam.context_details
+        def changing(*args,**kwargs):
+            details=original(*args,**kwargs)
+            work.put(self.v,'lesson',dict(lesson,status='rejected',expected_version=lesson['version']))
+            return details
+        with patch('ders_baglam.context_details',side_effect=changing):package=build_task_package(self.v,'sunum')
+        self.assertIn('source_changed_during_package',package['omitted_reasons'])
+        self.assertEqual(package['lessons'],dict(applied=[]))
+
+    def test_task_package_skipped_by_gate_has_no_applied_lessons(self):
+        self.reviewed_outcome_fixture()
+        gate=dict(mode='rerank',degraded=False)
+        with patch.object(jev_client,'purpose_mode',return_value='rerank'), patch.object(jev_client,'load_config',return_value=dict(jev_client.DEFAULTS,rerank_gate_scope='all')), patch('jev_retrieval.rerank_gate',return_value=(False,gate)):
+            package=build_task_package(self.v,'sunum')
+        self.assertEqual(package['text'],'')
+        self.assertEqual(package['selected_ids'],[])
+        self.assertEqual(package['lessons'],dict(applied=[]))
+
     def test_verified_outcome_review_next_task_and_stale_evidence(self):
         data=self.outcome_fixture(failed=True);(self.v/'input.json').write_text(json.dumps(data))
         proposed=self.cli('outcome','--input-json',str(self.v/'input.json'),'--apply')

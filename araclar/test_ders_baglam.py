@@ -2,11 +2,55 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from ders_baglam import context, backlog
+from ders_baglam import context, context_details, backlog
 from codex_hafiza import hook
 from hafiza import statement_hash
 
 class Lessons(unittest.TestCase):
+ def lesson_fixture(self,v,ident='units',**changes):
+  from is_ve_ders import put
+  (v/'source.md').write_text('Raporu yayınlamadan birim adlarını denetle.')
+  (v/'method.md').write_text('Birim adlarını denetle.')
+  data=dict(id=ident,title=ident,status='proposed',source_path='source.md',evidence=(v/'source.md').read_text(),actor='reviewer',triggers=['rapor'],method_path='method.md',implementation_hash=statement_hash((v/'method.md').read_text()))
+  return put(v,'lesson',dict(data,**changes))
+
+ def test_context_details_reports_only_delivered_lessons_in_order(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   v=Path(tmp);z=self.lesson_fixture(v,'z');a=self.lesson_fixture(v,'a')
+   self.lesson_fixture(v,'unmatched',triggers=['kapak'])
+   details=context_details(v,'rapor')
+   self.assertEqual(details['text'],context(v,'rapor'))
+   self.assertEqual(details['lessons'],[dict(id=r['id'],version=r['version'],status=r['status']) for r in (a,z)])
+   self.assertLess(details['text'].index('Ders: a'),details['text'].index('Ders: z'))
+   one=context_details(v,'rapor',budget=len(details['text'])-1)
+   self.assertEqual([r['id'] for r in one['lessons']],['a'])
+   self.assertEqual(one['text'],context(v,'rapor',budget=len(details['text'])-1))
+   self.assertEqual(context_details(v,'rapor',budget=5),dict(text='',lessons=[]))
+   (v/'source.md').write_text('Değişen kaynak dersi geçersiz kılar.')
+   self.assertEqual(context_details(v,'rapor'),dict(text='',lessons=[]))
+
+ def test_review_required_never_enters_context_and_backlog_requests_review(self):
+  from is_ve_ders import put
+  with tempfile.TemporaryDirectory() as tmp:
+   v=Path(tmp);review=dict(reason='harm_exceeds_help',help=0,harm=2,outcome_ids=['one','two'])
+   row=self.lesson_fixture(v,review_required=review,next_step='Eski sonraki adım')
+   self.assertEqual(context_details(v,'rapor'),dict(text='',lessons=[]))
+   entry=backlog(v)[0]
+   self.assertEqual(entry['review_required'],review)
+   self.assertEqual(entry['next_step'],'Fayda incelemesi: zarar 2 > yardım 0; dersi yeniden incele (otomatik silinmedi).')
+   (v/'verified.md').write_text('Test sonucu birim adları için doğrulandı.')
+   verified=put(v,'lesson',dict(row,status='verified',expected_version=row['version'],target_path='method.md',target_hash=row['implementation_hash'],verification_path='verified.md',verification_evidence=(v/'verified.md').read_text()))
+   self.assertEqual(context(v,'rapor'),'')
+   self.assertEqual(backlog(v),[])
+   verified['review_required']={}
+   put(v,'lesson',dict(verified,expected_version=verified['version']))
+   self.assertEqual(context_details(v,'rapor'),dict(text='',lessons=[]))
+
+ def test_backlog_without_review_required_keeps_original_fields(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   v=Path(tmp);self.lesson_fixture(v,proposal='Önce birimleri denetle.')
+   self.assertEqual(backlog(v),[dict(id='units',status='proposed',implementation_status='not_applied',next_step='Önce birimleri denetle.')])
+
  def test_routing_after_first_turn_and_no_block(self):
   with tempfile.TemporaryDirectory() as tmp:
    v=Path(tmp);(v/'zihin').mkdir();(v/'komuta').mkdir()

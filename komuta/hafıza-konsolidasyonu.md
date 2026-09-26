@@ -303,3 +303,14 @@ Engellenen aday 24 saat sonra yeniden incelemeye döner. Aynı gerekçeyle
 reddedilir (ör. iddia zaten incelenmiş bir `bilgi/` notunda kapsamlı duruyor
 ya da kanıt sözleşmesi geriye dönük sağlanamıyor) ya da daha iyi kanıtla
 yeniden önerilir.
+
+## Ders faydasını bakımda inceleme
+
+Bakım turunda önce `python3 araclar/hafiza_dongusu.py --vault . lesson-utility`
+ile dry-run sonucunu incele; ardından aynı komutu `--apply` ile çalıştır.
+Gerekirse `--min-harm N` kullan (varsayılan 2, en az 1). Yardım/zarar sayaçları
+dersin doğruluğuna karar vermez, dersi silmez; yalnız `proposed` ve
+`review_required` ile yeniden incelemeye düşürür. Bu alan kaldırılıp yeni sürüm
+ayrı incelemeden geçene kadar ders bağlama girmez. Eski zararlar yeniden
+onaydan sonra tekrar düşürmez. `zihin/ders-faydasi.json` türetilmiş görünümdür;
+kanonik ders geçmişinin veya kaynak incelemesinin yerine geçmez.

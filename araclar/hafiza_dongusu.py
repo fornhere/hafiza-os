@@ -148,6 +148,15 @@ def outcome(vault,data,apply=False):
     required=('task_id','title','lesson','conditions','method_path','verification_path','verification_evidence','verification_hash','verification_kind','observed_result','actor')
     if any(not isinstance(data.get(k),str) or not data[k].strip() for k in required):raise ValueError('outcome_fields_required')
     if h.contains_secret(json.dumps(data,ensure_ascii=False)):raise ValueError('restricted_outcome')
+    if 'applied_lessons' in data:
+        lessons=latest(vault,'lesson');applied=data['applied_lessons'];seen=set()
+        if not isinstance(applied,list) or len(applied)>20:raise ValueError('applied_lessons_invalid')
+        for item in applied:
+            if (not isinstance(item,dict) or set(item)!={'id','version'} or not isinstance(item['id'],str)
+                or item['id'] in seen or item['id'] not in lessons or type(item['version']) is not int
+                or not 1<=item['version']<=lessons[item['id']]['version']):raise ValueError('applied_lessons_invalid')
+            seen.add(item['id'])
+        data=dict(data,applied_lessons=sorted(applied,key=lambda r:r['id']))
     task=latest(vault,'task').get(data['task_id'])
     if not task or task['status']!='done':raise ValueError('completed_task_required')
     source=h.source_file(vault,task['source_path']); text=source.read_text(encoding='utf-8')
@@ -183,6 +192,54 @@ def review_lesson(vault,data,apply=False):
     return dict(changed=apply,lesson=put(vault,'lesson',lesson) if apply else lesson)
 
 
+def lesson_utility(vault, apply=False, min_harm=2):
+    """Request review, never delete: one failure may be attribution noise.
+
+    Count each task/verification once, after the last review-required version;
+    harmless version updates do not reset accumulated observations.
+    """
+    from is_ve_ders import latest, put, LESSONS
+    from codex_hafiza import atomic
+    if type(min_harm) is not int or min_harm<1:raise ValueError('min_harm_invalid')
+    vault=Path(vault);current=latest(vault,'lesson');cutoffs={}
+    for row in h.load_jsonl(vault/LESSONS):
+        if 'review_required' in row:cutoffs[row['id']]=max(cutoffs.get(row['id'],0),row['version'])
+    lessons={ident:dict(help=0,harm=0,outcome_ids=[],action='none') for ident in sorted(current)}
+    seen=set();review_required=[];failures=[]
+    for row in h.load_jsonl(vault/OUTCOMES):
+        result=row.get('observed_result')
+        if result not in ('passed','accepted','failed','rejected'):continue
+        for item in row.get('applied_lessons',[]):
+            ident=item['id']
+            if ident not in current or item['version']<=cutoffs.get(ident,0):continue
+            if row['receipt_id']==current[ident].get('outcome_id'):continue
+            key=(ident,row['task_id'],row['verification_hash'])
+            if key in seen:continue
+            seen.add(key);entry=lessons[ident]
+            entry['help' if result in ('passed','accepted') else 'harm']+=1
+            entry['outcome_ids'].append(row['receipt_id'])
+    for ident,entry in lessons.items():
+        entry['outcome_ids']=sorted(set(entry['outcome_ids']));row=current[ident]
+        if ('review_required' in row or row['status'] not in ('verified','proposed')
+            or entry['harm']<=entry['help'] or entry['harm']<min_harm):continue
+        entry['action']='review_required'
+        if apply:
+            data={k:v for k,v in row.items() if k not in ('version','updated_at','evidence_hash','source_content_hash')}
+            data.update(status='proposed',actor='lesson-utility',expected_version=row['version'],
+                        review_required=dict(reason='harm_exceeds_help',help=entry['help'],harm=entry['harm'],outcome_ids=entry['outcome_ids']))
+            try:
+                source=h.source_file(vault,row['source_path'])
+                if h.statement_hash(source.read_text())!=row.get('source_content_hash'):raise ValueError('lesson_source_changed')
+                put(vault,'lesson',data)
+            except ValueError as exc:
+                entry['action']='demotion_failed:'+str(exc)
+                failures.append(dict(id=ident,reason=entry['action']));continue
+        review_required.append(ident)
+    if apply:
+        atomic(vault/'zihin/ders-faydasi.json',json.dumps(dict(generated_at=dt.datetime.now(dt.timezone.utc).isoformat(),min_harm=min_harm,lessons=lessons),ensure_ascii=False,indent=2)+'\n')
+    return dict(lessons=lessons,review_required=review_required,failures=failures,applied=apply,canonical_deletes=0)
+
+
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vault',type=Path,required=True)
     sub=p.add_subparsers(dest='cmd',required=True)
@@ -192,8 +249,10 @@ def main(argv=None):
         if name!='verify-answer':r.add_argument('--apply',action='store_true')
         else:r.add_argument('--project-id')
     r=sub.add_parser('context');r.add_argument('query');r.add_argument('--cwd');r.add_argument('--budget',type=int,default=5000)
+    r=sub.add_parser('lesson-utility');r.add_argument('--apply',action='store_true');r.add_argument('--min-harm',type=int,default=2)
     a=p.parse_args(argv);v=a.vault.resolve()
     if a.cmd=='review-pending':result=review_pending(v,a.project_id,a.limit,a.apply)
+    elif a.cmd=='lesson-utility':result=lesson_utility(v,a.apply,a.min_harm)
     elif a.cmd=='context':
         from gorev_baglam import build_task_package
         result=build_task_package(v,a.query,a.cwd,a.budget)

@@ -18,6 +18,13 @@ class Benefit(unittest.TestCase):
     def test_nonfinite_measurements_rejected(self):
         for value in (float('nan'),float('inf'),-1):
             with self.assertRaises(ValueError): summarize([self.row('one',elapsed_seconds=value)])
+    def test_lesson_summary_uses_latest_observations_and_all_outcomes(self):
+        rows=[self.row('one',condition='observational',version=1,applied_lessons=['old']),
+              self.row('one',condition='observational',version=2,applied_lessons=['units'],outcome='rejected')]
+        rows += [self.row(outcome,outcome=outcome,applied_lessons=['units']) for outcome in ('accepted','abandoned','unknown')]
+        rows.append(self.row('unattributed'))
+        self.assertEqual(summarize(rows)['lessons'],{'units':dict(accepted=1,rejected=1,abandoned=1,unknown=1)})
+        self.assertEqual(summarize([])['lessons'],{})
 
 class PassiveObservation(unittest.TestCase):
     def setUp(self):
@@ -39,6 +46,50 @@ class PassiveObservation(unittest.TestCase):
         quote=self.events[6]['payload']['content'][0]['text']
         data=dict(task_id='cover',condition='observational',workflow='thumbnail',model='fixed',protocol_version='natural-1',outcome='accepted',session_id='session',source_snapshot=source,evidence=quote,evidence_source=dict(source,line=7,message_hash=c.digest(quote),quote=quote),reviewed_by='codex-consolidator')
         data.update(changes);return data
+    def lessons(self):
+        from is_ve_ders import put
+        (self.v/'lesson.md').write_text('Kapağı teslim etmeden birimleri denetle.')
+        for ident in ('z','a'):
+            put(self.v,'lesson',dict(id=ident,title=ident,status='proposed',source_path='lesson.md',evidence=(self.v/'lesson.md').read_text(),actor='reviewer'))
+    def test_applied_lessons_record_sorted_and_summarized(self):
+        from fayda_olc import record,OBSERVATIONS
+        import hafiza as h
+        self.lessons();data=self.data(applied_lessons=['z','a'])
+        first=record(self.v,data,True)['observation']
+        self.assertEqual(first['applied_lessons'],['a','z'])
+        self.assertEqual(data['applied_lessons'],['z','a'])
+        again=record(self.v,self.data(applied_lessons=['a','z']),True)
+        self.assertEqual(again['status'],'unchanged')
+        self.assertEqual(summarize(h.load_jsonl(self.v/OBSERVATIONS))['lessons'],{ident:dict(accepted=1,rejected=0,abandoned=0,unknown=0) for ident in ('a','z')})
+    def test_applied_lessons_invalid_rejected(self):
+        from fayda_olc import record,OBSERVATIONS
+        self.lessons()
+        for applied in (None,'a',['missing'],['a','a'],[''],[' '],[True],[{}],['a']*21):
+            with self.subTest(applied=applied),self.assertRaisesRegex(ValueError,'applied_lessons_invalid'):
+                record(self.v,self.data(applied_lessons=applied),True)
+        self.assertFalse((self.v/OBSERVATIONS).exists())
+    def test_absent_applied_lessons_preserves_observation_hash(self):
+        from fayda_olc import record,METRICS
+        import capture_source as c
+        data=self.data();row=record(self.v,data)['observation']
+        expected=dict(data);expected.update({field:None for field in METRICS})
+        source_keys=('session_id','path','prefix_end_line','prefix_hash','source_hash')
+        expected['source_snapshot']={k:data['source_snapshot'][k] for k in source_keys}
+        expected['evidence_source']={k:data['evidence_source'][k] for k in (*source_keys,'line','message_hash','quote')}
+        self.assertNotIn('applied_lessons',row)
+        self.assertEqual(row['observation_hash'],c.digest(expected))
+        explicit=record(self.v,self.data(applied_lessons=[]))['observation']
+        self.assertEqual(explicit['applied_lessons'],[])
+        self.assertNotEqual(explicit['observation_hash'],row['observation_hash'])
+    def test_applied_lessons_twenty_item_limit(self):
+        from fayda_olc import record
+        from is_ve_ders import put,latest
+        self.lessons();lesson=latest(self.v,'lesson')['a'];applied=[]
+        for i in range(21):
+            row=put(self.v,'lesson',dict(lesson,id='lesson-'+str(i)))
+            applied.append(row['id'])
+        self.assertEqual(len(record(self.v,self.data(applied_lessons=applied[:20]))['observation']['applied_lessons']),20)
+        with self.assertRaisesRegex(ValueError,'applied_lessons_invalid'):record(self.v,self.data(applied_lessons=applied))
     def test_dry_run_retry_and_versioned_update(self):
         from fayda_olc import record,OBSERVATIONS,summarize
         import hafiza as h

@@ -66,3 +66,36 @@ python3 -m unittest discover -s araclar -p 'test_*.py'
 Jev `komuta/jev.json` içindeki mevcut off/shadow/on ayarıyla kontrol edilir. Off modda yerel görev bağlamı ve kaynak kapıları çalışır; otomatik terfi yoktur. Bakım zamanlayıcısını kapatmak yeni inceleme turlarını durdurur; geçmiş silinmez. Deneysel kaliteyi aynı aday havuzunda Jev açık/kapalı ve güçlü yerel baseline ile ayrıca ölç. Ücret/gecikme/yanlış kabul ve kaçırılan kaynakları ayrı raporla.
 
 [[Ana Sayfa]]
+
+## Ders faydası ve yeniden inceleme
+
+`ders_baglam.context_details()` metinle birlikte gerçekten enjekte edilen derslerin
+`id`, `version`, `status` alanlarını döndürür; `context()` aynı metni döndürmeye
+devam eder. Görev paketindeki `lessons.applied` yalnız teslim edilen `methods`
+segmentinin `{id, version}` listesidir. Ajan bu listeyi `outcome` girdisine isteğe
+bağlı `applied_lessons` olarak aktarır (en fazla 20 benzersiz, mevcut ders;
+sürüm 1 ile güncel sürüm arasında). Alan yoksa eski makbuz parmak izi değişmez.
+Bu atıf, ajanın yöntemi gerçekten uyguladığının bağımsız kanıtı değildir.
+
+`python3 araclar/hafiza_dongusu.py --vault KASA lesson-utility` yazmadan sayım
+yapar; `--apply` inceleme gereken derse yeni `proposed` sürümü ve
+`review_required={reason, help, harm, outcome_ids}` ekler. `passed`/`accepted`
+yardım, `failed`/`rejected` zarar sayılır. Ders, iş ve doğrulama hash'i başına
+bir sonuç sayılır; dersin kendi oluşum makbuzu dışlanır. Zarar yardımdan fazla
+ve `--min-harm N` eşiğine eşitse veya onu aşarsa inceleme istenir. Varsayılan
+`min_harm=2`: tek başarısızlık atıf gürültüsü olabilir; eşik en az 1 olmalıdır.
+
+`review_required` alanı bulunan ders durumundan bağımsız olarak bağlama girmez;
+backlog fayda incelemesini gösterir. Ders ve geçmişi silinmez. Ayrı inceleme,
+kaynak ve doğrulama kontrolleriyle bu alan kaldırılarak yeni sürüm onaylanabilir.
+Son `review_required` sürümünden büyük kullanılan sürümler sayılır; yeniden
+onay eski zararları taşımaz, sıradan sürüm yenilemesi sayacı sıfırlamaz.
+`--apply`, `zihin/ders-faydasi.json` içine `generated_at`, `min_harm`, `lessons`
+alanlarıyla türetilmiş sayaç görünümü yazar; bu dosya kanonik kayıt değildir.
+Yazma hatası `demotion_failed:<mesaj>` olarak raporlanır, diğer dersler işlenir.
+
+`fayda_olc.record()` ayrıca isteğe bağlı `applied_lessons` ders kimlikleri
+listesini alır (sürüm içermez, en fazla 20 benzersiz mevcut kimlik).
+`summarize()['lessons']` en güncel gözlemlerden ders başına
+`accepted`, `rejected`, `abandoned`, `unknown` sayar. Ham sayımlar nedensel
+başarı veya dersin doğruluğu hakkında karar değildir.

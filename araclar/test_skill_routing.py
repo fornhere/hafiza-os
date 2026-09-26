@@ -59,7 +59,7 @@ class SkillRouting(unittest.TestCase):
             (vault / 'komuta').mkdir()
             (vault / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': self.projects}))
             noisy = '[$ornek-skill](/projects/proje-a/kapak/geçmiş kararlar/SKILL.md) ikinci beyin incele'
-            with patch.object(ders_baglam, 'context', return_value='') as method:
+            with patch.object(ders_baglam, 'context_details', return_value=dict(text='',lessons=[])) as method:
                 package = build_task_package(vault, noisy)
             self.assertEqual(package['project_id'], 'hafiza')
             self.assertEqual(package['workflow_ids'], [])

@@ -20,7 +20,7 @@ def record(vault, data, apply=False):
     """Review-only natural outcome ledger; no inferred quantities or ABC assignment."""
     allowed = {'task_id','condition','workflow','model','protocol_version','outcome',
                'session_id','source_snapshot','evidence_source','evidence','reviewed_by',
-               'expected_version', *METRICS}
+               'expected_version','applied_lessons', *METRICS}
     if set(data) - allowed: raise ValueError('unknown observation fields')
     if data.get('reviewed_by') != 'codex-consolidator':
         raise ValueError('approved reviewer codex-consolidator required')
@@ -33,6 +33,12 @@ def record(vault, data, apply=False):
         raise ValueError('outcome-only writer: human measurements must remain null')
     if h.contains_secret(json.dumps(data,ensure_ascii=False)):
         raise ValueError('secrets cannot be recorded')
+    if 'applied_lessons' in data:
+        from is_ve_ders import latest
+        applied=data['applied_lessons'];lessons=latest(vault,'lesson')
+        if (not isinstance(applied,list) or len(applied)>20
+            or any(not isinstance(ident,str) or not ident.strip() or ident not in lessons for ident in applied)
+            or len(set(applied))!=len(applied)):raise ValueError('applied_lessons_invalid')
     source = data.get('source_snapshot')
     if not isinstance(source,dict) or type(source.get('prefix_end_line')) is not int:
         raise ValueError('completed prefix source_snapshot required')
@@ -46,6 +52,7 @@ def record(vault, data, apply=False):
     row['evidence_source'] = {k:data['evidence_source'][k]
                              for k in (*source_keys,'line','message_hash','quote')}
     row.update({field:None for field in METRICS})
+    if 'applied_lessons' in data:row['applied_lessons']=sorted(data['applied_lessons'])
     row['observation_hash'] = capture.digest(row)
     history = h.load_jsonl(vault / OBSERVATIONS)
     task_rows = [r for r in history if r['task_id']==row['task_id']]
@@ -84,7 +91,7 @@ def latest_observations(rows):
 
 def summarize(rows):
     rows = latest_observations(rows)
-    groups = {}; identities = set()
+    groups = {}; identities = set(); lessons = {}
     for row in rows:
         required = ('task_id','condition','workflow','model','protocol_version','outcome','evidence_source')
         if any(not row.get(k) for k in required):
@@ -100,6 +107,8 @@ def summarize(rows):
                 raise ValueError('invalid measurement: '+field)
         group_key = (row['workflow'],row['model'],row['protocol_version'],row['condition'])
         groups.setdefault(group_key,[]).append(row)
+        for ident in row.get('applied_lessons',[]):
+            lessons.setdefault(ident,{outcome:0 for outcome in OUTCOMES})[row['outcome']]+=1
     output=[]
     for (workflow,model,protocol,condition), tasks in sorted(groups.items()):
         counts={outcome:sum(t['outcome']==outcome for t in tasks) for outcome in ('accepted','rejected','abandoned','unknown')}
@@ -111,6 +120,7 @@ def summarize(rows):
                 total=sum(values) if values else None,median=statistics.median(values) if values else None)
         output.append(result)
     return dict(status='no_observations' if not rows else 'descriptive_only',groups=output,
+                lessons=lessons,
                 observational_groups=[g for g in output if g['condition']=='observational'],
                 experiment_groups=[g for g in output if g['condition']!='observational'],
                 conclusion='Henüz fayda sonucu yok.' if not rows else
