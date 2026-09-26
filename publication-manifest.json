@@ -37,8 +37,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Shared category, note-search, scope-aware duplicate/conflict and condition-safe context logic; public installer supports vault-scoped external Mem0 credentials and optional automatic remote lookup, while private runtime keeps its fixed identity and legacy credential source with explicit remote lookup.",
-      "local_sha256": "96544bee386d318bfe9f74aad17b591609b6743fd5c3d3427e04200092c77df4",
-      "public_sha256": "765b8e780cd10016a419e85b101e11332e6e6a2358ee19f08570304a844e1b80"
+      "local_sha256": "18b9fb4307b95b5279303b69a8f622e98c4259ed64f90369218c30e459b7ab6d",
+      "public_sha256": "77a8bdb50eed4097b149e4097cea332a1a75ff2c87b6ce391595767de2257274"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -63,8 +63,8 @@
       "path": "araclar/konsolidasyon.py",
       "mode": "reviewed-variant",
       "reason": "Private historic exclusion and memory ID prefix versus public defaults.",
-      "local_sha256": "66a33b588795fd8ab27dea0d03dafaf3635314ac503bfb8085f58f4b6047158b",
-      "public_sha256": "47d0e4f81f31f2b0547ec03de90e89ed71d2a99b0450485f2ce3de77c15234de"
+      "local_sha256": "3cedced354d98366c9c713ba98ffc06f0e07f39f1ff5b76604aa266d4ac3d3e2",
+      "public_sha256": "5a8129fd8e0639a0da43d449bf3c585fba0c341d38f732d9a34404fbb316d4e2"
     },
     {
       "path": "araclar/kullanim_kontrol.py",
