@@ -1,7 +1,9 @@
+import datetime as dt
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 import hafiza as h
 from gorev_baglam import build_task_package, digest, rank_records, validate_inputs
 from codex_hafiza import hook
@@ -198,6 +200,183 @@ class ScopeContextPackageTests(unittest.TestCase):
                 self.assertEqual(expected, result['text'])
                 self.assertNotIn('scope-header', result['selected_ids'])
                 self.assertNotIn('scope-header', result['delivered_segments'])
+
+
+class SuppressedHistoryTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.vault = Path(tmp.name)
+        (self.vault / 'komuta').mkdir()
+        (self.vault / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': [
+            dict(id='alpha', aliases=['alpha']), dict(id='youtube', aliases=['kapak']),
+        ]}), encoding='utf-8')
+
+    def promote(self, ident, statement, scope='user', supersedes=None):
+        source_path = ident+'.md'
+        (self.vault / source_path).write_text(statement, encoding='utf-8')
+        candidate = h.add_candidate(
+            self.vault, statement=statement, kind='semantic', scope=scope,
+            subject_key='presentation.style', source_path=source_path, source_anchor='sunum',
+            confidence='explicit-user', sensitivity='normal', proposed_by='test',
+        )
+        return h.promote_candidate(
+            self.vault, candidate['candidate_id'], memory_id=ident,
+            reviewed_by='test', supersedes=supersedes, apply=True,
+        )['record']
+
+    def supersede_chain(self, scope='user'):
+        self.promote('old', 'Sunumlarda kısa cümle kullan.', scope)
+        self.promote('new', 'Sunumlarda uzun cümle kullan.', scope, supersedes='old')
+        old, new = h.load_catalog(self.vault)
+        self.assertEqual('superseded', old['status'])
+        self.assertEqual('old', new['supersedes'])
+        return old, new
+
+    def assert_suppressed(self, result, count):
+        self.assertEqual(count, result['suppressed_count'])
+        if count:
+            notice = f'{count} eski kayıt bastırıldı; tarihçe için karar_gecmisi.'
+            self.assertEqual(notice, result['delivered_segments']['suppressed-history'])
+            self.assertEqual(1, result['text'].splitlines().count(notice))
+        else:
+            self.assertNotIn('eski kayıt bastırıldı', result['text'])
+            self.assertNotIn('suppressed-history', result['selected_ids'])
+
+    def test_superseded_chain_counts_without_delivering_old_statement(self):
+        old, new = self.supersede_chain()
+        for view in ('standard', 'resume'):
+            with self.subTest(view=view):
+                result = build_task_package(self.vault, 'sunum', view=view)
+                self.assert_suppressed(result, 1)
+                self.assertIn(new['statement'], result['text'])
+                self.assertNotIn(old['statement'], json.dumps(result, ensure_ascii=False))
+                self.assertEqual(['new'], result['summary']['record_ids'])
+                self.assertLess(result['selected_ids'].index('new'),
+                                result['selected_ids'].index('suppressed-history'))
+
+    def test_expired_active_record_counts_at_utc_date_boundary(self):
+        row = self.promote('expired', 'Sunumlarda kısa cümle kullan.')
+        today = dt.datetime.now(dt.timezone.utc).date()
+        cases = [((today-dt.timedelta(days=1)).isoformat(), 1),
+                 (today.isoformat(), 1), (today.isoformat()+'T23:59:59Z', 1),
+                 ((today+dt.timedelta(days=1)).isoformat(), 0),
+                 ('bozuk', 0), ('2026-02-30', 0), (None, 0), ('', 0)]
+        for valid_to, count in cases:
+            with self.subTest(valid_to=valid_to):
+                h._write_jsonl(self.vault / h.CATALOG_PATH, [dict(row, valid_to=valid_to)])
+                result = build_task_package(self.vault, 'sunum')
+                self.assert_suppressed(result, count)
+                if count:
+                    self.assertNotIn(row['statement'], result['text'])
+                    self.assertEqual('Aranan kapsam: user', result['text'].splitlines()[0])
+                    self.assertEqual([], result['summary']['record_ids'])
+
+    def test_unmatched_superseded_record_keeps_package_empty(self):
+        self.supersede_chain()
+        result = build_task_package(self.vault, 'OBS nasıl açılır')
+        self.assert_suppressed(result, 0)
+        self.assertEqual('', result['text'])
+
+    def test_out_of_scope_superseded_record_not_counted(self):
+        self.supersede_chain(scope='project:other')
+        for query in ('sunum', 'alpha sunum'):
+            with self.subTest(query=query):
+                result = build_task_package(self.vault, query)
+                self.assert_suppressed(result, 0)
+                self.assertNotIn('scope-header', result['selected_ids'])
+
+    def test_quarantined_deleted_and_sensitive_records_not_counted(self):
+        old, _ = self.supersede_chain()
+        for changes in (dict(status='quarantined'), dict(status='deleted'),
+                        dict(sensitivity='private'), dict(sensitivity='secret'),
+                        dict(status='active', sensitivity='private')):
+            with self.subTest(changes=changes):
+                h._write_jsonl(self.vault / h.CATALOG_PATH, [dict(old, **changes)])
+                result = build_task_package(self.vault, 'sunum')
+                self.assert_suppressed(result, 0)
+                self.assertEqual('', result['text'])
+
+    def test_suppressed_only_package_includes_searched_scopes(self):
+        old, _ = self.supersede_chain()
+        for scope, query, header in (
+            ('user', 'sunum', 'Aranan kapsam: user'),
+            ('project:alpha', 'alpha sunum', 'Aranan kapsam: user + project:alpha'),
+            ('project:youtube', 'alpha kapak sunum',
+             'Aranan kapsam: user + project:alpha + project:youtube'),
+        ):
+            with self.subTest(scope=scope):
+                row = dict(old, scope=scope)
+                row.pop('sensitivity')
+                h._write_jsonl(self.vault / h.CATALOG_PATH, [row])
+                result = build_task_package(self.vault, query)
+                self.assert_suppressed(result, 1)
+                self.assertEqual(header, result['text'].splitlines()[0])
+                self.assertEqual('scope-header', result['selected_ids'][0])
+                self.assertEqual([], result['summary']['record_ids'])
+                self.assertNotIn(old['statement'], result['text'])
+                self.assertEqual(len(result['text']), result['usage']['context_chars'])
+                self.assertEqual(len(result['selected_ids']), result['usage']['selected_count'])
+
+    def test_decision_history_records_not_counted_twice(self):
+        self.supersede_chain()
+        result = build_task_package(self.vault, 'sunum karar geçmişi')
+        self.assert_suppressed(result, 0)
+        self.assertIn('decision-history', result['selected_ids'])
+        self.assertEqual({'old', 'new'}, set(result['decision_history']['considered_ids']))
+        entries = {entry['id']: entry for entry in result['decision_history']['entries']}
+        self.assertFalse(entries['old']['current'])
+        self.assertTrue(entries['new']['current'])
+
+    def test_suppressed_notice_respects_budget_and_keeps_count(self):
+        old, _ = self.supersede_chain()
+        h._write_jsonl(self.vault / h.CATALOG_PATH, [old])
+        full = build_task_package(self.vault, 'sunum')
+        exact = build_task_package(self.vault, 'sunum', budget=len(full['text']))
+        self.assertEqual(full['text'], exact['text'])
+        notice = full['delivered_segments']['suppressed-history']
+        smaller = build_task_package(self.vault, 'sunum', budget=len(notice))
+        self.assert_suppressed(smaller, 1)
+        self.assertEqual(notice, smaller['text'])
+        self.assertIn('scope-header:budget', smaller['omitted_reasons'])
+        empty = build_task_package(self.vault, 'sunum', budget=len(notice)-1)
+        self.assertEqual(1, empty['suppressed_count'])
+        self.assertEqual('', empty['text'])
+        self.assertNotIn('scope-header', empty['selected_ids'])
+        self.assertIn('suppressed-history:budget', empty['omitted_reasons'])
+
+    def test_skip_memory_early_return_has_zero_suppressed_count(self):
+        self.supersede_chain()
+        (self.vault / 'komuta/jev.json').write_text(json.dumps(dict(
+            mode='on', retrieval_mode='rerank', rerank_gate_scope='all',
+        )), encoding='utf-8')
+        with patch('jev_retrieval.rerank_gate', return_value=(False, dict(degraded=False))):
+            result = build_task_package(self.vault, 'sunum')
+        self.assert_suppressed(result, 0)
+        self.assertEqual('', result['text'])
+        self.assertIn('gate', result['jev'])
+
+    def test_memory_gate_skip_does_not_add_suppressed_notice(self):
+        self.supersede_chain()
+        (self.vault / 'komuta/jev.json').write_text(json.dumps(dict(
+            mode='on', retrieval_mode='rerank', rerank_gate_scope='memory',
+        )), encoding='utf-8')
+        with patch('jev_retrieval.rerank_gate', return_value=(False, dict(degraded=False))):
+            result = build_task_package(self.vault, 'sunum')
+        self.assert_suppressed(result, 0)
+        self.assertNotIn('eski kayıt bastırıldı', result['text'])
+
+    def test_source_change_resets_suppressed_count(self):
+        self.supersede_chain()
+        def change_catalog(vault, query, rows, rank, scope):
+            with (vault / h.CATALOG_PATH).open('a', encoding='utf-8') as stream:
+                stream.write('\n')
+            return rank(rows, query), None
+        with patch('jev_retrieval.catalog', side_effect=change_catalog):
+            result = build_task_package(self.vault, 'sunum')
+        self.assert_suppressed(result, 0)
+        self.assertIn('source_changed_during_package', result['omitted_reasons'])
+        self.assertIn('kaynak değişti', result['text'])
 
 
 class ArchivedProjects(unittest.TestCase):
