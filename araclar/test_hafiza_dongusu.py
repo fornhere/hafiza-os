@@ -180,7 +180,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(history,[lesson,new])
         self.assertEqual(len(h.load_jsonl(self.v/d.OUTCOMES)),3)
         self.assertEqual(ders_baglam.context(self.v,'sunum',project_id='p'),'')
-        self.assertEqual(build_task_package(self.v,'sunum')['lessons'],dict(applied=[]))
+        self.assertEqual(build_task_package(self.v,'sunum')['lessons'],dict(applied=[],diagnostics=[dict(id=ident,reason='review_required')]))
         view=json.loads((self.v/'zihin/ders-faydasi.json').read_text())
         self.assertEqual(view['lessons'],applied['lessons']);self.assertEqual(view['min_harm'],2);self.assertTrue(view['generated_at'])
         second=self.cli('lesson-utility','--apply')
@@ -276,14 +276,14 @@ class Lifecycle(unittest.TestCase):
         data,lesson=self.reviewed_outcome_fixture()
         package=build_task_package(self.v,'sunum',budget=5000)
         self.assertIn('methods',package['selected_ids'])
-        self.assertEqual(package['lessons'],dict(applied=[dict(id=lesson['id'],version=lesson['version'])]))
+        self.assertEqual(package['lessons'],dict(applied=[dict(id=lesson['id'],version=lesson['version'])],diagnostics=[]))
         self.assertIn(ders_baglam.context(self.v,'sunum',project_id='p'),package['text'])
-        self.assertEqual(build_task_package(self.v,'sunum',budget=30)['lessons'],dict(applied=[]))
+        self.assertEqual(build_task_package(self.v,'sunum',budget=30)['lessons'],dict(applied=[],diagnostics=[dict(id=lesson['id'],reason='budget')]))
         with patch('ders_baglam.context_details',wraps=ders_baglam.context_details) as call:
             method_budget=len(ders_baglam.context(self.v,'sunum',project_id='p'))
             package=build_task_package(self.v,'sunum',budget=method_budget)
             self.assertTrue(call.called)
-        self.assertNotIn('methods',package['selected_ids']);self.assertEqual(package['lessons'],dict(applied=[]))
+        self.assertNotIn('methods',package['selected_ids']);self.assertEqual(package['lessons'],dict(applied=[],diagnostics=[]))
 
     def test_task_package_clears_applied_lessons_on_source_change(self):
         data,lesson=self.reviewed_outcome_fixture();original=ders_baglam.context_details
@@ -293,7 +293,7 @@ class Lifecycle(unittest.TestCase):
             return details
         with patch('ders_baglam.context_details',side_effect=changing):package=build_task_package(self.v,'sunum')
         self.assertIn('source_changed_during_package',package['omitted_reasons'])
-        self.assertEqual(package['lessons'],dict(applied=[]))
+        self.assertEqual(package['lessons'],dict(applied=[],diagnostics=[]))
 
     def test_task_package_skipped_by_gate_has_no_applied_lessons(self):
         self.reviewed_outcome_fixture()
@@ -302,7 +302,7 @@ class Lifecycle(unittest.TestCase):
             package=build_task_package(self.v,'sunum')
         self.assertEqual(package['text'],'')
         self.assertEqual(package['selected_ids'],[])
-        self.assertEqual(package['lessons'],dict(applied=[]))
+        self.assertEqual(package['lessons'],dict(applied=[],diagnostics=[]))
 
     def test_verified_outcome_review_next_task_and_stale_evidence(self):
         data=self.outcome_fixture(failed=True);(self.v/'input.json').write_text(json.dumps(data))
