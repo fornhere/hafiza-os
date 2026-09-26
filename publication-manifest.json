@@ -33,8 +33,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Shared category, note-search, scope-aware duplicate/conflict and condition-safe context logic; public installer supports vault-scoped external Mem0 credentials and optional automatic remote lookup, while private runtime keeps its fixed identity and legacy credential source with explicit remote lookup.",
-      "local_sha256": "d26d282c36cfadde02ca9c476197db0d13e9edb9ecc98c2000179569823272b9",
-      "public_sha256": "15884aa09e6b5cdc78cad4056d07e73d9321254caa47e0f4ca898ccee1b3837c"
+      "local_sha256": "96544bee386d318bfe9f74aad17b591609b6743fd5c3d3427e04200092c77df4",
+      "public_sha256": "765b8e780cd10016a419e85b101e11332e6e6a2358ee19f08570304a844e1b80"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -48,8 +48,8 @@
       "path": "araclar/is_ve_ders.py",
       "mode": "reviewed-variant",
       "reason": "Only the historical archive link differs in the installed vault; missing-ledger protection is identical.",
-      "local_sha256": "30a58e3f314e4033d3778c96cb0cc4fc1f9918c051bdec82ec596e803febc502",
-      "public_sha256": "d440cca49620031263c7ea10cb48cc0000f6ef88f1d22c03d511f1f56a920b76"
+      "local_sha256": "403e193b5c9a16985b92afd26b7ba22490b538c49c8c629940d120f2c7522284",
+      "public_sha256": "e8e8db3a59879ba934746bf99bd41e7bf926cbc8ab2300fb0cbfcc4aa6578449"
     },
     {
       "path": "araclar/kayit_denetimi.py",
@@ -59,8 +59,8 @@
       "path": "araclar/konsolidasyon.py",
       "mode": "reviewed-variant",
       "reason": "Private historic exclusion and memory ID prefix versus public defaults.",
-      "local_sha256": "227ceba3702d8946fa127be544de37e6e48daa4b3a1d59c4b8c9672bf7af6d2b",
-      "public_sha256": "3310db6ec2a2bc1c8eb8f4c80e973833646fb9f8e04b946b77847edfb9fe75d9"
+      "local_sha256": "66a33b588795fd8ab27dea0d03dafaf3635314ac503bfb8085f58f4b6047158b",
+      "public_sha256": "47d0e4f81f31f2b0547ec03de90e89ed71d2a99b0450485f2ce3de77c15234de"
     },
     {
       "path": "araclar/kullanim_kontrol.py",
@@ -110,8 +110,8 @@
       "path": "araclar/jev_client.py",
       "mode": "reviewed-variant",
       "reason": "Public credential file and provider-specific environment routing versus installed legacy credential reader; choice, noul, probability, rerank, and purpose behavior is otherwise identical.",
-      "local_sha256": "9bf71dda500078326f469859c340f2c3d01ea6fe40f9eaaf9770d4370b297ada",
-      "public_sha256": "9f60571131c8436c9c795405ecadf1bbe391555a08ce750d29f1240f78fbf5d0"
+      "local_sha256": "b9a71f6b8704fdb5a8aa036d5a8d869161418f65b4f23b55dc0fdc91d2ed0e68",
+      "public_sha256": "dd734666055655b407ea043d16ae2b8efdec5173048e8ea206fbdc215456a0ef"
     },
     {
       "path": "araclar/jev_retrieval.py",
