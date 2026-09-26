@@ -158,6 +158,31 @@ def contains_secret(text: str) -> bool:
     return any(pattern.search(text) for pattern in SECRET_PATTERNS)
 
 
+def search_key_errors(value: Any) -> list[str]:
+    """Validate optional, reviewer-supplied retrieval hints without changing evidence."""
+    if not isinstance(value, list):
+        return ["liste olmalı"]
+    errors = []
+    if not 1 <= len(value) <= 12:
+        errors.append("1–12 öğe olmalı")
+    seen = set()
+    for item in value:
+        if not isinstance(item, str):
+            errors.append("öğe metin olmalı")
+            continue
+        key = item.strip()
+        if not 2 <= len(key) <= 40:
+            errors.append("öğe 2–40 karakter olmalı")
+        if any(char in item for char in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"):
+            errors.append("öğe satır sonu içeremez")
+        if contains_secret(item):
+            errors.append("öğe gizli bilgi içeremez")
+        if key.casefold() in seen:
+            errors.append("öğeler tekrarsız olmalı")
+        seen.add(key.casefold())
+    return errors
+
+
 @serialized
 def add_candidate(
     vault: Path,
@@ -308,9 +333,12 @@ def promote_candidate(
     reviewed_by: str | None,
     apply: bool = False,
     supersedes: str | None = None,
+    search_keys: list[str] | None = None,
 ) -> dict[str, Any]:
     if not reviewed_by:
         raise ValueError("terfi için inceleyen kimliği gerekir")
+    if search_keys is not None and search_key_errors(search_keys):
+        raise ValueError("geçersiz arama_anahtarlari")
     candidates = load_jsonl(vault / CANDIDATE_PATH)
     candidate = next((item for item in candidates if item.get("candidate_id") == candidate_id), None)
     if candidate is None:
@@ -381,6 +409,8 @@ def promote_candidate(
     record["source_content_hash"] = statement_hash(source.read_text(encoding="utf-8"))
     for field in ("category", "evidence", "evidence_hash", "evidence_source", "rationale", "conditions"):
         if field in candidate: record[field] = candidate[field]
+    if search_keys is not None:
+        record["arama_anahtarlari"] = [key.strip() for key in search_keys]
     if not apply:
         return {"result": "planned", "record": record}
     for old in records:
@@ -1149,6 +1179,8 @@ def validate_catalog(vault: Path, records: list[dict[str, Any]]) -> list[str]:
             errors.append(f"{memory_id}: geçersiz sensitivity")
         for problem in category_errors(record.get("kind"), record.get("category")):
             errors.append(f"{memory_id}: {problem}")
+        if "arama_anahtarlari" in record and search_key_errors(record["arama_anahtarlari"]):
+            errors.append(f"{memory_id}: geçersiz arama_anahtarlari")
         if record["schema_version"] != 1:
             errors.append(f"{memory_id}: desteklenmeyen schema_version")
         statement = str(record["statement"])
@@ -1431,6 +1463,7 @@ def _build_parser() -> argparse.ArgumentParser:
     promote.add_argument("--memory-id", required=True)
     promote.add_argument("--reviewed-by", required=True)
     promote.add_argument("--supersedes")
+    promote.add_argument("--search-key", action="append", help="İnceleyenin arama anahtarı; tekrarlanabilir")
     promote.add_argument("--apply", action="store_true")
 
     context = sub.add_parser("context")
@@ -1507,6 +1540,7 @@ def main(argv: list[str] | None = None) -> int:
             memory_id=args.memory_id,
             reviewed_by=args.reviewed_by,
             supersedes=args.supersedes,
+            search_keys=args.search_key,
             apply=args.apply,
         )
         _json_print(result)

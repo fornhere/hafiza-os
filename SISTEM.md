@@ -48,6 +48,10 @@ Yetki, tek yazıcı, gizlilik ve Mem0 politikasının tek kaynağı:
 | `komuta/hafıza-raporu.md`, `komuta/hafıza-sagligi.md` | Ölçüm/sağlık çıktısı; üretim tarihi başarılı bakım zamanı değildir. |
 | Mem0 | Katalogdan yeniden üretilebilir uzak erişim görünümü; yetki ve çelişki kuralı yukarıdaki kayıt sözleşmesinde. |
 
+Kanonik katalogdaki isteğe bağlı, türetilmiş `arama_anahtarlari` alanı 1–12 adet, kırpılmış hâli 2–40 karakter olan, satır sonu veya sır içermeyen ve büyük/küçük harf farkıyla tekrarlanmayan arama terimi tutar.
+Yalnız inceleyenin terfi sırasında verdiği tekrarlanabilir `promote --search-key` seçenekleriyle yazılır; adaydan kopyalanmaz ve otomatik konsolidasyon anahtar üretmez.
+Özgün `statement`, `source_hash` ve kaynak kanıtı değişmez; anahtarlar yalnız yerel arama/okumada kullanılır, bağlam metnine veya Jev rerank kartına eklenmez.
+
 ## Komut girişleri
 
 Kasa kökünde `python3 araclar/ARAÇ.py --vault . KOMUT` biçimi kullanılır;
