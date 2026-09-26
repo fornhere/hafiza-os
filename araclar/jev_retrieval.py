@@ -118,16 +118,16 @@ def gate_rows(vault, project_id):
 def strong_lexical_matches(rows, query, min_terms):
     """Only rank_records hits with enough corpus-distinguishing query terms."""
     if min_terms <= 0: return []
-    from gorev_baglam import content_words, rank_records, word_match
+    from gorev_baglam import content_words, rank_records, search_text, word_match
     terms = content_words(query)
-    documents = [(row, content_words(row.get('statement', ''))) for row in rows]
+    documents = [(row, content_words(search_text(row))) for row in rows]
     frequencies = {term: sum(any(word_match(term, word) for word in words)
                              for _, words in documents) for term in terms}
     # Keep the informative-term definition identical to rank_records.
     informative = {term for term in terms if 0 < frequencies[term] < max(2, len(rows)*0.5)}
     matches = []
     for row in rank_records(rows, query):
-        words = content_words(row.get('statement', ''))
+        words = content_words(search_text(row))
         if sum(any(word_match(term, word) for word in words) for term in informative) >= min_terms:
             matches.append('memory:' + row['memory_id'] if 'memory_id' in row else 'note:' + row['id'])
     return matches
@@ -152,20 +152,82 @@ def rerank_gate(vault, query, state):
     return result['needed'], result
 
 
+def deterministic_expansion(query: str) -> list[str]:
+    """Bounded local suffix/synonym hints using the existing inflection contract."""
+    from gorev_baglam import _SUFFIXES, _SYNONYMS, content_words, inflected
+    words = content_words(query)
+    roots = set()
+    hardened = {'ğ': 'k', 'b': 'p', 'd': 't', 'c': 'ç'}
+    for word in sorted(words):
+        if not word.isalpha(): continue
+        frontier = {word}
+        seen = {word}
+        for _ in range(4):
+            stems = {stem[:-len(suffix)] for stem in frontier for suffix in _SUFFIXES
+                     if stem.endswith(suffix) and len(stem) - len(suffix) >= 4} - seen
+            for stem in stems:
+                variants = {stem}
+                if stem[-1] in hardened:
+                    variants.add(stem[:-1] + hardened[stem[-1]])
+                roots.update(base for base in variants if inflected(base, word))
+            seen.update(stems)
+            frontier = stems
+            if not frontier: break
+    expanded = set(roots)
+    for group in _SYNONYMS:
+        if any(inflected(member, word) for member in group for word in words | roots):
+            expanded.update(group)
+    return sorted(expanded - words)[:24]
+
+
+QUERY_EXPANDERS = [deterministic_expansion]
+
+
+def expand_query(query: str) -> list[str]:
+    """Call QUERY_EXPANDERS entries with signature fn(query) -> Iterable[str].
+
+    Expanders only produce candidates, never authorize delivery; rerank retains
+    that decision. A future LLM expander must not send secret/private prompts.
+    Only local deterministic expansion is installed by default. A failing
+    expander (including during iteration) is skipped in full, without affecting
+    the others. Terms are normalized, deduplicated and sorted before the cap.
+    """
+    from gorev_baglam import content_words
+    from hafiza import contains_secret
+    original = content_words(query)
+    expanded = set()
+    for expander in QUERY_EXPANDERS:
+        try:
+            terms = set()
+            for value in expander(query):
+                if not isinstance(value, str): continue
+                term = value.strip().casefold().replace('i\u0307', 'i')
+                if term and len(term) <= 40 and term not in original and not contains_secret(term):
+                    terms.add(term)
+        except Exception:
+            continue
+        expanded.update(terms)
+    return sorted(expanded)[:24]
+
+
 def loose_candidates(query, catalog, notes, limit=8):
     """Shared lexical preselection without rank_records' delivery thresholds."""
     from gorev_baglam import content_words, word_match
     terms = content_words(query)
+    expanded = expand_query(query)
     pool = []
     for kind, rows in (('memory', catalog), ('note', notes)):
         for row in rows:
             ident = row['memory_id'] if kind == 'memory' else row['id']
             fields = ' '.join(str(row.get(k, '')) for k in
                               ('statement', 'subject_key', 'title', 'rationale', 'conditions', 'exceptions'))
+            if isinstance(row.get('arama_anahtarlari'), list):
+                fields += ' ' + ' '.join(k for k in row['arama_anahtarlari'] if isinstance(k, str))
             words = content_words(fields)
             overlap = sum(any(word_match(term, word) for word in words) for term in terms)
-            pool.append((-overlap, kind, ident, row))
-    return [(kind, row) for _, kind, _, row in sorted(pool)[:limit]]
+            expanded_overlap = sum(any(word_match(term, word) for word in words) for term in expanded)
+            pool.append((-overlap, -expanded_overlap, kind, ident, row))
+    return [(kind, row) for _, _, kind, _, row in sorted(pool)[:limit]]
 
 
 def _rerank_body(config, query, facets, cards, state, purpose='retrieval_rerank'):

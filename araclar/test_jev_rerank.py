@@ -13,6 +13,102 @@ import jev_client
 import jev_retrieval
 
 
+class QueryExpansionTests(unittest.TestCase):
+    def test_deterministic_expansion_roots_and_softening(self):
+        for word, root in (('kapağını', 'kapak'), ('videolarımızı', 'video'),
+                           ('yedeklemeleri', 'yedekleme'), ('kitabını', 'kitap'),
+                           ('kanadını', 'kanat'), ('ağacını', 'ağaç')):
+            with self.subTest(word=word):
+                expanded = jev_retrieval.deterministic_expansion(word)
+                self.assertIn(root, expanded)
+                # Synonyms need not be inflections; all other hints must be bases.
+                synonyms = set().union(*gorev_baglam._SYNONYMS)
+                self.assertTrue(all(gorev_baglam.inflected(term, word)
+                                    for term in set(expanded) - synonyms))
+
+    def test_deterministic_expansion_rejects_short_roots_and_long_chains(self):
+        self.assertEqual(jev_retrieval.deterministic_expansion('evi eli atı'), [])
+        self.assertNotIn('ev', jev_retrieval.deterministic_expansion('evleri'))
+        self.assertIn('test', jev_retrieval.deterministic_expansion('testdededede'))
+        self.assertNotIn('test', jev_retrieval.deterministic_expansion('testdedededede'))
+
+    def test_deterministic_expansion_synonyms_excludes_original_words(self):
+        expanded = jev_retrieval.deterministic_expansion('SUNUMLARIMIZ slayt')
+        self.assertIn('slideshow', expanded)
+        self.assertTrue(set(expanded).isdisjoint(gorev_baglam.content_words('SUNUMLARIMIZ slayt')))
+        self.assertEqual(jev_retrieval.expand_query('kapak thumbnail'), [])
+
+    def test_expansion_is_deterministic_unique_and_bounded(self):
+        query = ' '.join(word + 'larımızın' for word in
+                         ('kapak', 'video', 'sunum', 'yedek', 'yöntem', 'bellek', 'kitap', 'kanat'))
+        for expand in (jev_retrieval.deterministic_expansion, jev_retrieval.expand_query):
+            with self.subTest(expand=expand.__name__):
+                terms = expand(query)
+                self.assertEqual(terms, expand(' '.join(reversed(query.split()))))
+                self.assertEqual(terms, sorted(set(terms)))
+                self.assertLessEqual(len(terms), 24)
+        with patch.object(jev_retrieval, 'QUERY_EXPANDERS', [lambda q: {f'term{i:02}' for i in range(40)}]):
+            self.assertEqual(jev_retrieval.expand_query('query'), [f'term{i:02}' for i in range(24)])
+
+    def test_expander_failures_discard_partial_output_and_preserve_others(self):
+        def broken(query):
+            raise RuntimeError('synthetic failure')
+        def broken_iterator(query):
+            yield 'discarded'
+            raise ValueError('synthetic iteration failure')
+        with patch.object(jev_retrieval, 'QUERY_EXPANDERS',
+                          [lambda q: ['before'], broken, broken_iterator, lambda q: ['after']]):
+            self.assertEqual(jev_retrieval.expand_query('query'), ['after', 'before'])
+
+    def test_expansion_filters_secrets_lengths_types_and_duplicates(self):
+        values = ['  VİDEO  ', 'video', '', '  ', None, 12, 'x' * 41, 'x' * 40,
+                  'api_key=synthetic-secret', ' KuRgU ', 'kurgu']
+        with patch.object(jev_retrieval, 'QUERY_EXPANDERS', [lambda q: values]):
+            self.assertEqual(jev_retrieval.expand_query('video'), ['kurgu', 'x' * 40])
+
+    def test_loose_candidates_expansion_breaks_zero_overlap_tie(self):
+        rows = [dict(memory_id='a', statement='renk'), dict(memory_id='z', statement='kurgu')]
+        self.assertFalse(any(gorev_baglam.word_match('çekim', row['statement']) for row in rows))
+        with patch.object(jev_retrieval, 'QUERY_EXPANDERS', [lambda q: ['kurgu']]):
+            self.assertEqual(jev_retrieval.loose_candidates('çekim', rows, [], limit=1),
+                             [('memory', rows[1])])
+
+    def test_loose_candidates_primary_overlap_wins_over_expansion(self):
+        rows = [dict(memory_id='a', statement='çekim kurgu montaj düzenleme'),
+                dict(memory_id='z', statement='çekim video')]
+        with patch.object(jev_retrieval, 'QUERY_EXPANDERS', [lambda q: ['kurgu', 'montaj', 'düzenleme']]):
+            self.assertEqual(jev_retrieval.loose_candidates('çekim video', rows, [], limit=1),
+                             [('memory', rows[1])])
+
+    def test_loose_candidates_without_expansion_keeps_legacy_order(self):
+        rows = [dict(memory_id='z', statement='renk'),
+                dict(memory_id='b', statement='düzen', subject_key='video'),
+                dict(memory_id='a', statement='video')]
+        notes = [dict(id='a', statement='video'), dict(id='b', statement='renk')]
+        with patch.object(jev_retrieval, 'QUERY_EXPANDERS', []):
+            self.assertEqual(jev_retrieval.loose_candidates('video', rows, notes),
+                             [('memory', rows[2]), ('memory', rows[1]), ('note', notes[0]),
+                              ('memory', rows[0]), ('note', notes[1])])
+
+    def test_search_keys_affect_pool_and_rank_without_changing_statement(self):
+        rows = [dict(memory_id='a', statement='Mavi kullan.'),
+                dict(memory_id='z', statement='Kısa cümle kullan.', arama_anahtarlari=['anlatım'])]
+        with patch.object(jev_retrieval, 'QUERY_EXPANDERS', []):
+            self.assertEqual(jev_retrieval.loose_candidates('anlatım', rows, [], limit=1),
+                             [('memory', rows[1])])
+        self.assertEqual(gorev_baglam.rank_records(rows, 'anlatım'), [rows[1]])
+        self.assertEqual(rows[1]['statement'], 'Kısa cümle kullan.')
+
+    def test_non_list_search_keys_are_ignored_by_readers(self):
+        for keys in ('anlatım', {'anlatım': True}, None, 3):
+            with self.subTest(keys=keys):
+                rows = [dict(memory_id='a', statement='Mavi kullan.'),
+                        dict(memory_id='z', statement='Kısa cümle kullan.', arama_anahtarlari=keys)]
+                self.assertEqual(gorev_baglam.rank_records(rows, 'anlatım'), [])
+                self.assertEqual(jev_retrieval.loose_candidates('anlatım', rows, [], limit=1),
+                                 [('memory', rows[0])])
+
+
 class RerankTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -54,6 +150,22 @@ class RerankTests(unittest.TestCase):
             selected, knowledge, result = jev_retrieval.rerank(
                 self.vault, query, rows, None, state if state is not None else {}, 2000)
         return selected, knowledge, result, evaluate
+
+    def test_search_keys_select_pool_but_never_enter_rerank_cards(self):
+        rows = self.memory_rows(2)
+        rows[1]['arama_anahtarlari'] = ['anlatım']
+        self.config(rerank_candidates=1)
+        selected, _, result, evaluate = self.rerank_rows(rows, query='anlatım')
+        self.assertEqual(selected, [rows[1]])
+        self.assertEqual(result['pool_ids'], ['memory:m1'])
+        card = evaluate.call_args.args[2][0]
+        self.assertNotIn('arama_anahtarlari', card)
+        self.assertNotIn('anlatım', json.dumps(card, ensure_ascii=False))
+        self.assertEqual(card['statement'], 'Writing style 1')
+        selected, _, _, _ = self.rerank_rows(rows, query='anlatım', answer=lambda *a, **k:
+            dict(mode='rerank', scores={'memory:m1': 0},
+                 distributions={'memory:m1': {'0': 1, '1': 0, '2': 0}}, degraded=False, diagnostics=[]))
+        self.assertEqual(selected, [])
 
     def test_facet_first_order_covers_then_fills_with_stable_ties(self):
         ids = ['note:z', 'memory:b', 'memory:a', 'note:a', 'memory:low', 'memory:missing']
@@ -873,6 +985,16 @@ class RecallSafetyTests(unittest.TestCase):
         self.assertEqual(jev_retrieval.strong_lexical_matches([row], 'Tipografi', 1), ['memory:one'])
         for threshold in (0, -1):
             self.assertEqual(jev_retrieval.strong_lexical_matches([row], 'Tipografi', threshold), [])
+
+    def test_strong_matches_use_reviewed_search_keys_like_rank_records(self):
+        rows = [dict(memory_id='keyed', statement='Koyu zemin tercih edilir',
+                     arama_anahtarlari=['karanlık tema', 'arayüz']),
+                dict(memory_id='other', statement='Başka konu'),
+                dict(memory_id='third', statement='Üçüncü konu')]
+        query = 'karanlık tema arayüz'
+        self.assertEqual([r['memory_id'] for r in gorev_baglam.rank_records(rows, query)], ['keyed'])
+        self.assertEqual(jev_retrieval.strong_lexical_matches(rows, query, 2), ['memory:keyed'])
+        self.assertEqual(rows[0]['statement'], 'Koyu zemin tercih edilir')
 
     def test_rerank_gate_reports_original_needed_for_every_decision(self):
         for choice, probability, degraded, expected in [('search_memory', .9, False, True),

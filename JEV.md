@@ -34,6 +34,9 @@ Varsayılan `rerank_facets: true` ile birden çok ihtiyaç içeren sorgular, ayn
 
 Aday havuzunun boyutu `rerank_candidates` ile belirlenir (varsayılan 24); aday, soru veya girdi karakteri bütçesi aşılırsa havuz sırası korunarak paketlere bölünür ve en fazla üç paket paralel değerlendirilir. Paket hatasında veya tek başına bütçeye sığmayan adaylarda yerel sıralama kullanılır; başarılı paketlerin kabul ettiği adaylar önce gelir, hiçbir paket değerlendirilemezse tam yerel yola dönülür.
 
+`QUERY_EXPANDERS` / `expand_query` varsayılan olarak yerel Türkçe ek zincirleri ve mevcut eşanlamlı gruplarından en fazla 24 terim üretir; havuz önce özgün sorgu örtüşmesi, eşitlikte genişletilmiş terim örtüşmesiyle sıralanır ve `arama_anahtarlari` da yerel aramaya katılır.
+Genişletme yalnız aday üretir, teslim kararı rerank'te kalır; gelecekte eklenebilecek `fn(query) -> Iterable[str]` genişleticilere sır/özel istem gönderilmemeli, mevcut sürüm LLM genişleticisi içermez.
+
 `retrieval_mode: rerank` önce üç seçenekli bir kapı kullanır: `search_memory`, `no_memory`, `insufficient_context`. Varsayılan `rerank_gate_scope: memory` ayarında son iki karar yalnız katalog kaydı ve bilgi notu seçimini susturur; proje kartı, prosedür ve dersler kendi kurallarıyla devam eder. `rerank_gate_scope: all` tüm paketi susturur ve yalnız kontrollü karşılaştırma içindir. Kapı eşiği `rerank_gate_threshold` (varsayılan 0,70), aday seçimi `rerank_p2` (varsayılan 0,75) ile ayarlanır. Sıralama seviye 2 olasılığını kullanır, en fazla üç kayıt seçer. Eski `rerank_threshold` yalnız uyumluluk kaydıdır. Kapı en fazla 1 saniye, tüm Jev istekleri ortak 2,5 saniyelik son tarihle sınırlanır. Tüm paketler başarısız olduğunda yerel sonuca dönülür ve `degraded` olarak raporlanır.
 
 `komuta/gorev-baglam.json` içindeki isteğe bağlı `erisim` nesnesi iki güvenlik ağını ayarlar:

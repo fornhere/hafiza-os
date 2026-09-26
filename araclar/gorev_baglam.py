@@ -73,10 +73,15 @@ def word_match(left, right):
     return any(any(inflected(term, left) for term in group) and
                any(inflected(term, right) for term in group) for group in _SYNONYMS)
 
+def search_text(row):
+    """Statement plus optional reviewed search keys; keys never enter context text."""
+    keys = row.get('arama_anahtarlari')
+    return ' '.join([row.get('statement', '')] + ([k for k in keys if isinstance(k, str)] if isinstance(keys, list) else []))
+
 def rank_records(rows, query):
     """Query coverage weighted by corpus rarity; order cannot affect selection."""
     terms = content_words(query)
-    documents = [(row, content_words(row.get('statement', ''))) for row in rows]
+    documents = [(row, content_words(search_text(row))) for row in rows]
     frequencies = {term: sum(any(word_match(term, word) for word in words)
                              for _, words in documents) for term in terms}
     informative = {term for term in terms if 0 < frequencies[term] < max(2, len(rows)*0.5)}

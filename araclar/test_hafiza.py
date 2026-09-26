@@ -10,6 +10,110 @@ from pathlib import Path
 import hafiza
 
 
+class SearchKeyTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.vault = Path(temp.name)
+        self.statement = 'Kullanıcı kısa ve net cevapları tercih eder.'
+        self.source = self.vault / 'source.md'
+        self.source.write_text(self.statement, encoding='utf-8')
+        queued = hafiza.add_candidate(
+            self.vault, statement=self.statement, kind='semantic', scope='user',
+            subject_key='communication.conciseness', source_path='source.md',
+            source_anchor='cevap', confidence='explicit-user', sensitivity='normal',
+            proposed_by='worker', evidence=self.statement)
+        self.candidate_id = queued['candidate_id']
+
+    def promote(self, **kwargs):
+        return hafiza.promote_candidate(self.vault, self.candidate_id, memory_id='pref',
+                                        reviewed_by='reviewer', **kwargs)
+
+    @staticmethod
+    def invalid_keys():
+        return [None, 'anlatım', ('anlatım',), {}, [], [''], ['  '], ['a'], ['x' * 41],
+                ['api_key=synthetic-secret'], [str(i) for i in range(100, 113)],
+                ['Video', ' video '], ['Straße', 'STRASSE'], [1], [None],
+                ['iki\nsatır'], ['iki\rsatır'], ['anlatım\n'], ['iki\u2028satır']]
+
+    def test_search_key_validation_boundaries(self):
+        for keys in (['ab'], ['x' * 40], [str(i) for i in range(100, 112)], [' anlatım ', 'ses tonu']):
+            with self.subTest(keys=keys):
+                self.assertEqual(hafiza.search_key_errors(keys), [])
+        for keys in self.invalid_keys():
+            with self.subTest(keys=keys):
+                self.assertTrue(hafiza.search_key_errors(keys))
+
+    def test_promote_search_keys_preserves_statement_hash_and_evidence(self):
+        baseline = self.promote()['record']
+        keys = [' anlatım ', 'ses tonu']
+        result = self.promote(search_keys=keys, apply=True)
+        self.assertEqual(result['result'], 'promoted')
+        record = hafiza.load_catalog(self.vault)[0]
+        self.assertEqual(record, dict(baseline, arama_anahtarlari=['anlatım', 'ses tonu']))
+        self.assertEqual(record['statement'], self.statement)
+        self.assertEqual(record['source_hash'], hafiza.statement_hash(self.statement))
+        self.assertEqual(self.source.read_text(encoding='utf-8'), self.statement)
+        self.assertEqual(keys, [' anlatım ', 'ses tonu'])
+        self.assertEqual(hafiza.validate_catalog(self.vault, [record]), [])
+        self.assertEqual(hafiza.context_record_errors(self.vault, record), [])
+
+    def test_promote_rejects_invalid_search_keys_without_writes(self):
+        events = hafiza.load_jsonl(self.vault / hafiza.EVENT_PATH)
+        for keys in self.invalid_keys():
+            if keys is None: continue  # None omits the optional parameter.
+            for apply in (False, True):
+                with self.subTest(keys=keys, apply=apply):
+                    with self.assertRaisesRegex(ValueError, 'geçersiz arama_anahtarlari'):
+                        self.promote(search_keys=keys, apply=apply)
+                    self.assertEqual(hafiza.load_catalog(self.vault), [])
+                    self.assertEqual(hafiza.load_jsonl(self.vault / hafiza.EVENT_PATH), events)
+
+    def test_promote_ignores_candidate_search_keys(self):
+        candidates = hafiza.load_jsonl(self.vault / hafiza.CANDIDATE_PATH)
+        candidates[0]['arama_anahtarlari'] = ['api_key=synthetic-secret']
+        hafiza._write_jsonl(self.vault / hafiza.CANDIDATE_PATH, candidates)
+        self.assertEqual(self.promote(search_keys=['anlatım'])['record']['arama_anahtarlari'], ['anlatım'])
+        self.promote(apply=True)
+        self.assertNotIn('arama_anahtarlari', hafiza.load_catalog(self.vault)[0])
+
+    def test_catalog_and_context_reject_invalid_search_keys(self):
+        baseline = self.promote()['record']
+        for keys in self.invalid_keys():
+            with self.subTest(keys=keys):
+                row = dict(baseline, arama_anahtarlari=keys)
+                expected = ['pref: geçersiz arama_anahtarlari']
+                self.assertEqual(hafiza.validate_catalog(self.vault, [row]), expected)
+                self.assertEqual(hafiza.context_record_errors(self.vault, row), expected)
+        hafiza._write_jsonl(self.vault / hafiza.CATALOG_PATH, [dict(baseline, arama_anahtarlari=[])])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = hafiza.main(['--vault', str(self.vault), 'context', 'kısa', '--local'])
+        self.assertEqual(result, 1)
+        self.assertEqual(json.loads(output.getvalue())['memory_ids'], [])
+
+    def test_promote_cli_repeated_search_keys_stay_out_of_context_and_remote_metadata(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = hafiza.main(['--vault', str(self.vault), 'promote', self.candidate_id,
+                                 '--memory-id', 'pref', '--reviewed-by', 'reviewer',
+                                 '--search-key', ' anlatım ', '--search-key', 'ses tonu', '--apply'])
+        self.assertEqual(result, 0)
+        record = hafiza.load_catalog(self.vault)[0]
+        self.assertEqual(record['arama_anahtarlari'], ['anlatım', 'ses tonu'])
+        self.assertNotIn('arama_anahtarlari', hafiza.memory_metadata(self.vault, record))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            result = hafiza.main(['--vault', str(self.vault), 'context', 'anlatım', '--local'])
+        self.assertEqual(result, 0)
+        package = json.loads(output.getvalue())
+        self.assertEqual(package['memory_ids'], ['pref'])
+        self.assertIn(self.statement, package['text'])
+        self.assertNotIn('arama_anahtarlari', package['text'])
+        self.assertNotIn('anlatım', package['text'])
+        self.assertNotIn('ses tonu', package['text'])
+
+
 class FakeMem0:
     def __init__(self, remote, search_results=None):
         self.remote = {item["id"]: dict(item) for item in remote}
