@@ -229,14 +229,24 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                 project_context = (str(project.get('id', '')) + ': ' + str(project.get('summary', ''))) if project else ''
                 if h.contains_secret(project_context) or private(project_context): project_context = ''
                 rerank_state = dict(previous_user=(previous_user or '')[:800], project=project_context[:500])
-                from jev_retrieval import rerank_gate
+                from jev_retrieval import rerank_gate, recall_settings, gate_rows, strong_lexical_matches
                 explicit_recall = bool(re.search(r'\b(?:memory:|note:)|neye\s+karar\s+ver|ne\s+karar\s+vermiştik|hatırla|hatırlat', query, re.I))
                 if explicit_recall:
                     needed, gate = True, dict(mode='rerank', requested_mode='rerank', effective_mode='rerank',
-                                              degraded=False, diagnostics=['explicit_recall_bypass'], latency_ms=0)
+                                              degraded=False, diagnostics=['explicit_recall_bypass'], latency_ms=0,
+                                              needed=True, effective_needed=True)
                 else:
                     with evaluation_context(vault):
                         needed, gate = rerank_gate(vault, query, rerank_state)
+                    if not gate.get('degraded') and not needed:
+                        min_terms = recall_settings(config(vault))['gate_override_min_terms']
+                        if min_terms > 0:
+                            matches = strong_lexical_matches(gate_rows(vault, project['id'] if project else None), query, min_terms)
+                            if matches:
+                                needed = True
+                                gate.setdefault('diagnostics', []).append('lexical_override')
+                                gate['override_ids'] = matches
+                    gate['effective_needed'] = needed
                     if not gate.get('degraded') and not needed:
                         skip_memory = True
                         if jev_client.load_config(vault)['rerank_gate_scope'] == 'all':
@@ -390,6 +400,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             ranked_catalog = rank_records(eligible, query)
             knowledge_data = _retrieve_local(vault, query, project_id=project['id'] if project else None,
                                              budget=min(1800, budget)) if (vault / 'bilgi').is_dir() else None
+    from jev_retrieval import static_preferences, recall_settings
+    ranked_catalog = ranked_catalog + static_preferences(eligible, ranked_catalog, recall_settings(cfg), rerank_state is not None)
     procedure_data = procedure_future.result()
     if knowledge_future: knowledge_data = knowledge_future.result()
     if procedure_data['text']: add('procedure-reading', procedure_data['text'])

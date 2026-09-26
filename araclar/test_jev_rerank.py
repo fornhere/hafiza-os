@@ -596,5 +596,305 @@ class RerankTests(unittest.TestCase):
         self.assertEqual(selected,[])
 
 
+class RecallSafetyTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.vault = Path(temp.name)
+        (self.vault / 'komuta').mkdir()
+        (self.vault / 'zihin').mkdir()
+        self.config()
+        evaluate = patch.object(jev_client, 'evaluate', side_effect=self.answer)
+        self.evaluate = evaluate.start()
+        self.addCleanup(evaluate.stop)
+
+    def config(self, **changes):
+        values = dict(mode='on', retrieval_mode='rerank', procedure_mode='off')
+        values.update(changes)
+        (self.vault / 'komuta/jev.json').write_text(json.dumps(values), encoding='utf-8')
+
+    def recall_config(self, **settings):
+        (self.vault / 'komuta/gorev-baglam.json').write_text(
+            json.dumps(dict(projects=[], erisim=settings)), encoding='utf-8')
+
+    def memory(self, ident='pref', statement='Türkçe ve kısa yanıtları tercih ederim.', **changes):
+        source = self.vault / f'{ident}.md'
+        source.write_text(statement, encoding='utf-8')
+        row = dict(memory_id=ident, kind='semantic', scope='user', subject_key=ident,
+                   statement=statement, category='preference', status='active', source_path=source.name,
+                   source_content_hash=hafiza.statement_hash(statement), source_anchor=ident,
+                   source_hash=hafiza.statement_hash(statement), observed_at='2026-01-01',
+                   valid_from='2026-01-01', valid_to=None, confidence='explicit-user', sensitivity='normal',
+                   mem0_id=None, supersedes=None, reviewed_by='test', schema_version=1)
+        row.update(changes)
+        if row.get('category') is None: row.pop('category')
+        rows = hafiza.load_catalog(self.vault) + [row]
+        (self.vault / hafiza.CATALOG_PATH).write_text(
+            ''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows), encoding='utf-8')
+        return row
+
+    def note(self, ident, scope='user'):
+        source = self.vault / f'{ident}-source.md'
+        source.write_text('Tipografi kontrastı korunsun.', encoding='utf-8')
+        row = dict(id=ident, title='Tipografi kontrastı', statement=source.read_text(encoding='utf-8'),
+                   scope=scope, kind='preference', domains=['sunum'], status='reviewed',
+                   sources=[dict(path=source.name, sha256=bilgi_agi.digest(source),
+                                 evidence=source.read_text(encoding='utf-8'))],
+                   reviewed_by='test', review_note='Synthetic source reviewed.')
+        bilgi_agi.register(self.vault, row, True)
+        return row
+
+    @staticmethod
+    def answer(vault, query, cards, **kwargs):
+        if kwargs.get('purpose') == 'retrieval_gate':
+            return dict(choices={'need': 'no_memory'}, distributions={'need': {'search_memory': 0,
+                        'no_memory': 1, 'insufficient_context': 0}}, degraded=False, diagnostics=[])
+        return dict(mode='rerank', scores={card['id']: 0 for card in cards},
+                    distributions={card['id']: {'0': 1, '1': 0, '2': 0} for card in cards},
+                    degraded=False, diagnostics=[])
+
+    def package(self, query='Explain addition', **kwargs):
+        return gorev_baglam.build_task_package(self.vault, query, **kwargs)
+
+    def test_recall_settings_defaults_and_valid_boundaries(self):
+        defaults = dict(static_preferences='rerank', static_preferences_chars=600, gate_override_min_terms=2)
+        self.assertEqual(jev_retrieval.recall_settings({}), defaults)
+        self.assertEqual(jev_retrieval.recall_settings({'erisim': {}}), defaults)
+        for key, values in dict(static_preferences=['off', 'rerank', 'always'],
+                                static_preferences_chars=[0, 2000], gate_override_min_terms=[0, 5]).items():
+            for value in values:
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(jev_retrieval.recall_settings({'erisim': {key: value}}),
+                                     dict(defaults, **{key: value}))
+
+    def test_recall_settings_invalid_values_disable_only_their_key(self):
+        defaults = jev_retrieval.recall_settings({})
+        for key, values in dict(static_preferences=[None, True, 0, [], {}, 'invalid'],
+                                static_preferences_chars=[None, True, False, '600', 1.5, -1, 2001, [], {}],
+                                gate_override_min_terms=[None, True, False, '2', 1.5, -1, 6, [], {}]).items():
+            for value in values:
+                with self.subTest(key=key, value=value):
+                    self.assertEqual(jev_retrieval.recall_settings({'erisim': {key: value}}),
+                                     dict(defaults, **{key: 'off' if key == 'static_preferences' else 0}))
+        for value in (None, False, [], 'invalid', 2):
+            with self.subTest(erisim=value):
+                self.assertEqual(jev_retrieval.recall_settings({'erisim': value}),
+                                 dict(static_preferences='off', static_preferences_chars=0, gate_override_min_terms=0))
+
+    def test_gate_no_delivers_only_static_preference_and_profile(self):
+        pref = self.memory()
+        profile = self.memory('profile', 'İstanbul şehrinde yaşıyorum.', category='profile')
+        self.memory('uncategorized', category=None)
+        self.memory('entity', category='entity')
+        result = self.package()
+        self.assertEqual(result['selected_ids'], ['pref', 'profile'])
+        for row in (pref, profile):
+            self.assertIn(row['statement'], result['text'])
+            self.assertIn(row['source_path'], result['source_versions'])
+        self.assertFalse(result['jev']['gate']['needed'])
+        self.assertFalse(result['jev']['gate']['effective_needed'])
+        self.assertEqual(self.evaluate.call_count, 1)
+
+    def test_static_preferences_off_and_invalid_chars_deliver_nothing(self):
+        self.memory()
+        for settings in (dict(static_preferences='off'), dict(static_preferences_chars=0),
+                         dict(static_preferences_chars='600')):
+            with self.subTest(settings=settings):
+                self.recall_config(**settings)
+                self.assertEqual(self.package()['selected_ids'], [])
+
+    def test_static_character_budget_skips_oversized_and_keeps_later_fit(self):
+        self.memory('a-long')
+        short = self.memory('b-short', 'Kısa yaz.')
+        self.memory('c-extra', 'Sade yaz.')
+        self.recall_config(static_preferences_chars=len(short['statement']))
+        result = self.package()
+        self.assertEqual(result['selected_ids'], ['b-short'])
+        self.assertIn(short['statement'], result['text'])
+
+    def test_static_order_is_user_then_id_without_already_selected(self):
+        rows = [dict(memory_id=ident, scope=scope, category=category, statement='abc')
+                for ident, scope, category in [('a-project', 'project:one', 'preference'),
+                                              ('z-user', 'user', 'profile'),
+                                              ('b-project', 'project:two', 'profile'),
+                                              ('a-user', 'user', 'preference'),
+                                              ('already', 'user', 'preference')]]
+        settings = jev_retrieval.recall_settings({'erisim': {'static_preferences_chars': 12}})
+        for candidates in (rows, list(reversed(rows))):
+            added = jev_retrieval.static_preferences(candidates, [dict(rows[-1])], settings, True)
+            self.assertEqual([r['memory_id'] for r in added], ['a-user', 'z-user', 'a-project', 'b-project'])
+
+    def test_non_rerank_modes_keep_default_delivery_and_allow_always(self):
+        self.memory()
+        for mode in ('off', 'assist', 'on'):
+            for static in ('rerank', 'always'):
+                with self.subTest(mode=mode, static=static):
+                    self.config(retrieval_mode=mode)
+                    self.recall_config(**({'static_preferences': static} if static == 'always' else {}))
+                    result = self.package()
+                    self.assertEqual(result['selected_ids'], ['pref'] if static == 'always' else [])
+
+    def test_static_preferences_keep_source_scope_and_status_gates(self):
+        stale = self.memory('stale')
+        (self.vault / stale['source_path']).write_text('Kaynak değişti.', encoding='utf-8')
+        self.assertTrue(hafiza.context_record_errors(self.vault, stale))
+        self.memory('other-project', scope='project:other')
+        self.memory('private', sensitivity='private')
+        self.memory('superseded', status='superseded')
+        self.memory('invalid', source_hash='invalid')
+        self.memory('valid')
+        self.assertEqual(self.package()['selected_ids'], ['valid'])
+
+    def test_static_preferences_still_obey_final_package_budget(self):
+        self.memory()
+        self.assertEqual(self.package(budget=1)['selected_ids'], [])
+        self.assertEqual(self.package(budget=1)['text'], '')
+
+    def test_static_preferences_follow_rerank_limit_and_degraded_fallback(self):
+        for i in range(4): self.memory(f'm{i}')
+        for degraded in (False, True):
+            with self.subTest(degraded=degraded):
+                def answer(vault, query, cards, **kwargs):
+                    if degraded: return dict(degraded=True, diagnostics=['request_failed'])
+                    return RerankTests.high_answer(vault, query, cards, **kwargs)
+                self.evaluate.side_effect = answer
+                result = self.package('Hatırla')
+                self.assertEqual(result['selected_ids'], ['m0', 'm1', 'm2', 'm3'])
+                self.assertEqual(len(set(result['selected_ids'])), 4)
+
+    def test_gate_scope_all_still_suppresses_static_preferences(self):
+        self.memory()
+        self.config(rerank_gate_scope='all')
+        result = self.package()
+        self.assertEqual(result['text'], '')
+        self.assertEqual(result['selected_ids'], [])
+        self.assertFalse(result['jev']['gate']['effective_needed'])
+
+    def test_lexical_override_reopens_rerank_without_forcing_delivery(self):
+        self.memory('match', 'Tipografi kontrastı korunsun.', category='entity')
+        self.memory('unrelated', 'Veritabanı sorgusu hızlandırılsın.', category='entity')
+        with patch.object(gorev_baglam, '_build_task_package', wraps=gorev_baglam._build_task_package) as build:
+            result = self.package('Tipografi kontrast')
+        gate = result['jev']['gate']
+        self.assertFalse(build.call_args.args[-1])
+        self.assertFalse(gate['needed'])
+        self.assertTrue(gate['effective_needed'])
+        self.assertIn('lexical_override', gate['diagnostics'])
+        self.assertEqual(gate['override_ids'], ['memory:match'])
+        self.assertEqual([c.kwargs['purpose'] for c in self.evaluate.call_args_list],
+                         ['retrieval_gate', 'retrieval_rerank'])
+        self.assertEqual(result['selected_ids'], [])
+
+    def test_single_term_and_disabled_override_keep_skip_memory(self):
+        self.memory('match', 'Tipografi kontrastı korunsun.', category='entity')
+        for query, threshold in [('Tipografi', 2), ('Tipografi kontrast', 0)]:
+            with self.subTest(query=query, threshold=threshold):
+                self.recall_config(gate_override_min_terms=threshold)
+                self.evaluate.reset_mock()
+                with patch.object(gorev_baglam, '_build_task_package', wraps=gorev_baglam._build_task_package) as build:
+                    result = self.package(query)
+                self.assertTrue(build.call_args.args[-1])
+                self.assertFalse(result['jev']['gate']['effective_needed'])
+                self.assertNotIn('lexical_override', result['jev']['gate']['diagnostics'])
+                self.assertNotIn('override_ids', result['jev']['gate'])
+                self.assertEqual(self.evaluate.call_count, 1)
+
+    def test_lexical_override_precedes_all_scope_early_return(self):
+        self.memory('match', 'Tipografi kontrastı korunsun.', category='entity')
+        self.config(rerank_gate_scope='all')
+        with patch.object(gorev_baglam, '_build_task_package', wraps=gorev_baglam._build_task_package) as build:
+            result = self.package('Tipografi kontrast')
+        build.assert_called_once()
+        self.assertFalse(build.call_args.args[-1])
+        self.assertTrue(result['jev']['gate']['effective_needed'])
+        self.assertEqual(self.evaluate.call_count, 2)
+
+    def test_gate_rows_reuse_validated_catalog_and_scoped_notes(self):
+        user = self.memory('user')
+        project = self.memory('project', scope='project:one')
+        self.memory('other', scope='project:two')
+        stale = self.memory('stale')
+        (self.vault / stale['source_path']).write_text('Changed', encoding='utf-8')
+        self.memory('inactive', status='superseded')
+        user_note = self.note('user-note')
+        project_note = self.note('project-note', 'project:one')
+        self.note('other-note', 'project:two')
+        self.note('stale-note')
+        (self.vault / 'stale-note-source.md').write_text('Changed', encoding='utf-8')
+        self.assertEqual(jev_retrieval.gate_rows(self.vault, None), [user, user_note])
+        self.assertEqual(jev_retrieval.gate_rows(self.vault, 'one'), [user, project, project_note, user_note])
+
+    def test_gate_rows_skip_individual_errors_and_keep_other_readers(self):
+        bad = self.memory('bad')
+        good = self.memory('good')
+        note = self.note('valid-note')
+        original = hafiza.context_record_errors
+        for error in (OSError, ValueError):
+            def validate(vault, row):
+                if row['memory_id'] == bad['memory_id']: raise error('unreadable source')
+                return original(vault, row)
+            with self.subTest(error=error), patch.object(hafiza, 'context_record_errors', side_effect=validate):
+                self.assertEqual(jev_retrieval.gate_rows(self.vault, None), [good, note])
+            with patch.object(hafiza, 'load_catalog', side_effect=error('unreadable catalog')):
+                self.assertEqual(jev_retrieval.gate_rows(self.vault, None), [note])
+                with patch.object(bilgi_agi, '_rows', side_effect=error('unreadable notes')):
+                    self.assertEqual(jev_retrieval.gate_rows(self.vault, None), [])
+            with patch.object(bilgi_agi, '_rows', side_effect=error('unreadable notes')):
+                self.assertEqual(jev_retrieval.gate_rows(self.vault, None), [bad, good])
+
+    def test_note_override_uses_selected_project_and_prefixed_id(self):
+        self.note('matching-note', 'project:one')
+        self.note('other-note', 'project:two')
+        (self.vault / 'komuta/gorev-baglam.json').write_text(
+            json.dumps(dict(projects=[dict(id='one', aliases=['Atlas'])])), encoding='utf-8')
+        result = self.package('Atlas tipografi kontrast')
+        self.assertEqual(result['jev']['gate']['override_ids'], ['note:matching-note'])
+        self.assertTrue(result['jev']['gate']['effective_needed'])
+        self.assertEqual(result['project_id'], 'one')
+
+    def test_strong_matches_share_rank_records_informative_term_boundary(self):
+        # Synonyms/inflections, repeated query words, stopwords and absent terms
+        # all participate in the same boundary. A rare one-term row prevents
+        # rank_records' separate no-informative-terms fallback from masking it.
+        query = 've slayt bellek bellek iğne bulunmayan'
+        for size in range(2, 9):
+            for frequency in range(1, size):
+                rows = [dict(memory_id=f'm{i}', statement='Sunumları hafızayı' if i < frequency else 'Başka')
+                        for i in range(size - 1)] + [dict(memory_id='rare', statement='İğne')]
+                expected = [f'memory:m{i}' for i in range(frequency)] if frequency < max(2, size * .5) else []
+                with self.subTest(size=size, frequency=frequency):
+                    self.assertEqual(['memory:' + r['memory_id'] for r in gorev_baglam.rank_records(rows, query)], expected)
+                    self.assertEqual(jev_retrieval.strong_lexical_matches(rows, query, 2), expected)
+
+    def test_strong_matches_require_ranked_statement_hits_and_positive_threshold(self):
+        row = dict(memory_id='one', statement='Tipografi', title='Tipografi kontrast')
+        self.assertEqual(jev_retrieval.strong_lexical_matches([row], 'Tipografi kontrast', 2), [])
+        self.assertEqual(jev_retrieval.strong_lexical_matches([row], 'Tipografi kontrast ek bilgi', 1), [])
+        self.assertEqual(jev_retrieval.strong_lexical_matches([row], 'Tipografi', 1), ['memory:one'])
+        for threshold in (0, -1):
+            self.assertEqual(jev_retrieval.strong_lexical_matches([row], 'Tipografi', threshold), [])
+
+    def test_rerank_gate_reports_original_needed_for_every_decision(self):
+        for choice, probability, degraded, expected in [('search_memory', .9, False, True),
+                                                       ('search_memory', .1, False, False),
+                                                       ('no_memory', 0, False, False),
+                                                       ('insufficient_context', 0, False, False),
+                                                       ('search_memory', .9, True, False)]:
+            with self.subTest(choice=choice, probability=probability, degraded=degraded):
+                self.evaluate.side_effect = None
+                self.evaluate.return_value = dict(choices={'need': choice}, diagnostics=[], degraded=degraded,
+                                                   distributions={'need': {'search_memory': probability}})
+                needed, gate = jev_retrieval.rerank_gate(self.vault, 'Explain addition', {})
+                self.assertIs(needed, expected)
+                self.assertIs(gate['needed'], expected)
+
+    def test_explicit_recall_sets_both_needed_flags_without_gate_call(self):
+        result = self.package('Hatırla')
+        self.evaluate.assert_not_called()
+        self.assertTrue(result['jev']['gate']['needed'])
+        self.assertTrue(result['jev']['gate']['effective_needed'])
+        self.assertEqual(result['jev']['gate']['diagnostics'], ['explicit_recall_bypass'])
+
+
 if __name__ == '__main__':
     unittest.main()

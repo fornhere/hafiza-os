@@ -65,6 +65,74 @@ def mode(vault):
     except (ValueError, OSError): return 'invalid'
 
 
+def recall_settings(cfg):
+    """Missing settings use defaults; malformed settings disable their feature."""
+    safe = dict(static_preferences='off', static_preferences_chars=0, gate_override_min_terms=0)
+    if not isinstance(cfg, dict): return safe
+    values = cfg.get('erisim', {})
+    if not isinstance(values, dict): return safe
+    settings = dict(static_preferences='rerank', static_preferences_chars=600, gate_override_min_terms=2)
+    for key, default in settings.items():
+        value = values.get(key, default)
+        valid = (isinstance(value, str) and value in ('off', 'rerank', 'always') if key == 'static_preferences'
+                 else type(value) is int and 0 <= value <= (2000 if key == 'static_preferences_chars' else 5))
+        settings[key] = value if valid else safe[key]
+    return settings
+
+
+def static_preferences(eligible, already, settings, rerank_active):
+    """Append bounded preferences from the caller's source-validated candidates."""
+    mode = settings['static_preferences']
+    if mode == 'off' or (mode == 'rerank' and not rerank_active): return []
+    seen = {row['memory_id'] for row in already}
+    selected = []; used = 0
+    for row in sorted(eligible, key=lambda row: (row['scope'] != 'user', row['memory_id'])):
+        if row.get('category') not in ('preference', 'profile') or row['memory_id'] in seen: continue
+        cost = len(row['statement'])
+        if used + cost > settings['static_preferences_chars']: continue
+        selected.append(row)
+        seen.add(row['memory_id'])
+        used += cost
+    return selected
+
+
+def gate_rows(vault, project_id):
+    """Reuse catalog and note eligibility before considering a lexical override."""
+    import bilgi_agi as b
+    import hafiza as h
+    vault = Path(vault)
+    scope = f'project:{project_id}' if project_id else 'user'
+    try: catalog = h.load_catalog(vault)
+    except (OSError, ValueError): catalog = []
+    rows = []
+    for row in catalog:
+        try:
+            if h.retrievable(row, scope) and not h.context_record_errors(vault, row): rows.append(row)
+        except (OSError, ValueError): continue
+    try: notes = b._rows(vault)[0] if (vault / 'bilgi').is_dir() else []
+    except (OSError, ValueError): notes = []
+    rows.extend(row for row in notes if row['scope'] in ('user', scope))
+    return rows
+
+
+def strong_lexical_matches(rows, query, min_terms):
+    """Only rank_records hits with enough corpus-distinguishing query terms."""
+    if min_terms <= 0: return []
+    from gorev_baglam import content_words, rank_records, word_match
+    terms = content_words(query)
+    documents = [(row, content_words(row.get('statement', ''))) for row in rows]
+    frequencies = {term: sum(any(word_match(term, word) for word in words)
+                             for _, words in documents) for term in terms}
+    # Keep the informative-term definition identical to rank_records.
+    informative = {term for term in terms if 0 < frequencies[term] < max(2, len(rows)*0.5)}
+    matches = []
+    for row in rank_records(rows, query):
+        words = content_words(row.get('statement', ''))
+        if sum(any(word_match(term, word) for word in words) for term in informative) >= min_terms:
+            matches.append('memory:' + row['memory_id'] if 'memory_id' in row else 'note:' + row['id'])
+    return matches
+
+
 def rerank_gate(vault, query, state):
     """One narrow judgment before any memory context is assembled."""
     candidate = dict(id='need', title='Stored context need', statement='Need for stored context',
@@ -72,14 +140,16 @@ def rerank_gate(vault, query, state):
     result = jev_client.evaluate(vault, query, [candidate], purpose='retrieval_gate', state=state, timeout=1.0)
     result['requested_mode'] = 'rerank'
     result['effective_mode'] = 'local' if result.get('degraded') else 'rerank'
+    result['needed'] = False
     if result.get('degraded'): return False, result
     probabilities = result.get('distributions', {}).get('need', {})
     config = jev_client.load_config(vault)
     if result.get('choices', {}).get('need') == 'insufficient_context':
         result['diagnostics'].append('abstain')
         return False, result
-    return (result.get('choices', {}).get('need') == 'search_memory' and
-            probabilities.get('search_memory', 0) >= config['rerank_gate_threshold']), result
+    result['needed'] = (result.get('choices', {}).get('need') == 'search_memory' and
+                        probabilities.get('search_memory', 0) >= config['rerank_gate_threshold'])
+    return result['needed'], result
 
 
 def loose_candidates(query, catalog, notes, limit=8):
