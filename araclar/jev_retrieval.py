@@ -1,6 +1,8 @@
 """Optional semantic selection after local eligibility gates; never a memory writer."""
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from pathlib import Path
 import jev_client
 
@@ -82,6 +84,36 @@ def loose_candidates(query, catalog, notes, limit=8):
     return [(kind, row) for _, kind, _, row in sorted(pool)[:limit]]
 
 
+def _rerank_body(config, query, facets, cards, state):
+    """Mirror evaluate's retrieval_rerank payload for exact character budgeting."""
+    return dict(model=config['model'], state=dict(query=query, facets=facets,
+                candidates=cards, **state), questions={
+                f'f{j}_c{i}': jev_client._question('retrieval_rerank', i, j)
+                for j in range(len(facets)) for i in range(len(cards))})
+
+
+def _rerank_packages(config, query, facets, cards, state):
+    """Greedy, ordered packages plus IDs that cannot fit even on their own."""
+    def fits(batch):
+        return (len(batch) <= config['max_candidates'] and
+                len(batch) * len(facets) <= config['max_questions'] and
+                len(json.dumps(_rerank_body(config, query, facets, batch, state),
+                               ensure_ascii=False)) <= config['max_input_chars'])
+
+    packages = []; pending = []; oversized_ids = []
+    for card in cards:
+        if fits(pending + [card]):
+            pending.append(card)
+            continue
+        if pending:
+            packages.append(pending)
+            pending = []
+        if fits([card]): pending.append(card)
+        else: oversized_ids.append(card['id'])
+    if pending: packages.append(pending)
+    return packages, oversized_ids
+
+
 def rerank(vault, query, catalog, project_id, state, budget):
     """Return one bounded mixed ranking; caller handles local fallback on degradation."""
     import bilgi_agi as b
@@ -91,7 +123,7 @@ def rerank(vault, query, catalog, project_id, state, budget):
     notes, diagnostics = b._rows(vault) if (vault / 'bilgi').is_dir() else ([], [])
     notes = [row for row in notes if row['scope'] in ('user', f'project:{project_id}')]
     chosen = loose_candidates(query + ' ' + state.get('previous_user', ''), catalog, notes,
-                              min(config['rerank_candidates'], 8))
+                              config['rerank_candidates'])
     cards = []
     for kind, row in chosen:
         ident = row['memory_id'] if kind == 'memory' else row['id']
@@ -103,34 +135,61 @@ def rerank(vault, query, catalog, project_id, state, budget):
                           valid_from=row.get('valid_from', ''), valid_to=row.get('valid_to', ''),
                           **{k: row[k] for k in ('rationale', 'conditions', 'exceptions')
                              if isinstance(row.get(k), str)}))
+    pool_ids = [card['id'] for card in cards]
     versions = {}
     try:
         for kind, row in chosen:
             if kind == 'memory': versions['memory:' + row['memory_id']] = h.statement_hash(str(row))
             else: versions['note:' + row['id']] = b.note_version(vault, row)
     except (OSError, ValueError):
-        return None, None, dict(mode='rerank', degraded=True, diagnostics=['source_changed_before_evaluation'])
+        return None, None, dict(mode='rerank', degraded=True, diagnostics=['source_changed_before_evaluation'],
+                                pool_ids=pool_ids)
     if not cards:
-        result = dict(mode='rerank', scores={}, degraded=False, diagnostics=[], proposed_ids=[])
+        result = dict(mode='rerank', scores={}, degraded=False, diagnostics=[], proposed_ids=[],
+                      pool_ids=[], packages=[], fallback_ids=[])
         return [], dict(text='', records=[], transfers=[], source_versions={}, diagnostics=diagnostics,
                         omitted_record_ids=[], jev=result), result
-    # Shrink the candidate set before calling the provider. The full query and
-    # the candidate evidence remain intact; no silent lexical fallback.
-    while cards:
-        body = dict(model=config['model'], state=dict(query=query, facets=[query],
-                    candidates=cards, **state), questions={
-                    'f0_c'+str(i): jev_client._question('retrieval_rerank', i, 0)
-                    for i in range(len(cards))})
-        if (len(json.dumps(body, ensure_ascii=False)) <= config['max_input_chars'] and
-                len(cards) <= config['max_candidates'] and len(cards) <= config['max_questions']):
-            break
-        cards.pop(); chosen.pop()
-    if not cards:
-        return None, None, dict(mode='rerank', degraded=True, diagnostics=['budget_exceeded'])
-    result = jev_client.evaluate(vault, query, cards, purpose='retrieval_rerank',
-                                 source_versions=versions, state=state)
+    facets = [query]
+    packages, oversized_ids = _rerank_packages(config, query, facets, cards, state)
+    if not packages:
+        return None, None, dict(mode='rerank', degraded=True, diagnostics=['budget_exceeded'],
+                                pool_ids=pool_ids, packages=[], fallback_ids=pool_ids)
+    with ThreadPoolExecutor(max_workers=min(3, len(packages))) as executor:
+        futures = [executor.submit(copy_context().run, jev_client.evaluate, vault, query, package,
+                                   purpose='retrieval_rerank', facets=facets, state=state,
+                                   source_versions={card['id']: versions[card['id']] for card in package})
+                   for package in packages]
+        evaluations = [future.result() for future in futures]
+    successful = [evaluation for evaluation in evaluations if not evaluation.get('degraded')]
+    fallback_ids = set(oversized_ids)
+    for package, evaluation in zip(packages, evaluations):
+        if evaluation.get('degraded'):
+            fallback_ids.update(card['id'] for card in package)
+    result = dict(successful[0] if successful else evaluations[0])
+    result.update(scores={}, distributions={}, diagnostics=[], usage={},
+                  degraded=not successful, pool_ids=pool_ids,
+                  fallback_ids=[ident for ident in pool_ids if ident in fallback_ids],
+                  packages=[dict(size=len(package), degraded=bool(evaluation.get('degraded')),
+                                 diagnostics=list(evaluation.get('diagnostics', [])))
+                            for package, evaluation in zip(packages, evaluations)],
+                  latency_ms=max(evaluation.get('latency_ms', 0) for evaluation in evaluations),
+                  cache_hit=all(evaluation.get('cache_hit', False) for evaluation in evaluations))
+    if any('facet_scores' in evaluation for evaluation in evaluations): result['facet_scores'] = {}
+    for evaluation in evaluations:
+        result['diagnostics'].extend(d for d in evaluation.get('diagnostics', []) if d not in result['diagnostics'])
+        for key in ('input_tokens', 'output_tokens'):
+            if key in evaluation.get('usage', {}):
+                result['usage'][key] = result['usage'].get(key, 0) + evaluation['usage'][key]
+        if evaluation.get('degraded'): continue
+        for key in ('scores', 'distributions'): result[key].update(evaluation.get(key, {}))
+        for facet, scores in evaluation.get('facet_scores', {}).items():
+            result['facet_scores'].setdefault(facet, {}).update(scores)
+    if oversized_ids and 'budget_exceeded' not in result['diagnostics']:
+        result['diagnostics'].append('budget_exceeded')
     if result.get('degraded'):
         return None, None, result
+    if fallback_ids and 'package_fallback' not in result['diagnostics']:
+        result['diagnostics'].append('package_fallback')
     # An in-flight source change invalidates the entire answer.
     try:
         for kind, row in chosen:
@@ -142,8 +201,15 @@ def rerank(vault, query, catalog, project_id, state, budget):
         return None, None, dict(result, degraded=True, diagnostics=result.get('diagnostics', []) + ['source_changed_during_evaluation'])
     probabilities = result.get('distributions', {}); threshold = config['rerank_p2']
     ordered = sorted(((probabilities.get(card['id'], {}).get('2', 0), kind, row) for card, (kind, row) in zip(cards, chosen)
-                      if probabilities.get(card['id'], {}).get('2', 0) >= threshold),
-                     key=lambda item: (-item[0], item[1], item[2].get('memory_id', item[2].get('id', ''))))[:config['rerank_limit']]
+                      if card['id'] not in fallback_ids and probabilities.get(card['id'], {}).get('2', 0) >= threshold),
+                     key=lambda item: (-item[0], item[1], item[2].get('memory_id', item[2].get('id', ''))))
+    if fallback_ids:
+        from gorev_baglam import rank_records
+        fallback_rows = {id(row): (kind, row) for card, (kind, row) in zip(cards, chosen)
+                         if card['id'] in fallback_ids}
+        ordered.extend((0, *fallback_rows[id(row)]) for row in rank_records([row for _, row in chosen], query)
+                       if id(row) in fallback_rows)
+    ordered = ordered[:config['rerank_limit']]
     selected_catalog = [row for _, kind, row in ordered if kind == 'memory']
     selected_notes = [row for _, kind, row in ordered if kind == 'note']
     note_cards = []; note_versions = {}; delivered_notes = []

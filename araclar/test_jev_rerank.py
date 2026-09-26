@@ -1,6 +1,7 @@
 """Synthetic gate and mixed ranking checks; no personal source data."""
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -24,6 +25,24 @@ class RerankTests(unittest.TestCase):
         values = dict(mode='on', retrieval_mode='rerank', procedure_mode='off')
         values.update(changes)
         (self.vault / 'komuta/jev.json').write_text(json.dumps(values))
+
+    def memory_rows(self, count):
+        return [dict(memory_id=f'm{i}', subject_key='Writing style', statement=f'Writing style {i}',
+                     scope='user', source_path=f'm{i}.md') for i in range(count)]
+
+    @staticmethod
+    def high_answer(vault, query, cards, **kwargs):
+        return dict(mode='rerank', scores={card['id']: 2 for card in cards},
+                    distributions={card['id']: {'0': 0, '1': 0, '2': 1} for card in cards},
+                    degraded=False, diagnostics=[])
+
+    def rerank_rows(self, rows, answer=None, state=None):
+        with patch.object(hafiza, 'load_catalog', return_value=rows), \
+             patch.object(hafiza, 'context_record_errors', return_value=[]), \
+             patch.object(jev_client, 'evaluate', side_effect=answer or self.high_answer) as evaluate:
+            selected, knowledge, result = jev_retrieval.rerank(
+                self.vault, 'Writing style', rows, None, state if state is not None else {}, 2000)
+        return selected, knowledge, result, evaluate
 
     def test_gate_no_preserves_non_memory_package(self):
         answer = dict(choices={'need':'no_memory'}, distributions={'need':{'search_memory':.01,'no_memory':.98,'insufficient_context':.01}}, degraded=False, diagnostics=[])
@@ -90,24 +109,290 @@ class RerankTests(unittest.TestCase):
         self.assertEqual(len(result['proposed_ids']), 2)
         self.assertEqual(knowledge['records'], [])
 
-    def test_input_budget_reduces_candidates_before_call(self):
+    def test_default_pool_evaluates_twenty_candidates(self):
+        rows = self.memory_rows(20)
+        _, _, result, evaluate = self.rerank_rows(rows)
+        config = jev_client.load_config(self.vault)
+        self.assertEqual(config['rerank_candidates'], 24)
+        self.assertEqual(config['max_candidates'], 32)
+        self.assertEqual(sum(len(call.args[2]) for call in evaluate.call_args_list), 20)
+        self.assertEqual(len(result['pool_ids']), 20)
+        self.assertEqual(result['pool_ids'], sorted('memory:' + row['memory_id'] for row in rows))
+        self.assertEqual(result['fallback_ids'], [])
+
+    def test_configured_pool_limit_is_respected(self):
+        rows = self.memory_rows(32)
+        for limit in (4, 24, 32):
+            with self.subTest(limit=limit):
+                self.config(rerank_candidates=limit)
+                _, _, result, evaluate = self.rerank_rows(rows)
+                self.assertEqual(len(result['pool_ids']), limit)
+                self.assertEqual(sum(len(call.args[2]) for call in evaluate.call_args_list), limit)
+
+    def test_input_budget_splits_packages_without_losing_candidates(self):
         self.config(max_input_chars=1200)
         rows = [dict(memory_id=f'm{i}', subject_key='style', statement='Writing style ' + 'x'*180,
                      conditions='Only for this writing style', scope='user', source_path=f'm{i}.md')
                 for i in range(8)]
-        counts = []
-        def answer(vault, query, cards, **kwargs):
-            counts.append(len(cards))
+        state = dict(previous_user='Önceki yazı', project='Deneme')
+        _, _, result, evaluate = self.rerank_rows(rows, state=state)
+        self.assertGreater(evaluate.call_count, 1)
+        sent = [card['id'] for call in evaluate.call_args_list for card in call.args[2]]
+        self.assertCountEqual(sent, result['pool_ids'])
+        self.assertEqual(len(sent), len(rows))
+        self.assertFalse(result['degraded'])
+        self.assertEqual(result['fallback_ids'], [])
+        self.assertEqual(len(result['packages']), evaluate.call_count)
+        config = jev_client.load_config(self.vault)
+        versions = {'memory:' + row['memory_id']: hafiza.statement_hash(str(row)) for row in rows}
+        for call in evaluate.call_args_list:
+            cards = call.args[2]
             self.assertEqual(cards[0]['scope'], 'user')
             self.assertEqual(cards[0]['conditions'], 'Only for this writing style')
-            return dict(scores={card['id']: 0 for card in cards}, degraded=False, diagnostics=[])
-        with patch.object(bilgi_agi, '_rows', return_value=([], [])), \
-             patch.object(hafiza, 'load_catalog', return_value=rows), \
-             patch.object(jev_client, 'evaluate', side_effect=answer):
-            jev_retrieval.rerank(self.vault, 'Writing style', rows, None, {}, 2000)
-        self.assertEqual(len(counts), 1)
-        self.assertLess(counts[0], 8)
-        self.assertGreater(counts[0], 0)
+            self.assertEqual(call.kwargs['purpose'], 'retrieval_rerank')
+            self.assertIs(call.kwargs['state'], state)
+            self.assertEqual(call.kwargs['source_versions'], {card['id']: versions[card['id']] for card in cards})
+            body = jev_retrieval._rerank_body(config, call.args[1], call.kwargs['facets'], cards, state)
+            self.assertLessEqual(len(json.dumps(body, ensure_ascii=False)), config['max_input_chars'])
+
+    def test_candidate_and_question_limits_bound_packages(self):
+        rows = self.memory_rows(8)
+        for candidates, questions, sizes in ((3, 96, [3, 3, 2]), (32, 2, [2, 2, 2, 2]),
+                                              (3, 2, [2, 2, 2, 2])):
+            with self.subTest(candidates=candidates, questions=questions):
+                self.config(max_candidates=candidates, max_questions=questions)
+                _, _, result, evaluate = self.rerank_rows(rows)
+                self.assertEqual([package['size'] for package in result['packages']], sizes)
+                self.assertEqual(evaluate.call_count, len(sizes))
+                self.assertCountEqual([card['id'] for call in evaluate.call_args_list for card in call.args[2]],
+                                      result['pool_ids'])
+
+    def test_multi_facet_packages_respect_question_budget(self):
+        config = dict(jev_client.DEFAULTS, max_questions=5)
+        cards = [dict(id=f'memory:m{i}', title='Yazı', statement='Kısa yazı', scope='user', domains=[])
+                 for i in range(7)]
+        facets = ['Writing', 'Style']
+        state = dict(previous_user='Önceki istek')
+        packages, oversized = jev_retrieval._rerank_packages(config, 'Writing style', facets, cards, state)
+        self.assertEqual([len(package) for package in packages], [2, 2, 2, 1])
+        self.assertEqual([card for package in packages for card in package], cards)
+        self.assertEqual(oversized, [])
+        body = jev_retrieval._rerank_body(config, 'Writing style', facets, packages[0], state)
+        self.assertEqual(body, dict(model=config['model'], state=dict(query='Writing style', facets=facets,
+                              candidates=cards[:2], **state), questions={
+                              f'f{j}_c{i}': jev_client._question('retrieval_rerank', i, j)
+                              for j in range(2) for i in range(2)}))
+
+    def test_character_budget_boundary_is_inclusive(self):
+        config = dict(jev_client.DEFAULTS)
+        cards = [dict(id=f'memory:m{i}', title='Yazı', statement='Ölçülü yazı', scope='user', domains=[])
+                 for i in range(2)]
+        body = jev_retrieval._rerank_body(config, 'Yazı', ['Yazı'], cards, {})
+        config['max_input_chars'] = len(json.dumps(body, ensure_ascii=False))
+        self.assertEqual(jev_retrieval._rerank_packages(config, 'Yazı', ['Yazı'], cards, {}), ([cards], []))
+        config['max_input_chars'] -= 1
+        self.assertEqual(jev_retrieval._rerank_packages(config, 'Yazı', ['Yazı'], cards, {}),
+                         ([[cards[0]], [cards[1]]], []))
+
+    def test_degraded_package_uses_full_pool_local_ranking_without_retry(self):
+        self.config(max_candidates=3)
+        rows = self.memory_rows(6)
+        for row, statement in zip(rows, ['Writing', 'Writing style', 'Cooking', 'Implicit preference', 'Other', 'Unrelated']):
+            row['statement'] = statement
+        def answer(vault, query, cards, **kwargs):
+            result = self.high_answer(vault, query, cards, **kwargs)
+            if cards[0]['id'] == 'memory:m0':
+                return dict(result, degraded=True, diagnostics=['request_failed'], request_hash='failed')
+            result['distributions']['memory:m4']['2'] = .1
+            result['distributions']['memory:m5']['2'] = .1
+            return dict(result, request_hash='successful')
+        with patch.object(gorev_baglam, 'rank_records', wraps=gorev_baglam.rank_records) as rank:
+            selected, _, result, evaluate = self.rerank_rows(rows, answer)
+        rank.assert_called_once_with(rows, 'Writing style')
+        self.assertEqual([row['memory_id'] for row in selected], ['m3', 'm1', 'm0'])
+        self.assertEqual(result['proposed_ids'], ['memory:m3', 'memory:m1', 'memory:m0'])
+        self.assertEqual(result['fallback_ids'], ['memory:m0', 'memory:m1', 'memory:m2'])
+        self.assertEqual(result['diagnostics'], ['request_failed', 'package_fallback'])
+        self.assertEqual(result['request_hash'], 'successful')
+        self.assertEqual(result['requested_mode'], 'rerank')
+        self.assertEqual(result['effective_mode'], 'rerank')
+        self.assertFalse(result['degraded'])
+        self.assertEqual(evaluate.call_count, 2)
+        self.assertEqual(result['packages'], [dict(size=3, degraded=True, diagnostics=['request_failed']),
+                                              dict(size=3, degraded=False, diagnostics=[])])
+
+    def test_all_packages_degraded_returns_full_local_fallback(self):
+        self.config(max_candidates=2)
+        rows = self.memory_rows(5)
+        def answer(*args, **kwargs):
+            return dict(degraded=True, diagnostics=['deadline_exceeded'], scores={})
+        selected, knowledge, result, evaluate = self.rerank_rows(rows, answer)
+        self.assertIsNone(selected)
+        self.assertIsNone(knowledge)
+        self.assertTrue(result['degraded'])
+        self.assertEqual(result['diagnostics'], ['deadline_exceeded'])
+        self.assertEqual(evaluate.call_count, 3)
+        self.assertEqual(result['fallback_ids'], result['pool_ids'])
+        self.assertEqual(len(result['pool_ids']), 5)
+        self.assertTrue(all(package['degraded'] for package in result['packages']))
+
+    def test_oversized_candidate_falls_back_without_being_sent(self):
+        self.config(max_input_chars=2000)
+        rows = self.memory_rows(3)
+        rows[1]['statement'] += ' x' * 2000
+        selected, _, result, evaluate = self.rerank_rows(rows)
+        self.assertEqual([row['memory_id'] for row in selected], ['m0', 'm2', 'm1'])
+        self.assertEqual(result['pool_ids'], ['memory:m0', 'memory:m1', 'memory:m2'])
+        self.assertEqual(result['fallback_ids'], ['memory:m1'])
+        self.assertCountEqual([card['id'] for call in evaluate.call_args_list for card in call.args[2]],
+                              ['memory:m0', 'memory:m2'])
+        self.assertEqual(result['diagnostics'], ['budget_exceeded', 'package_fallback'])
+        self.assertFalse(result['degraded'])
+
+    def test_no_candidate_fits_budget_returns_degraded(self):
+        self.config(max_input_chars=1)
+        selected, knowledge, result, evaluate = self.rerank_rows(self.memory_rows(3))
+        evaluate.assert_not_called()
+        self.assertIsNone(selected)
+        self.assertIsNone(knowledge)
+        self.assertTrue(result['degraded'])
+        self.assertEqual(result['diagnostics'], ['budget_exceeded'])
+        self.assertEqual(result['packages'], [])
+        self.assertEqual(result['fallback_ids'], result['pool_ids'])
+        self.assertEqual(len(result['pool_ids']), 3)
+
+    def test_parallel_packages_share_evaluation_deadline(self):
+        self.config(max_candidates=1)
+        rows = self.memory_rows(4)
+        barrier = threading.Barrier(3, timeout=5)
+        caller_thread = threading.get_ident()
+        def answer(vault, query, cards, **kwargs):
+            self.assertNotEqual(threading.get_ident(), caller_thread)
+            self.assertEqual(jev_client._CONTEXT.get()['deadline'], context['deadline'])
+            self.assertEqual(jev_client._CONTEXT.get()['vault'], context['vault'])
+            if cards[0]['id'] != 'memory:m3': barrier.wait()
+            return self.high_answer(vault, query, cards, **kwargs)
+        with jev_client.evaluation_context(self.vault):
+            context = dict(jev_client._CONTEXT.get())
+            _, _, result, evaluate = self.rerank_rows(rows, answer)
+        self.assertEqual(evaluate.call_count, 4)
+        self.assertFalse(result['degraded'])
+
+    def test_package_metadata_is_merged_in_pool_order(self):
+        self.config(max_candidates=1)
+        rows = self.memory_rows(3)
+        for all_cached in (True, False):
+            with self.subTest(all_cached=all_cached):
+                def answer(vault, query, cards, **kwargs):
+                    index = int(cards[0]['id'][-1])
+                    result = self.high_answer(vault, query, cards, **kwargs)
+                    return dict(result, facet_scores={0: dict(result['scores'])},
+                                diagnostics=['shared', f'package_{index}', 'shared'],
+                                usage=dict(input_tokens=index + 1, output_tokens=2 * (index + 1)),
+                                latency_ms=[10, 30, 20][index], cache_hit=all_cached or index != 1,
+                                request_hash=f'hash_{index}')
+                _, _, result, _ = self.rerank_rows(rows, answer)
+                expected_scores = {f'memory:m{i}': 2 for i in range(3)}
+                self.assertEqual(result['scores'], expected_scores)
+                self.assertEqual(set(result['distributions']), set(expected_scores))
+                self.assertEqual(result['facet_scores'], {0: expected_scores})
+                self.assertEqual(result['usage'], dict(input_tokens=6, output_tokens=12))
+                self.assertEqual(result['latency_ms'], 30)
+                self.assertEqual(result['cache_hit'], all_cached)
+                self.assertEqual(result['request_hash'], 'hash_0')
+                self.assertEqual(result['diagnostics'], ['shared', 'package_0', 'package_1', 'package_2'])
+
+    def test_degraded_package_usage_and_latency_are_retained(self):
+        self.config(max_candidates=1)
+        def answer(vault, query, cards, **kwargs):
+            result = self.high_answer(vault, query, cards, **kwargs)
+            if cards[0]['id'] == 'memory:m0':
+                return dict(result, degraded=True, usage=dict(input_tokens=5), latency_ms=50,
+                            diagnostics=['answers_invalid'], cache_hit=False)
+            return dict(result, usage=dict(input_tokens=2, output_tokens=3), latency_ms=10, cache_hit=True)
+        _, _, result, _ = self.rerank_rows(self.memory_rows(2), answer)
+        self.assertEqual(result['usage'], dict(input_tokens=7, output_tokens=3))
+        self.assertEqual(result['latency_ms'], 50)
+        self.assertFalse(result['cache_hit'])
+        self.assertEqual(result['scores'], {'memory:m1': 2})
+
+    def test_source_change_in_fallback_pool_invalidates_entire_result(self):
+        for oversized in (False, True):
+            with self.subTest(oversized=oversized):
+                self.config(max_candidates=1, max_input_chars=2000)
+                rows = self.memory_rows(2)
+                if oversized: rows[1]['statement'] += ' x' * 2000
+                fresh = [rows[0], dict(rows[1], statement='Changed source')]
+                def answer(vault, query, cards, **kwargs):
+                    result = self.high_answer(vault, query, cards, **kwargs)
+                    if cards[0]['id'] == 'memory:m1':
+                        return dict(result, degraded=True, diagnostics=['request_failed'])
+                    return result
+                with patch.object(hafiza, 'load_catalog', return_value=fresh), \
+                     patch.object(hafiza, 'context_record_errors', return_value=[]), \
+                     patch.object(jev_client, 'evaluate', side_effect=answer):
+                    selected, knowledge, result = jev_retrieval.rerank(
+                        self.vault, 'Writing style', rows, None, {}, 2000)
+                self.assertIsNone(selected)
+                self.assertIsNone(knowledge)
+                self.assertTrue(result['degraded'])
+                self.assertIn('source_changed_during_evaluation', result['diagnostics'])
+                self.assertEqual(result['pool_ids'], ['memory:m0', 'memory:m1'])
+                self.assertEqual(result['fallback_ids'], ['memory:m1'])
+
+    def test_note_fallback_preserves_budget_and_source_versions(self):
+        self.config(max_candidates=1)
+        (self.vault / 'bilgi').mkdir()
+        rows = self.memory_rows(1)
+        note = dict(id='n1', title='Writing style', statement='Writing style note', scope='user',
+                    domains=['writing'], kind='preference', conditions='Only drafts',
+                    sources=[dict(path='source.md', sha256='source-sha')],
+                    examples=[dict(path='example.md', sha256='example-sha')])
+        def answer(vault, query, cards, **kwargs):
+            result = self.high_answer(vault, query, cards, **kwargs)
+            if cards[0]['id'] == 'note:n1':
+                self.assertEqual(kwargs['source_versions'], {'note:n1': 'note-sha'})
+                return dict(result, degraded=True, diagnostics=['request_failed'])
+            self.assertEqual(set(kwargs['source_versions']), {'memory:m0'})
+            return result
+        for budget in (2000, 1):
+            with self.subTest(budget=budget), \
+                 patch.object(bilgi_agi, '_rows', return_value=([note], ['note-diagnostic'])), \
+                 patch.object(bilgi_agi, 'note_version', return_value='note-sha'), \
+                 patch.object(hafiza, 'load_catalog', return_value=rows), \
+                 patch.object(hafiza, 'context_record_errors', return_value=[]), \
+                 patch.object(jev_client, 'evaluate', side_effect=answer) as evaluate:
+                selected, knowledge, result = jev_retrieval.rerank(
+                    self.vault, 'Writing style', rows, None, {}, budget)
+            self.assertEqual(selected, rows)
+            self.assertEqual(evaluate.call_count, 2)
+            self.assertEqual(result['pool_ids'], ['memory:m0', 'note:n1'])
+            self.assertEqual(result['proposed_ids'], ['memory:m0', 'note:n1'])
+            self.assertEqual(result['fallback_ids'], ['note:n1'])
+            self.assertEqual(knowledge['diagnostics'], ['note-diagnostic'])
+            if budget == 1:
+                self.assertEqual(knowledge['text'], '')
+                self.assertEqual(knowledge['records'], [])
+                self.assertEqual(knowledge['source_versions'], {})
+            else:
+                self.assertEqual(knowledge['records'], [note])
+                self.assertIn('Koşul: Only drafts', knowledge['text'])
+                self.assertEqual(knowledge['source_versions'], {'bilgi/n1.md': 'note-sha',
+                                                               'source.md': 'source-sha', 'example.md': 'example-sha'})
+
+    def test_source_change_before_evaluation_reports_pool(self):
+        (self.vault / 'bilgi').mkdir()
+        note = dict(id='n1', title='Writing style', statement='Writing style note', scope='user')
+        with patch.object(bilgi_agi, '_rows', return_value=([note], [])), \
+             patch.object(bilgi_agi, 'note_version', side_effect=ValueError('source_changed')), \
+             patch.object(jev_client, 'evaluate') as evaluate:
+            selected, knowledge, result = jev_retrieval.rerank(self.vault, 'Writing style', [], None, {}, 2000)
+        evaluate.assert_not_called()
+        self.assertIsNone(selected)
+        self.assertIsNone(knowledge)
+        self.assertTrue(result['degraded'])
+        self.assertEqual(result['diagnostics'], ['source_changed_before_evaluation'])
+        self.assertEqual(result['pool_ids'], ['note:n1'])
 
     def test_notes_and_catalog_share_the_same_limit(self):
         self.config(rerank_limit=2)
@@ -139,6 +424,9 @@ class RerankTests(unittest.TestCase):
         self.assertEqual(catalog, [])
         self.assertEqual(knowledge['text'], '')
         self.assertFalse(result['degraded'])
+        self.assertEqual(result['pool_ids'], [])
+        self.assertEqual(result['packages'], [])
+        self.assertEqual(result['fallback_ids'], [])
 
     def test_p2_threshold_excludes_high_expected_score(self):
         self.config(rerank_p2=.75)

@@ -21,7 +21,7 @@ DEFAULTS = dict(mode='off', retrieval_mode='inherit', procedure_mode='off', task
                 timeout=2.5, max_candidates=32, max_questions=96,
                 max_input_chars=24000, cache_ttl=3600,
                 rerank_threshold=1.5, rerank_p2=0.75, rerank_gate_threshold=0.70,
-                rerank_gate_scope='memory', rerank_limit=3, rerank_candidates=8,
+                rerank_gate_scope='memory', rerank_limit=3, rerank_candidates=24,
                 claude_hook_mode='shadow')
 CRITERIA = ['Unrelated or unsupported, including unsupported exact values or unapproved domain transfer.',
             'Related background, but not direct evidence for any requested part.',
