@@ -2,7 +2,7 @@
 """Native hooks: bounded context and successful Stop registration only.
 
 Every runtime failure is a safe stderr diagnostic and a non-blocking response.
-The hook never starts a reviewer or model process.
+The hook never starts a reviewer. Optional Jev task advice follows its config.
 """
 import argparse
 import hashlib
@@ -33,7 +33,9 @@ def local_task_package(vault, query, cwd=None, previous_user=None):
 def claude_task_package(vault, query, cwd=None, previous_user=None):
     import jev_client
     from gorev_baglam import build_task_package
-    try: mode = jev_client.load_config(vault)['claude_hook_mode']
+    try:
+        config = jev_client.load_config(vault)
+        mode = config['claude_hook_mode'] if config['mode'] != 'off' else 'off'
     except (ValueError, OSError): mode = 'off'
     if mode == 'off' or contains_secret(query) or private(query) or (previous_user and (contains_secret(previous_user) or private(previous_user))):
         return local_task_package(vault, query, cwd, previous_user)
@@ -43,7 +45,8 @@ def claude_task_package(vault, query, cwd=None, previous_user=None):
     original = jev_client.load_config
     def shadow_config(path):
         config = original(path)
-        config.update(mode='on', retrieval_mode='rerank', procedure_mode='off')
+        if config['mode'] != 'off':
+            config.update(mode='on', retrieval_mode='rerank', procedure_mode='off')
         return config
     started = time.monotonic()
     try:

@@ -26,7 +26,8 @@ Kasada `komuta/jev.json` oluşturun:
 - `shadow`: yerel sonuç teslim edilir, Jev adayları ve tanı bilgisi JSON'un `jev` alanına eklenir.
 - `on`: doğrudan kaynak kartları ve katalog Jev puanıyla seçilir. Başlangıç eşiği 0–2 ölçeğinde 1.5; kalibre edilmiş güven olasılığı değildir. Kapsama uygun bilgi kartları bulunduğunda alanlar arası uyarlama önerileri eklenmez. Kapsama uygun hiçbir aday yoksa yerel yol korunur.
 
-Modu `off` yapmak anında geri dönüş yoludur. Değişiklik yeni çağrıda okunur, servis yeniden başlatılmaz.
+Genel `mode` değerini `off` yapmak Claude hook gölgesi dahil Jev erişimini kapatır.
+Değişiklik yeni çağrıda okunur, servis yeniden başlatılmaz; başlamış ağ isteğini geriye dönük iptal etmez.
 
 ## 1. aşama: rerank ve hook gölgesi
 
@@ -47,6 +48,10 @@ Genişletme yalnız aday üretir, teslim kararı rerank'te kalır; gelecekte ekl
 Eksik nesne/anahtar varsayılanı kullanır; geçersiz değer veya tip yalnız ilgili anahtarı kapatır (`"off"` veya `0`, karakter sınırı da `0`). Nesnenin kendisi geçersizse üç ayar da kapanır.
 
 Claude hook için `claude_hook_mode: off|shadow|on` varsayılanı `shadow`dur. Gölge modunda kullanıcının gördüğü metin yerel kalır; Jev kapı/sıralama tanısı `.cache/jev-golge/*.jsonl` altında tutulur. Günlükte istem metni bulunmaz; yalnız SHA-256 hash, seçilen kimlikler, skorlar, tanılar ve gecikme bulunur. Gizli veya özel istemler Jev'e gönderilmez. `on` modu yapılandırılmış Jev yolunu kullanır. Codex hook'ta `HAFIZA_HOOK_JEV=0` kapatma bayrağı geçerlidir.
+
+Claude gölgesi genel `mode: off` ayarını geçersiz kılamaz. Gölge değerlendirmesi
+hook içinde tamamlanır; yerel metin teslim edilmesi sıfır ağ çağrısı veya sıfır
+gecikme anlamına gelmez. Yalnız Claude erişimini kapatmak için `claude_hook_mode: off` kullanılır.
 
 `erisim_olc.py` seed 7 ile iki yarı ölçer; kanal başına teslim edilen karakter, p50/p95 gecikme, `degraded`, `abstain`, istenen ve etkili mod raporlanır. 2026-09-24 v2 seti eşik geliştirmesinde kullanıldığı için bağımsız başarı testi sayılmaz.
 
