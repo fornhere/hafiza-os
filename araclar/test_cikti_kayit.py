@@ -1,4 +1,5 @@
 import datetime as dt
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -6,6 +7,17 @@ import unittest
 import hafiza as h
 from cikti_kayit import checked_output, verified_outputs, file_digest, review_binding
 from is_ve_ders import put
+
+
+class FileDigest(unittest.TestCase):
+    def test_empty_binary_and_multi_chunk_files_match_sha256(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'output.bin'
+            data = bytes(range(256)) * 2049
+            for size in (0, 1, 262143, 262144, 262145, len(data)):
+                with self.subTest(size=size):
+                    path.write_bytes(data[:size])
+                    self.assertEqual(hashlib.sha256(data[:size]).hexdigest(), file_digest(path))
 
 
 class Outputs(unittest.TestCase):

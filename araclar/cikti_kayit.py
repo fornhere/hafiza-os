@@ -7,8 +7,11 @@ import hafiza as h
 
 
 def file_digest(path):
+    digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        for chunk in iter(lambda: stream.read(256 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def review_binding(output):

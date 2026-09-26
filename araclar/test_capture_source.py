@@ -1,11 +1,63 @@
 import datetime as dt
+from contextlib import nullcontext
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import capture_source as c
 import konsolidasyon as k
 import codex_hafiza as hook
+
+
+class HeartbeatThreads(unittest.TestCase):
+    def check_config(self, content, expected):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'automations/hb/automation.toml'
+            path.parent.mkdir(parents=True)
+            path.write_bytes(content.encode('utf-8') if isinstance(content, str) else content)
+            for fallback in (False, True):
+                with self.subTest(fallback=fallback):
+                    context = patch.dict(sys.modules, {'tomllib': None}) if fallback else nullcontext()
+                    with context:
+                        self.assertEqual(expected, k.heartbeat_threads(root))
+
+    def test_toml_string_forms_and_unrelated_values(self):
+        for content in (
+            'kind = "heartbeat"\ntarget_thread_id = "s" # comment\n',
+            "'kind' = 'heartbeat'\n\"target_thread_id\" = 's'\n",
+            'kind = """\nheartbeat"""\ntarget_thread_id = \'\'\'s\'\'\'\n',
+            'kind = "heart\\u0062eat"\ntarget_thread_id = "s\\U00000023x"\n',
+        ):
+            with self.subTest(content=content):
+                expected = {'s#x'} if '\\U' in content else {'s'}
+                self.check_config(content + 'created_at = 2026-09-01T12:00:00Z\n'
+                                  'options = { enabled = true, values = [1, 2.5] }\n', expected)
+
+    def test_multiline_prompt_and_nested_metadata_do_not_supply_root_fields(self):
+        self.check_config('kind = "scheduled"\ntarget_thread_id = "ordinary"\n'
+                          'prompt = \'\'\'\nkind = "heartbeat"\ntarget_thread_id = "fake"\n\'\'\'\n'
+                          '[metadata]\nkind = "heartbeat"\ntarget_thread_id = "nested"\n', set())
+        self.check_config('kind = "heartbeat"\ntarget_thread_id = "root"\n'
+                          'prompt = """\nkind = \\"scheduled\\"\n"""\n'
+                          '[[metadata]]\nkind = "scheduled"\ntarget_thread_id = "nested"\n', {'root'})
+
+    def test_invalid_documents_and_non_string_ids_are_ignored(self):
+        valid = 'kind = "heartbeat"\ntarget_thread_id = "s"\n'
+        for content in (
+            valid + 'kind = "heartbeat"\n',
+            valid + 'unrelated = [1,\n',
+            valid + '[metadata]\n[metadata]\n',
+            valid + 'prompt = "unterminated\n',
+            'kind = "heartbeat"\ntarget_thread_id = 123\n',
+            'kind = "heartbeat"\n',
+            valid.encode('utf-8') + b'\xff',
+        ):
+            with self.subTest(content=content):
+                self.check_config(content, set())
+
 
 class Capture(unittest.TestCase):
     def setUp(self):
