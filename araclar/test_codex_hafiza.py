@@ -304,6 +304,170 @@ class Hooks(unittest.TestCase):
         self.assertIn('Son oturum kaydı 2000-01-01 tarihli (', output.getvalue())
         self.assertNotIn('Özel eski içerik', output.getvalue())
 
+    def test_fresh_session_has_dated_warning(self):
+        (self.vault / 'zihin').mkdir()
+        section = '## 2026-09-23 — özet\nTaze bölüm'
+        (self.vault / 'zihin/son-oturum.md').write_text(section, encoding='utf-8')
+        header = "Tarihli özet (2026-09-23); güncel durumu açık işlerden/Git'ten doğrula."
+        for age in (0, 1, 3):
+            with self.subTest(age=age):
+                result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 23 + age))
+                self.assertEqual(result.splitlines()[0], header)
+                self.assertEqual(result, header + '\n' + section)
+
+    def test_fresh_session_cross_checks_explicit_items(self):
+        from is_ve_ders import put
+        (self.vault / 'zihin').mkdir()
+        section = '## 2026-09-23\n**Açık:** Külaltı işleri güncellenmedi; Twitter içerik sistemi'
+        (self.vault / 'zihin/son-oturum.md').write_text(section, encoding='utf-8')
+        evidence = 'Twitter içerik üretim sistemi üzerinde çalışılacak.'
+        (self.vault / 'kaynak.md').write_text(evidence, encoding='utf-8')
+        put(self.vault, 'task', dict(id='twitter-content-system', title='Twitter içerik üretim sistemi',
+            status='active', next_step='İçerik taslağı hazırla', source_path='kaynak.md',
+            evidence=evidence, actor='test', last_verified=h.dt.date.today().isoformat()))
+
+        result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+        self.assertIn('Özetteki açık maddeler (güncel iş kaydıyla eşleştirme; durum çıkarımı değildir):', result)
+        self.assertIn('- Twitter içerik sistemi — güncel kayıt: twitter-content-system', result)
+        self.assertIn('- Külaltı işleri güncellenmedi — özette var, güncel kayıtta yok', result)
+        self.assertTrue(result.endswith(section))
+        self.assertLess(result.index('Özetteki açık maddeler'), result.index('## 2026-09-23'))
+
+    def test_fresh_session_without_marked_items_has_no_cross_check(self):
+        (self.vault / 'zihin').mkdir()
+        section = ('## 2026-09-23\nTwitter içerik sistemi üzerinde çalışıldı.\n'
+                   'Not: Açık: Külaltı\n- Açık işler\nSonraki hafta: Twitter\n> Yapılacak: Külaltı')
+        (self.vault / 'zihin/son-oturum.md').write_text(section, encoding='utf-8')
+        with patch('is_ve_ders.brief') as brief:
+            result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+        brief.assert_not_called()
+        self.assertNotIn('Özetteki açık maddeler', result)
+        self.assertNotIn('güncel kayıtta yok', result)
+        self.assertTrue(result.endswith(section))
+
+    def test_fresh_session_recognizes_open_item_labels(self):
+        (self.vault / 'zihin').mkdir()
+        path = self.vault / 'zihin/son-oturum.md'
+        for label in ('Açık', 'Açık işler', 'Sonraki', 'Sonraki adım', 'Yapılacak'):
+            for bullet in ('', '- ', '* '):
+                for marked in (label + ':', '**' + label + ':**', '**' + label + '**:'):
+                    with self.subTest(bullet=bullet, marked=marked):
+                        path.write_text('## 2026-09-23\n' + bullet + marked + ' **Twitter içerik sistemi**',
+                                        encoding='utf-8')
+                        result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+                        self.assertIn('- **Twitter içerik sistemi** — özette var, güncel kayıtta yok', result)
+
+    def test_fresh_session_matching_requires_specific_words(self):
+        (self.vault / 'zihin').mkdir()
+        path = self.vault / 'zihin/son-oturum.md'
+        tasks = [dict(id='twitter-content-system', title='Twitter içerik üretim sistemi video proje işleri 2026 v2 a'),
+                 dict(id='kalem', title='Yazım araçları')]
+        cases = [('Twitter içerik sistemi', 'twitter-content-system'),
+                 ('content system', 'twitter-content-system'),
+                 ('Twitter video', 'twitter-content-system'),
+                 ('Twitter işleri', 'twitter-content-system'),
+                 ('Twitter 2026 v2 a', 'twitter-content-system'),
+                 ('kalemleri', 'kalem'),
+                 ('Twitter planı', None), ('Twitter Twitter planı', None),
+                 ('video proje işleri 2026 v2 a', None), ('Twittering planı', None)]
+        for item, task_id in cases:
+            with self.subTest(item=item), patch('is_ve_ders.brief', return_value=tasks) as brief:
+                path.write_text('## 2026-09-23\nAçık: ' + item, encoding='utf-8')
+                result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+                brief.assert_called_once_with(self.vault, limit=10000)
+                status = f'güncel kayıt: {task_id}' if task_id else 'özette var, güncel kayıtta yok'
+                self.assertIn(f'- {item} — {status}', result)
+
+    def test_fresh_session_cross_check_uses_only_verified_tasks(self):
+        from is_ve_ders import put
+        (self.vault / 'zihin').mkdir()
+        (self.vault / 'zihin/son-oturum.md').write_text('## 2026-09-23\nAçık: Twitter içerik sistemi',
+                                                      encoding='utf-8')
+        evidence = 'Twitter içerik üretim sistemi üzerinde çalışılacak.'
+        source = self.vault / 'kaynak.md'
+        source.write_text(evidence, encoding='utf-8')
+        today = h.dt.date.today()
+        row = dict(id='twitter-content-system', title='Twitter içerik üretim sistemi',
+                   next_step='İçerik taslağı hazırla', source_path='kaynak.md', evidence=evidence, actor='test')
+        cases = [('active', 0, True), ('blocked', 0, True), ('done', 0, False),
+                 ('cancelled', 0, False), ('needs_confirmation', 0, False),
+                 ('active', 8, False), ('active', 0, True)]
+        for version, (status, age, matches) in enumerate(cases):
+            with self.subTest(status=status, age=age):
+                put(self.vault, 'task', dict(row, status=status, expected_version=version,
+                    last_verified=(today - h.dt.timedelta(days=age)).isoformat()))
+                result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+                self.assertEqual('güncel kayıt: twitter-content-system' in result, matches)
+                self.assertEqual('özette var, güncel kayıtta yok' in result, not matches)
+        source.write_text(evidence + '\nKaynak değişti.', encoding='utf-8')
+        result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+        self.assertNotIn('güncel kayıt: twitter-content-system', result)
+        self.assertIn('özette var, güncel kayıtta yok', result)
+
+    def test_fresh_session_handles_unreadable_task_ledger(self):
+        (self.vault / 'zihin').mkdir()
+        section = '## 2026-09-23\nAçık: Twitter içerik sistemi'
+        (self.vault / 'zihin/son-oturum.md').write_text(section, encoding='utf-8')
+        for error in (OSError, ValueError, KeyError, TypeError):
+            with self.subTest(error=error), patch('is_ve_ders.brief', side_effect=error('bozuk defter')):
+                result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+                self.assertIn('Güncel iş defteri okunamadı; açık maddeler doğrulanmadı.', result)
+                self.assertNotIn('özette var, güncel kayıtta yok', result)
+                self.assertTrue(result.endswith(section))
+
+    def test_fresh_session_cross_check_limits_items_and_excerpts(self):
+        (self.vault / 'zihin').mkdir()
+        path = self.vault / 'zihin/son-oturum.md'
+        path.write_text('## 2026-09-23\nAçık: ilk; ; ikinci; üçüncü;\n'
+                        '* Sonraki: dördüncü; beşinci; altıncı; yedinci; sekizinci', encoding='utf-8')
+        result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+        block = result.split('\n## 2026-09-23', 1)[0].split('\n', 1)[1]
+        self.assertEqual(block.count('— özette var, güncel kayıtta yok'), 6)
+        self.assertNotIn('yedinci', block)
+        self.assertNotIn('sekizinci', block)
+        self.assertLessEqual(len(block), 600)
+
+        item = 'uzun madde ' * 20
+        path.write_text('## 2026-09-23\nAçık: ' + item, encoding='utf-8')
+        result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+        self.assertIn('- ' + item[:120] + ' — özette var, güncel kayıtta yok', result)
+
+    def test_fresh_session_respects_small_budgets(self):
+        (self.vault / 'zihin').mkdir()
+        items = '; '.join(f'madde {i} ' + 'uzun ' * 30 for i in range(6))
+        section = '## 2026-09-23\nAçık: ' + items + '\n' + 'ayrıntı ' * 1000
+        (self.vault / 'zihin/son-oturum.md').write_text(section, encoding='utf-8')
+        header = "Tarihli özet (2026-09-23); güncel durumu açık işlerden/Git'ten doğrula."
+        for limit in (0, 1, len(header) - 1, len(header), len(header) + 1, 140, 1000, 2500):
+            with self.subTest(limit=limit):
+                result = h.latest_session_section(self.vault, limit=limit, today=h.dt.date(2026, 9, 24))
+                self.assertLessEqual(len(result), limit)
+                self.assertEqual(result.split('\n', 1)[0], header[:limit])
+                if limit >= 140:
+                    self.assertTrue(result.endswith('[Kesildi; yalnız gereken ayrıntı için kaynak bölümü aç.]'))
+                if limit <= 140:
+                    self.assertNotIn('Özetteki açık maddeler', result)
+                else:
+                    block = result.split('\n## 2026-09-23', 1)[0].split('\n', 1)[1]
+                    self.assertLessEqual(len(block), min(600, limit // 3))
+                    rows = block.splitlines()[1:]
+                    self.assertGreater(len(rows), 0)
+                    self.assertLess(len(rows), 6)
+                    self.assertTrue(all(row.endswith('— özette var, güncel kayıtta yok') for row in rows))
+
+    def test_fresh_session_secret_text_is_not_cross_checked(self):
+        (self.vault / 'zihin').mkdir()
+        path = self.vault / 'zihin/son-oturum.md'
+        secret = 'sk-' + 'x' * 30
+        for body in ('Açık: Twitter içerik sistemi; ' + secret,
+                     secret + '\nAçık: Twitter içerik sistemi'):
+            with self.subTest(body=body), patch('is_ve_ders.brief') as brief:
+                path.write_text('## 2026-09-23\n' + body, encoding='utf-8')
+                result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
+                brief.assert_not_called()
+                self.assertNotIn('Özetteki açık maddeler', result)
+                self.assertNotIn('güncel kayıtta yok', result)
+
     def test_old_session_uses_recent_codex_receipt(self):
         (self.vault/'zihin').mkdir()
         (self.vault/'zihin/son-oturum.md').write_text('## 2026-09-10\nEski ayrıntı')

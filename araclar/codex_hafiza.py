@@ -136,6 +136,54 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
     return {'saved': str(note), 'candidates': queued}
 
 
+def _session_open_items_block(vault, section, limit):
+    header = 'Özetteki açık maddeler (güncel iş kaydıyla eşleştirme; durum çıkarımı değildir):'
+    if len(header) > limit or contains_secret(section):
+        return ''
+    items = []
+    pattern = (r'^[ \t]*(?:[-*][ \t]+)?(?P<bold>\*\*)?'
+               r'(?:Açık(?: işler)?|Sonraki(?: adım)?|Yapılacak)'
+               r'[ \t]*(?(bold)(?:\*\*[ \t]*:|:[ \t]*\*\*)|:)[ \t]*(?P<items>.*)$')
+    for match in re.finditer(pattern, section, re.M):
+        items.extend(item.strip() for item in match.group('items').split(';') if item.strip())
+        if len(items) >= 6:
+            break
+    if not items:
+        return ''
+
+    from is_ve_ders import brief
+    from gorev_baglam import _GENERIC, content_words, word_match
+    generic = _GENERIC | {'işi', 'işler', 'işleri'}
+
+    def match_words(value):
+        return {word for word in content_words(value)
+                if len(word) > 1 and word.isalpha()
+                and not any(word_match(word, term) for term in generic)}
+
+    try:
+        tasks = [(task['id'], match_words(task['title'] + ' ' + task['id'].replace('-', ' ')))
+                 for task in brief(vault, limit=10000)]
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        lines = ['Güncel iş defteri okunamadı; açık maddeler doğrulanmadı.']
+    else:
+        lines = []
+        for item in items[:6]:
+            if contains_secret(item):
+                continue
+            words = match_words(item)
+            task_id = next((ident for ident, task_words in tasks if words and
+                            sum(any(word_match(word, other) for other in task_words)
+                                for word in words) >= min(2, len(words))), None)
+            status = (f'güncel kayıt: {task_id}' if task_id is not None
+                      else 'özette var, güncel kayıtta yok')
+            lines.append(f'- {item[:120]} — {status}')
+    block = header
+    for line in lines:
+        if len(block) + 1 + len(line) <= limit and not contains_secret(line):
+            block += '\n' + line
+    return block if block != header else ''
+
+
 def latest_session_section(vault, limit=2500, today=None):
     """Read a fresh journal section, otherwise recent non-canonical receipts."""
     today = today or dt.date.today()
@@ -153,10 +201,14 @@ def latest_session_section(vault, limit=2500, today=None):
             age = 8
         if 0 <= age <= 3:
             section = text[matches[index].start():matches[index+1].start() if index+1<len(matches) else len(text)].strip()
-            if len(section) > limit:
+            header = f"Tarihli özet ({date_text}); güncel durumu açık işlerden/Git'ten doğrula."
+            block = _session_open_items_block(vault, section, min(600, limit // 3))
+            prefix = header + ('\n' + block if block else '') + '\n'
+            available = max(0, limit - len(prefix))
+            if len(section) > available:
                 suffix = '\n[Kesildi; yalnız gereken ayrıntı için kaynak bölümü aç.]'
-                section = section[:max(0, limit-len(suffix))] + suffix if limit >= len(suffix) else section[:limit]
-            return section
+                section = section[:available-len(suffix)] + suffix if available >= len(suffix) else section[:available]
+            return (prefix + section)[:limit]
         warning = (f'Son oturum kaydı {date_text} tarihli ({age} gün eski); '
                    'güncel durum kanıtı değil, açık işler özetini kullan.')
 
