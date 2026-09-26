@@ -139,6 +139,19 @@ Yalnız seçtiğin servis(ler) güncellenir; diğerinin durumu değişmeden kal�
 Var olan bir anahtarın üzerine yazarsan eskisi silinir. Bu bayrak etkileşim
 gerektirir, `--non-interactive` ile birlikte kullanılamaz.
 
+Anahtarın gerçekten çalışıp çalışmadığını görmek istersen (kurulum anahtarı
+canlı denemez, yalnız kaydeder), `--verify-services` ile Mem0/Jev'e gerçek,
+küçük bir istek gönder ve sonucu `komuta/kurulum-sonucu.json`'a `verified` /
+`verification_failed:<neden>` olarak işle:
+
+```bash
+python3 baslat.py --vault ~/Hafiza --verify-services
+```
+
+`--configure-services` ile birlikte de kullanılabilir; o zaman yeni girdiğin
+anahtar hemen ardından test edilir. Yapılandırılmamış bir servis atlanır,
+sorgu içeriği gönderilmez.
+
 Kurucu, mevcut Codex/Claude/Antigravity Hafıza OS yönerge bağlantısını veya
 kullanıcı klasöründeki `Hafiza` / `Hafıza` kasasını bulursa indirmeden durur.
 Başka bir `--vault` vermek mevcut istemci bağlantısını değiştirme izni değildir.
