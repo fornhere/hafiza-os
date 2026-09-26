@@ -29,7 +29,7 @@ class Retrieval(unittest.TestCase):
    (v/'s.md').write_text('source')
    for row in rows:
     row.update(kind='semantic',scope='user',subject_key=row['memory_id'],status='active',source_anchor='test',source_hash=statement_hash(row['statement']),source_content_hash=statement_hash('source'),observed_at='2026-01-01',valid_from='2026-01-01',valid_to=None,confidence='explicit-user',sensitivity='normal',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
-   with patch.object(g.h,'load_catalog',return_value=rows), patch.object(d,'context',return_value='METHOD'):
+   with patch.object(g.h,'load_catalog',return_value=rows), patch.object(d,'context_details',return_value=dict(text='METHOD',lessons=[])):
     package=g.build_task_package(v,'delta',budget=120)
     self.assertIn('Proje: delta',package['text']);self.assertIn('METHOD',package['text'])
     self.assertLessEqual(len(package['text']),120)

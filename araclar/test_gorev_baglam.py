@@ -68,6 +68,50 @@ class Package(unittest.TestCase):
   (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project,dict(self.project,id='other')]}))
   p=build_task_package(self.v,'kapak');self.assertIsNone(p['project_id']);self.assertIn('ambiguous_project',p['omitted_reasons'])
 
+ def test_lesson_diagnostics_exclude_changed_method_from_package(self):
+  from is_ve_ders import put
+  from hafiza import statement_hash
+  (self.v/'method.md').write_text('Onaylı kapak yönteminin özgün içeriği.')
+  row=dict(id='changed',title='Kapak yöntemi',status='proposed',source_path='approval.md',evidence=self.source.read_text(),actor='reviewer',triggers=['kapak'],method_path='method.md',implementation_hash=statement_hash((self.v/'method.md').read_text()))
+  put(self.v,'lesson',row)
+  (self.v/'method.md').write_text('İncelenmemiş yeni yöntem içeriği.')
+  (self.v/'long.md').write_text('Bütçeye sığmayan geçerli yöntem. '*200)
+  put(self.v,'lesson',dict(row,id='long',method_path='long.md',implementation_hash=statement_hash((self.v/'long.md').read_text())))
+  package=build_task_package(self.v,'kapak',budget=5000)
+  self.assertEqual(package['lessons'],dict(applied=[],diagnostics=[dict(id='changed',reason='method_changed'),dict(id='long',reason='budget')]))
+  self.assertIn('lesson-check',package['selected_ids'])
+  self.assertEqual(package['text'].count('Ders kontrolü:'),1)
+  self.assertIn('2 ilgili ders dışlandı (değişmiş kaynak/yöntem/doğrulama: 1, bütçe: 1)',package['text'])
+  self.assertNotIn('Onaylı kapak yönteminin özgün içeriği.',package['text'])
+  self.assertNotIn((self.v/'method.md').read_text(),package['text'])
+  self.assertNotIn('Bütçeye sığmayan geçerli yöntem.',package['text'])
+  unrelated=build_task_package(self.v,'hava nasıl')
+  self.assertEqual(unrelated['lessons'],dict(applied=[],diagnostics=[]))
+  self.assertNotIn('Ders kontrolü',unrelated['text'])
+
+ def test_lesson_check_yields_to_content_at_exact_budget(self):
+  from is_ve_ders import put
+  full=build_task_package(self.v,'kapak',history='always',budget=5000)
+  budget=len(full['text'])
+  row=dict(id='missing',title='Eksik kapak yöntemi',status='proposed',source_path='approval.md',evidence=self.source.read_text(),actor='reviewer',triggers=['kapak'])
+  put(self.v,'lesson',row)
+  package=build_task_package(self.v,'kapak',history='always',budget=budget)
+  self.assertEqual(package['text'],full['text'])
+  self.assertEqual(package['selected_ids'],full['selected_ids'])
+  self.assertIn('lesson-check:budget',package['omitted_reasons'])
+  self.assertEqual(package['lessons']['diagnostics'],[dict(id='missing',reason='method_missing')])
+  self.assertLessEqual(len(package['text']),budget)
+
+ def test_lesson_check_counts_instruction_targets_awaiting_acceptance(self):
+  from is_ve_ders import put
+  from hafiza import statement_hash
+  method='Henüz kabul edilmemiş kapak talimatı.';(self.v/'CLAUDE.md').write_text(method)
+  put(self.v,'lesson',dict(id='instruction',title='Talimat dersi',status='proposed',source_path='approval.md',evidence=self.source.read_text(),
+      actor='reviewer',triggers=['kapak'],method_path='CLAUDE.md',implementation_hash=statement_hash(method)))
+  package=build_task_package(self.v,'kapak',budget=5000)
+  self.assertEqual(package['lessons'],dict(applied=[],diagnostics=[dict(id='instruction',reason='instruction_target_unaccepted')]))
+  self.assertIn('kullanıcı kabulü bekleyen talimat: 1',package['text']);self.assertNotIn(method,package['text'])
+
  def test_hydrate_uses_canonical_text_and_rejects_obsolete(self):
   import hafiza as h
   from gorev_baglam import hydrate_remote

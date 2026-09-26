@@ -256,7 +256,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                     if not gate.get('degraded') and not needed:
                         skip_memory = True
                         if jev_client.load_config(vault)['rerank_gate_scope'] == 'all':
-                            result = dict(text='', selected_ids=[], source_versions={}, assets=[], knowledge=None,
+                            result = dict(text='', selected_ids=[], source_versions={}, assets=[], knowledge=None, lessons=dict(applied=[],diagnostics=[]),
                                           omitted_reasons=[], project_id=None, suppressed_count=0, jev={'gate': gate},
                                           history={'mode': history, 'included': False},
                                           procedure_reading={'paths': [], 'delivered': False},
@@ -287,7 +287,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
         # Never relabel an old claim with a freshly computed source hash.
         text = 'Bağlam hazırlanırken kaynak değişti; güncel kaynağı yeniden doğrula.'
         result.update(text=text[:max(0,int(budget))], selected_ids=[], assets=[],
-                      source_versions={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0)
+                      source_versions={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0, lessons=dict(applied=[],diagnostics=[]))
         result['omitted_reasons'].append('source_changed_during_package')
         result['summary'] = dict(record_ids=[],task_ids=[],derived=True)
         result['procedure_reading'].update(paths=[],delivered=False)
@@ -510,9 +510,20 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                   'güncel iş kaydı yok; sonraki adımı uydurma' if not resume_tasks else
                   'kaynaklı iş kartı aşağıda; yeni istek öncelikli')
         add('capsule-status', 'Devam kapsülü: '+status+'.')
-    from ders_baglam import context
-    methods=context(vault,query,budget=min(2600, budget), project_id=project['id'] if project else None, workflow_ids=[w['id'] for w in workflows])
+    from ders_baglam import context_details
+    lesson_details=context_details(vault,query,budget=min(2600, budget), project_id=project['id'] if project else None, workflow_ids=[w['id'] for w in workflows])
+    methods=lesson_details['text']
     if methods: add('methods',methods)
+    lesson_diagnostics=lesson_details.get('diagnostics',[])
+    if lesson_diagnostics:
+        groups=(('değişmiş kaynak/yöntem/doğrulama',{'source_changed','method_changed','verification_changed'}),
+                ('eksik yöntem',{'method_missing'}),('eski kayıt',{'legacy_unreviewed'}),
+                ('kullanıcı kabulü bekleyen talimat',{'instruction_target_unaccepted'}),
+                ('inceleme gerekli',{'review_required'}),('bütçe',{'budget'}))
+        counts=[(label,sum(d['reason'] in reasons for d in lesson_diagnostics)) for label,reasons in groups]
+        detail=', '.join(label+': '+str(count) for label,count in counts if count)
+        # Lowest priority: visibility must never displace real content.
+        candidates.append((20,len(candidates),'lesson-check',f"Ders kontrolü: {len(lesson_diagnostics)} ilgili ders dışlandı ({detail}); geçersiz ders uygulanmadı, yeniden kontrol için lesson_backlog'a bak."))
     # Current records are a derived view, never a new canonical statement.
     # Project names and continuation words alone do not prove topic coverage.
     continuation=resume or continuation_request(query)
@@ -581,6 +592,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
     result['suppressed_count']=suppressed_count
+    result['lessons']=dict(applied=[dict(id=r['id'],version=r['version']) for r in lesson_details['lessons']] if 'methods' in selected else [],diagnostics=lesson_diagnostics)
     if knowledge_data and 'knowledge' in selected:
         source_versions.update(knowledge_data.get('source_versions',{}))
     if 'procedure-reading' in selected:
