@@ -11,7 +11,9 @@ Obsidian indirme ve ajan bağlantısı aynı akışta yapılır. Mem0 ve Jev sor
 Enter ile geçebilirsin. Başarı özeti `komuta/kurulum-sonucu.json` içindedir;
 `configured_unverified` bağlantı ayarının yazıldığı, API'nin henüz denenmediği
 anlamına gelir. Obsidian indirmesi başarısızsa hafıza kurulumu devam eder ve
-özette ayrı gösterilir.
+özette ayrı gösterilir. Anahtarı gerçekten test etmek istersen
+`python3 baslat.py --vault ~/Hafiza --verify-services` çalıştır; sonuç
+`verified` veya `verification_failed:<neden>` olarak aynı dosyaya işlenir.
 
 ## 1. Kasayı hazırla ve ajanı bağla
 
