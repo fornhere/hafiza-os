@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from client_transcripts import CLIENTS, SourceError, private, sha, source_path, strict_json
+from client_transcripts import CLIENTS, SourceError, parse, private, sha, source_path, strict_json, worker_prompt
 from client_sessions import atomic, enforce_policy, locked, load, recall, register, source_with_policy
 from hafiza import contains_secret
 
@@ -140,8 +140,20 @@ def hook(vault, client, event, payload):
                'antigravity': ('PreInvocation', 'Stop')}
     if client not in allowed or event not in allowed[client]:
         raise SourceError('unsupported_hook_event')
+    if any(os.environ.get(name) == '1' for name in ('HAFIZA_ISCI', 'CODEX_WORKER')) or (
+            isinstance(payload, dict) and worker_prompt(payload.get('prompt'))):
+        return {}, {'status': 'worker_skipped'}
     session, path = identity(client, payload)
     path = source_path(client, session, path)
+    # Stop has no prompt; the original user marker must survive later turns.
+    # Preflight is read-only so workers cannot create even hook state files.
+    if path.exists() and path.stat().st_size:
+        try:
+            parse(client, session, path, reject_workers=True)
+        except SourceError as error:
+            if str(error) == 'worker_source':
+                return {}, {'status': 'worker_skipped'}
+            # Preserve the normal policy path, including sticky privacy blocks.
     with locked(vault) as (_, state):
         prompt = payload.get('prompt', '')
         enforce_policy(state, client, session, exclude=isinstance(prompt, str) and private(prompt))

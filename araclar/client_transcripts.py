@@ -76,6 +76,12 @@ def strict_json(text):
         raise SourceError('invalid_json') from exc
 
 
+def worker_prompt(text):
+    """Explicit worker markers are operational instructions, never user memory."""
+    return (isinstance(text, str) and
+            clean_user(text).casefold().replace('\u0307', '').startswith('işçi koşusu'))
+
+
 def private(text):
     return privacy_command(text) or privacy_ambiguous(text) or bool(re.search(
         r"\b(?:do not|don't|never) (?:save|record|remember|store)|\b(?:off the record|keep this private|forget this)\b",
@@ -119,7 +125,8 @@ def source_path(client, session, path):
     return path
 
 
-def parse(client, session, path, end_line=None):
+def parse(client, session, path, end_line=None, *, reject_workers=False):
+    # Capture rejects worker sessions; offline readers may filter individual turns.
     path = source_path(client, session, path)
     data = read_bytes(path)
     if not data or not data.endswith(b'\n'):
@@ -218,6 +225,8 @@ def parse(client, session, path, end_line=None):
             else:
                 raise SourceError('unknown_antigravity_schema')
         if genuine:
+            if reject_workers and worker_prompt(text):
+                raise SourceError('worker_source')
             if not text.strip():
                 raise SourceError('empty_user_message')
             user_count += 1
