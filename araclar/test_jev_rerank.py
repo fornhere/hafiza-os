@@ -36,13 +36,168 @@ class RerankTests(unittest.TestCase):
                     distributions={card['id']: {'0': 0, '1': 0, '2': 1} for card in cards},
                     degraded=False, diagnostics=[])
 
-    def rerank_rows(self, rows, answer=None, state=None):
+    @staticmethod
+    def facet_answer(cards, p2_by_facet):
+        distributions = {j: {card['id']: {'0': 1 - values.get(card['id'], 0), '1': 0,
+                                         '2': values.get(card['id'], 0)} for card in cards}
+                         for j, values in enumerate(p2_by_facet)}
+        return dict(mode='rerank', degraded=False, diagnostics=[],
+                    scores={card['id']: max(values[card['id']]['2'] * 2 for values in distributions.values())
+                            for card in cards},
+                    distributions=dict(distributions[len(p2_by_facet) - 1]),
+                    facet_distributions=distributions)
+
+    def rerank_rows(self, rows, answer=None, state=None, query='Writing style'):
         with patch.object(hafiza, 'load_catalog', return_value=rows), \
              patch.object(hafiza, 'context_record_errors', return_value=[]), \
              patch.object(jev_client, 'evaluate', side_effect=answer or self.high_answer) as evaluate:
             selected, knowledge, result = jev_retrieval.rerank(
-                self.vault, 'Writing style', rows, None, state if state is not None else {}, 2000)
+                self.vault, query, rows, None, state if state is not None else {}, 2000)
         return selected, knowledge, result, evaluate
+
+    def test_facet_first_order_covers_then_fills_with_stable_ties(self):
+        ids = ['note:z', 'memory:b', 'memory:a', 'note:a', 'memory:low', 'memory:missing']
+        values = {0: {'memory:b': 1.98, 'memory:a': 1.98, 'memory:low': 1.49},
+                  1: {'note:z': 1.5, 'note:a': 1.5, 'outside-pool': 2},
+                  2: {'memory:a': 2}, 3: {}}
+        self.assertEqual(jev_retrieval.facet_first_order(values, ids, 1.5),
+                         ['memory:a', 'note:a', 'memory:b', 'note:z'])
+
+    def test_multi_facet_request_uses_one_full_query_pool(self):
+        query = 'site için renk ve font kaynakları'
+        rows = self.memory_rows(3)
+        plan = jev_retrieval.facet_plan(query)
+        self.assertEqual(len(plan), 2)
+        with patch.object(jev_retrieval, 'loose_candidates', wraps=jev_retrieval.loose_candidates) as loose:
+            _, _, result, evaluate = self.rerank_rows(rows, query=query)
+        # Preserve the existing full-query + previous_user preselection input.
+        loose.assert_called_once_with(query + ' ', rows, [], 24)
+        evaluate.assert_called_once()
+        self.assertEqual(evaluate.call_args.args[1], query)
+        self.assertEqual(evaluate.call_args.kwargs['purpose'], 'retrieval_rerank_facets')
+        self.assertEqual(evaluate.call_args.kwargs['facets'], [p['text'] for p in plan])
+        self.assertEqual(result['facet_count'], 2)
+        self.assertEqual(result['rerank_purpose'], 'retrieval_rerank_facets')
+
+    def test_single_facet_keeps_legacy_request_and_order(self):
+        rows = list(reversed(self.memory_rows(3)))
+        selected, _, result, evaluate = self.rerank_rows(rows)
+        self.assertEqual(evaluate.call_args.kwargs['purpose'], 'retrieval_rerank')
+        self.assertEqual(evaluate.call_args.kwargs['facets'], ['Writing style'])
+        self.assertEqual([row['memory_id'] for row in selected], ['m0', 'm1', 'm2'])
+        self.assertEqual(result['facet_count'], 1)
+        self.assertEqual(result['rerank_purpose'], 'retrieval_rerank')
+        self.assertNotIn('coverage', result)
+
+    def test_disabled_facets_keep_legacy_request(self):
+        self.config(rerank_facets=False)
+        query = 'site için renk ve font kaynakları'
+        self.assertGreater(len(jev_retrieval.facet_plan(query)), 1)
+        selected, _, result, evaluate = self.rerank_rows(self.memory_rows(3), query=query)
+        self.assertEqual(evaluate.call_args.kwargs['purpose'], 'retrieval_rerank')
+        self.assertEqual(evaluate.call_args.kwargs['facets'], [query])
+        self.assertEqual([row['memory_id'] for row in selected], ['m0', 'm1', 'm2'])
+        self.assertEqual(result['facet_count'], 1)
+        self.assertEqual(result['rerank_purpose'], 'retrieval_rerank')
+        self.assertNotIn('coverage', result)
+
+    def test_multi_facet_limit_preserves_each_best_candidate(self):
+        self.config(rerank_limit=2)
+        def answer(vault, query, cards, **kwargs):
+            return self.facet_answer(cards, [{'memory:m0': .99, 'memory:m1': .98}, {'memory:m2': .8}])
+        selected, _, result, _ = self.rerank_rows(self.memory_rows(3), answer,
+                                                query='site için renk ve font kaynakları')
+        self.assertEqual([row['memory_id'] for row in selected], ['m0', 'm2'])
+        self.assertEqual(result['proposed_ids'], ['memory:m0', 'memory:m2'])
+        self.assertEqual(result['coverage'], {'0': 'covered', '1': 'covered'})
+
+    def test_three_facet_requests_split_within_question_budget(self):
+        self.config(max_questions=7)
+        query = 'site için renk ve font ve düzen kaynakları'
+        plan = jev_retrieval.facet_plan(query)
+        self.assertEqual(len(plan), 3)
+        def answer(vault, query, cards, **kwargs):
+            return self.facet_answer(cards, [{card['id']: .8 for card in cards}] * 3)
+        _, _, result, evaluate = self.rerank_rows(self.memory_rows(7), answer, query=query)
+        self.assertEqual([package['size'] for package in result['packages']], [2, 2, 2, 1])
+        self.assertEqual(evaluate.call_count, 4)
+        self.assertEqual(result['facet_count'], 3)
+        for call in evaluate.call_args_list:
+            self.assertEqual(call.kwargs['facets'], [p['text'] for p in plan])
+            self.assertEqual(call.kwargs['purpose'], 'retrieval_rerank_facets')
+            self.assertLessEqual(len(call.args[2]) * len(call.kwargs['facets']), 7)
+        for j in range(3):
+            self.assertEqual(set(result['facet_distributions'][j]), set(result['pool_ids']))
+            self.assertTrue(all(p['2'] == .8 for p in result['facet_distributions'][j].values()))
+
+    def test_multi_facet_question_budget_too_small_never_evaluates(self):
+        self.config(max_questions=2)
+        selected, knowledge, result, evaluate = self.rerank_rows(
+            self.memory_rows(2), query='site için renk ve font ve düzen kaynakları')
+        evaluate.assert_not_called()
+        self.assertIsNone(selected)
+        self.assertIsNone(knowledge)
+        self.assertTrue(result['degraded'])
+        self.assertEqual(result['diagnostics'], ['budget_exceeded'])
+        self.assertEqual(result['facet_count'], 3)
+        self.assertEqual(result['coverage'], {'0': 'unresolved', '1': 'unresolved', '2': 'unresolved'})
+
+    def test_multi_facet_character_budget_uses_facet_rubric(self):
+        query = 'site için renk ve font kaynakları'
+        rows = self.memory_rows(2)
+        _, _, _, evaluate = self.rerank_rows(rows, query=query)
+        cards = evaluate.call_args.args[2]
+        facets = evaluate.call_args.kwargs['facets']
+        config = jev_client.load_config(self.vault)
+        body = jev_retrieval._rerank_body(config, query, facets, cards, {}, 'retrieval_rerank_facets')
+        limit = len(json.dumps(body, ensure_ascii=False))
+        for char_budget, sizes in ((limit, [2]), (limit - 1, [1, 1])):
+            with self.subTest(char_budget=char_budget):
+                self.config(max_input_chars=char_budget)
+                _, _, result, evaluate = self.rerank_rows(rows, query=query)
+                self.assertEqual([package['size'] for package in result['packages']], sizes)
+                for call in evaluate.call_args_list:
+                    payload = jev_retrieval._rerank_body(config, query, facets, call.args[2], {},
+                                                        call.kwargs['purpose'])
+                    self.assertLessEqual(len(json.dumps(payload, ensure_ascii=False)), char_budget)
+
+    def test_multi_facet_degraded_distributions_do_not_cover_fallback(self):
+        self.config(max_candidates=1, rerank_limit=2)
+        def answer(vault, query, cards, **kwargs):
+            result = self.facet_answer(cards, [{'memory:m0': .9}, {'memory:m1': 1}])
+            if cards[0]['id'] == 'memory:m1':
+                result.update(degraded=True, diagnostics=['request_failed'])
+            return result
+        rows = self.memory_rows(2)
+        with patch.object(gorev_baglam, 'rank_records', return_value=rows):
+            selected, _, result, _ = self.rerank_rows(rows, answer,
+                                                    query='site için renk ve font kaynakları')
+        self.assertEqual(selected, rows)
+        self.assertEqual(result['fallback_ids'], ['memory:m1'])
+        self.assertEqual(result['coverage'], {'0': 'covered', '1': 'unresolved'})
+        for values in result['facet_distributions'].values():
+            self.assertEqual(set(values), {'memory:m0'})
+
+    def test_multi_facet_coverage_uses_delivered_notes_and_limit(self):
+        (self.vault / 'bilgi').mkdir()
+        rows = self.memory_rows(1)
+        note = dict(id='n1', title='Font', statement='Font note', scope='user', domains=['site'],
+                    kind='preference', sources=[])
+        def answer(vault, query, cards, **kwargs):
+            return self.facet_answer(cards, [{'memory:m0': .9}, {'note:n1': .75}])
+        for limit, budget, coverage in ((2, 2000, 'covered'), (2, 1, 'unresolved'), (1, 2000, 'unresolved')):
+            self.config(rerank_limit=limit)
+            with self.subTest(limit=limit, budget=budget), \
+                 patch.object(bilgi_agi, '_rows', return_value=([note], [])), \
+                 patch.object(bilgi_agi, 'note_version', return_value='note-sha'), \
+                 patch.object(hafiza, 'load_catalog', return_value=rows), \
+                 patch.object(hafiza, 'context_record_errors', return_value=[]), \
+                 patch.object(jev_client, 'evaluate', side_effect=answer):
+                selected, knowledge, result = jev_retrieval.rerank(
+                    self.vault, 'site için renk ve font kaynakları', rows, None, {}, budget)
+            self.assertEqual(selected, rows)
+            self.assertEqual(knowledge['records'], [note] if coverage == 'covered' else [])
+            self.assertEqual(result['coverage'], {'0': 'covered', '1': coverage})
 
     def test_gate_no_preserves_non_memory_package(self):
         answer = dict(choices={'need':'no_memory'}, distributions={'need':{'search_memory':.01,'no_memory':.98,'insufficient_context':.01}}, degraded=False, diagnostics=[])

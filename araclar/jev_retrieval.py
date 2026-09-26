@@ -46,6 +46,20 @@ def facet_plan(query):
 def facets(query):
     return [item['text'] for item in facet_plan(query)]
 
+def facet_first_order(per_facet, ids, threshold):
+    """Cover each supported facet first, then fill by maximum score and ID."""
+    ids = list(ids)
+    order = []
+    for values in per_facet.values():
+        hits = sorted((i for i in ids if values.get(i, 0) >= threshold),
+                      key=lambda i: (-values.get(i, 0), i))
+        if hits and hits[0] not in order: order.append(hits[0])
+    scores = {i: max((values.get(i, 0) for values in per_facet.values()), default=0) for i in ids}
+    order += [i for i in sorted(ids, key=lambda i: (-scores[i], i))
+              if scores[i] >= threshold and i not in order]
+    return order
+
+
 def mode(vault):
     try: return jev_client.purpose_mode(jev_client.load_config(vault), 'retrieval')
     except (ValueError, OSError): return 'invalid'
@@ -84,20 +98,20 @@ def loose_candidates(query, catalog, notes, limit=8):
     return [(kind, row) for _, kind, _, row in sorted(pool)[:limit]]
 
 
-def _rerank_body(config, query, facets, cards, state):
-    """Mirror evaluate's retrieval_rerank payload for exact character budgeting."""
+def _rerank_body(config, query, facets, cards, state, purpose='retrieval_rerank'):
+    """Mirror evaluate's rerank payload for exact character budgeting."""
     return dict(model=config['model'], state=dict(query=query, facets=facets,
                 candidates=cards, **state), questions={
-                f'f{j}_c{i}': jev_client._question('retrieval_rerank', i, j)
+                f'f{j}_c{i}': jev_client._question(purpose, i, j)
                 for j in range(len(facets)) for i in range(len(cards))})
 
 
-def _rerank_packages(config, query, facets, cards, state):
+def _rerank_packages(config, query, facets, cards, state, purpose='retrieval_rerank'):
     """Greedy, ordered packages plus IDs that cannot fit even on their own."""
     def fits(batch):
         return (len(batch) <= config['max_candidates'] and
                 len(batch) * len(facets) <= config['max_questions'] and
-                len(json.dumps(_rerank_body(config, query, facets, batch, state),
+                len(json.dumps(_rerank_body(config, query, facets, batch, state, purpose),
                                ensure_ascii=False)) <= config['max_input_chars'])
 
     packages = []; pending = []; oversized_ids = []
@@ -124,6 +138,12 @@ def rerank(vault, query, catalog, project_id, state, budget):
     notes = [row for row in notes if row['scope'] in ('user', f'project:{project_id}')]
     chosen = loose_candidates(query + ' ' + state.get('previous_user', ''), catalog, notes,
                               config['rerank_candidates'])
+    plan = facet_plan(query)
+    multi_facet = config['rerank_facets'] and len(plan) > 1
+    facets = [p['text'] for p in plan][:3] if multi_facet else [query]
+    purpose = 'retrieval_rerank_facets' if multi_facet else 'retrieval_rerank'
+    rerank_info = dict(facet_count=len(facets), rerank_purpose=purpose)
+    if multi_facet: rerank_info['coverage'] = {str(j): 'unresolved' for j in range(len(facets))}
     cards = []
     for kind, row in chosen:
         ident = row['memory_id'] if kind == 'memory' else row['id']
@@ -143,20 +163,19 @@ def rerank(vault, query, catalog, project_id, state, budget):
             else: versions['note:' + row['id']] = b.note_version(vault, row)
     except (OSError, ValueError):
         return None, None, dict(mode='rerank', degraded=True, diagnostics=['source_changed_before_evaluation'],
-                                pool_ids=pool_ids)
+                                pool_ids=pool_ids, **rerank_info)
     if not cards:
         result = dict(mode='rerank', scores={}, degraded=False, diagnostics=[], proposed_ids=[],
-                      pool_ids=[], packages=[], fallback_ids=[])
+                      pool_ids=[], packages=[], fallback_ids=[], **rerank_info)
         return [], dict(text='', records=[], transfers=[], source_versions={}, diagnostics=diagnostics,
                         omitted_record_ids=[], jev=result), result
-    facets = [query]
-    packages, oversized_ids = _rerank_packages(config, query, facets, cards, state)
+    packages, oversized_ids = _rerank_packages(config, query, facets, cards, state, purpose)
     if not packages:
         return None, None, dict(mode='rerank', degraded=True, diagnostics=['budget_exceeded'],
-                                pool_ids=pool_ids, packages=[], fallback_ids=pool_ids)
+                                pool_ids=pool_ids, packages=[], fallback_ids=pool_ids, **rerank_info)
     with ThreadPoolExecutor(max_workers=min(3, len(packages))) as executor:
         futures = [executor.submit(copy_context().run, jev_client.evaluate, vault, query, package,
-                                   purpose='retrieval_rerank', facets=facets, state=state,
+                                   purpose=purpose, facets=facets, state=state,
                                    source_versions={card['id']: versions[card['id']] for card in package})
                    for package in packages]
         evaluations = [future.result() for future in futures]
@@ -166,14 +185,14 @@ def rerank(vault, query, catalog, project_id, state, budget):
         if evaluation.get('degraded'):
             fallback_ids.update(card['id'] for card in package)
     result = dict(successful[0] if successful else evaluations[0])
-    result.update(scores={}, distributions={}, diagnostics=[], usage={},
+    result.update(scores={}, distributions={}, facet_distributions={}, diagnostics=[], usage={},
                   degraded=not successful, pool_ids=pool_ids,
                   fallback_ids=[ident for ident in pool_ids if ident in fallback_ids],
                   packages=[dict(size=len(package), degraded=bool(evaluation.get('degraded')),
                                  diagnostics=list(evaluation.get('diagnostics', [])))
                             for package, evaluation in zip(packages, evaluations)],
                   latency_ms=max(evaluation.get('latency_ms', 0) for evaluation in evaluations),
-                  cache_hit=all(evaluation.get('cache_hit', False) for evaluation in evaluations))
+                  cache_hit=all(evaluation.get('cache_hit', False) for evaluation in evaluations), **rerank_info)
     if any('facet_scores' in evaluation for evaluation in evaluations): result['facet_scores'] = {}
     for evaluation in evaluations:
         result['diagnostics'].extend(d for d in evaluation.get('diagnostics', []) if d not in result['diagnostics'])
@@ -182,8 +201,9 @@ def rerank(vault, query, catalog, project_id, state, budget):
                 result['usage'][key] = result['usage'].get(key, 0) + evaluation['usage'][key]
         if evaluation.get('degraded'): continue
         for key in ('scores', 'distributions'): result[key].update(evaluation.get(key, {}))
-        for facet, scores in evaluation.get('facet_scores', {}).items():
-            result['facet_scores'].setdefault(facet, {}).update(scores)
+        for key in ('facet_scores', 'facet_distributions'):
+            for facet, values in evaluation.get(key, {}).items():
+                result[key].setdefault(facet, {}).update(values)
     if oversized_ids and 'budget_exceeded' not in result['diagnostics']:
         result['diagnostics'].append('budget_exceeded')
     if result.get('degraded'):
@@ -200,9 +220,18 @@ def rerank(vault, query, catalog, project_id, state, budget):
     except (OSError, ValueError):
         return None, None, dict(result, degraded=True, diagnostics=result.get('diagnostics', []) + ['source_changed_during_evaluation'])
     probabilities = result.get('distributions', {}); threshold = config['rerank_p2']
-    ordered = sorted(((probabilities.get(card['id'], {}).get('2', 0), kind, row) for card, (kind, row) in zip(cards, chosen)
-                      if card['id'] not in fallback_ids and probabilities.get(card['id'], {}).get('2', 0) >= threshold),
-                     key=lambda item: (-item[0], item[1], item[2].get('memory_id', item[2].get('id', ''))))
+    if multi_facet:
+        by_id = {card['id']: (kind, row) for card, (kind, row) in zip(cards, chosen)
+                 if card['id'] not in fallback_ids}
+        per_facet = {j: {ident: result['facet_distributions'].get(j, {}).get(ident, {}).get('2', 0)
+                         for ident in by_id} for j in range(len(facets))}
+        scores = {ident: max(values[ident] for values in per_facet.values()) for ident in by_id}
+        ordered = [(scores[ident], *by_id[ident])
+                   for ident in facet_first_order(per_facet, by_id, threshold)]
+    else:
+        ordered = sorted(((probabilities.get(card['id'], {}).get('2', 0), kind, row) for card, (kind, row) in zip(cards, chosen)
+                          if card['id'] not in fallback_ids and probabilities.get(card['id'], {}).get('2', 0) >= threshold),
+                         key=lambda item: (-item[0], item[1], item[2].get('memory_id', item[2].get('id', ''))))
     if fallback_ids:
         from gorev_baglam import rank_records
         fallback_rows = {id(row): (kind, row) for card, (kind, row) in zip(cards, chosen)
@@ -221,6 +250,11 @@ def rerank(vault, query, catalog, project_id, state, budget):
         note_cards.append(card)
         delivered_notes.append(row)
         note_versions.update(versions_for_note(vault, row))
+    if multi_facet:
+        delivered = {'memory:' + row['memory_id'] for row in selected_catalog}
+        delivered.update('note:' + row['id'] for row in delivered_notes)
+        result['coverage'] = {str(j): 'covered' if any(values[i] >= threshold for i in delivered if i in values)
+                              else 'unresolved' for j, values in per_facet.items()}
     result['proposed_ids'] = [kind + ':' + (row['memory_id'] if kind == 'memory' else row['id']) for _, kind, row in ordered]
     result['requested_mode'] = 'rerank'; result['effective_mode'] = 'rerank'
     knowledge = dict(text='\n\n'.join(note_cards), records=delivered_notes, transfers=[],
@@ -294,12 +328,7 @@ def _knowledge(vault, query, project_id, budget, local):
     result['routing'] = 'scoped_candidates_clause_domain_guards_v3'
     result['facet_domains'] = [f['domains'] for f in plan]
     # Cover each supported facet first, then fill by score. No unqualified union.
-    order = []
-    for values in per_facet.values():
-        hits = sorted((i for i in by_id if values.get(i, 0) >= 1.5), key=lambda i: (-values[i], i))
-        if hits and hits[0] not in order: order.append(hits[0])
-    order += [i for i in sorted(by_id, key=lambda i: (-scores.get(i, 0), i))
-              if scores.get(i, 0) >= 1.5 and i not in order]
+    order = facet_first_order(per_facet, by_id, 1.5)
     cards = []; selected = []; omitted = []
     for ident in order:
         r = by_id[ident]
