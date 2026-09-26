@@ -340,3 +340,23 @@ veya boşsa inceleme reddedilir. Outcome `actor_session_id` taşıyorsa farklı
 `reviewer_session_id` zorunludur; verilen reviewer oturum kimliği derste tutulur.
 Oturum kimlikleri birebir karşılaştırılır. Bu alanlar beyan edilir; kontrol
 kimlik doğrulaması veya gerçek bağımsızlık kanıtı değildir.
+
+## Yansıtma adımı
+
+Madde 7 için önce `python3 araclar/ders_yansitma.py --vault KASA reflect` ile
+dry-run yap; önerileri inceleyip aynı komutu `--apply` ile çalıştır. Son
+`--limit N` outcome satırındaki (varsayılan 200) aynı kapsam/yöntem/doğrulama
+türü/komut örüntüsü en az `--min-sessions N` farklı oturumda (varsayılan ve
+asgari 2) ve iki farklı işte olumsuz sonuçlanmalıdır. Oturum kimliği yoksa
+işin kaynak yolu kullanılır; bu sayım gerçek bağımsızlık kanıtı değildir.
+
+`gelen-kutusu/lesson-reflections.jsonl` yalnız `proposed` öneri iskeletidir;
+eylem ve gerekçe boştur. İnceleyen iskeleti “koşul → eylem → gerekçe” cümlesine
+damıtır ve mevcut outcome/review_lesson ya da `is_ve_ders.py lesson` (proposed)
+akışıyla işler. Kaynak/hash, ilk beş mesaj, kaydetmeme, sır taraması ve ayrı
+inceleme kapıları korunur; bu adım verified ders veya kanonik kayıt yazmaz.
+Ham iz, makbuz içeriği ve outcome ders metni kopyalanmaz; yalnız komut imzası,
+referans ve hash taşınır. Delta önceki önerilere göre yalnız yeni occurrence
+referanslarını ve koşul iskeletini ekler; mevcut dersin metnini yeniden yazmaz.
+Talimat dosyası hedefli öneri yalnız “boşluk not edildi, uygulanmadı”dır
+(`application=gap_noted_not_applied`); hedef dosyaya değişiklik uygulamaz.

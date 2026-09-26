@@ -157,3 +157,23 @@ SHA256'larını, ders sürümlerini, kaçırılan ve yanlış tetiklenen istemle
 Ders başına ve raporun üst düzeyinde `recall` ile `false_trigger_rate` bulunur;
 üst düzey oranlar bütün istemler üzerinden micro hesaplanır. Bu bir sözcük
 tetiği ölçümüdür, dersin faydasının veya kullanıcı kabulünün kanıtı değildir.
+
+## Deterministik ders yansıtması
+
+`python3 araclar/ders_yansitma.py --vault KASA reflect` dry-run çıktısını
+incele; `--apply` yalnız `gelen-kutusu/lesson-reflections.jsonl` öneri kuyruğuna
+ekler. Model/LLM çağrısı yoktur. Son `--limit N` satırda (varsayılan 200) aynı
+kapsam, yöntem, doğrulama türü ve komut imzasının en az iki işte ve
+`--min-sessions N` farklı oturumda (varsayılan/asgari 2) failed/rejected sonucu
+aranır. Oturum beyanı yoksa görev kaynak yolu sayılır. Test makbuzunun hash'i
+yeniden doğrulanır; olumlu sonuçlar örüntü kanıtı sayılmaz.
+
+İskelet `proposed`, `needs_distillation=true`, `action=null`, `rationale=null`
+kalır; inceleyen mevcut outcome/review_lesson veya proposed lesson akışıyla
+“koşul → eylem → gerekçe” metnini oluşturur. Ham iz ve serbest ders metni
+taşınmaz; yalnız komut imzası, occurrence referansları ve hash bulunur. Önceki
+öneriye veya aynı kapsam/yöntemdeki derse delta yalnız yeni referansları ve
+koşulu ekler; ders defterine yazmaz. Sayım son pencereyle sınırlıdır; koşuldaki
+oturum sayısı bu pencerenin toplamıdır, deltadaki yeni referans sayısı değildir.
+Talimat hedefinde yalnız `gap_noted_not_applied` üretilir. Kaynak ve ayrı
+inceleme kapıları üzerinden verified olmayan ders bağlama girmez.

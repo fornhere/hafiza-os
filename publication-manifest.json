@@ -22,6 +22,10 @@
       "mode": "shared"
     },
     {
+      "path": "araclar/ders_yansitma.py",
+      "mode": "shared"
+    },
+    {
       "path": "araclar/gorev_baglam.py",
       "mode": "shared"
     },
