@@ -79,7 +79,7 @@ def search_text(row):
     keys = row.get('arama_anahtarlari')
     return ' '.join([row.get('statement', '')] + ([k for k in keys if isinstance(k, str)] if isinstance(keys, list) else []))
 
-def rank_records(rows, query):
+def rank_records(rows, query, *, tie_break=None):
     """Query coverage weighted by corpus rarity; order cannot affect selection."""
     terms = content_words(query)
     documents = [(row, content_words(search_text(row))) for row in rows]
@@ -99,7 +99,7 @@ def rank_records(rows, query):
         score = sum(1 + math.log((len(rows) + 1) / (frequencies[term] + 1)) for term in matched)
         ranked.append((score, len(matched), row))
     return [row for _, _, row in sorted(ranked, key=lambda item:
-            (-item[0], -item[1], item[2].get('memory_id', '')))]
+            (-item[0], -item[1], tie_break(item[2]) if tie_break else item[2].get('memory_id', '')))]
 
 def task_intent(text):
     """Exclude skill packaging from topic matching, preserving ordinary user paths.
@@ -423,7 +423,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             knowledge_data = _retrieve_local(vault, query, project_id=project['id'] if project else None,
                                              budget=min(1800, budget)) if (vault / 'bilgi').is_dir() else None
     from jev_retrieval import static_preferences, recall_settings
-    ranked_catalog = ranked_catalog + static_preferences(eligible, ranked_catalog, recall_settings(cfg), rerank_state is not None)
+    ranked_catalog = ranked_catalog + static_preferences(
+        eligible, ranked_catalog, recall_settings(cfg), rerank_state is not None, query)
     procedure_data = procedure_future.result()
     if knowledge_future: knowledge_data = knowledge_future.result()
     if procedure_data['text']: add('procedure-reading', procedure_data['text'])
