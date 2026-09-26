@@ -47,6 +47,12 @@ Claude hook için `claude_hook_mode: off|shadow|on` varsayılanı `shadow`dur. G
 
 `erisim_olc.py` seed 7 ile iki yarı ölçer; kanal başına teslim edilen karakter, p50/p95 gecikme, `degraded`, `abstain`, istenen ve etkili mod raporlanır. 2026-09-24 v2 seti eşik geliştirmesinde kullanıldığı için bağımsız başarı testi sayılmaz.
 
+`pool_coverage`, yalnız `jev.catalog.pool_ids` listesi bulunan ve gold etiketi boş olmayan istemlerde havuza giren gold oranını (`recall`), aynı istemlerde teslim edilen gold oranını (`delivered_recall`) ve havuzdayken teslim edilmeyen gold sayısını (`lost_after_pool`) ölçer; mevcut teslim precision/recall hesabını değiştirmez.
+Sonuç satırlarındaki `pool_ids`, `pool_hits` ve `pool_misses` sıralı kimlik listeleridir; havuz ölçülmemişse `null`, kurulmuş ama boşsa `pool_ids: []` olur ve degraded rerank çıktısındaki havuz da ölçüme katılır.
+Etikette isteğe bağlı `needs_memory` yalnız boolean kabul eder ve açık `false` gold bulunsa da önceliklidir; alan yoksa `relevant_memory_ids` veya `relevant_notes` doluluğundan türetilir.
+`gate_false_negative`, hafıza gerektiren istemlerde ham `needed` ve override sonrası `effective_needed` için ayrı yanlış negatif oranları verir (ikinci alan yoksa birincisine düşer); lexical override, bypass ve degraded sayıları aynı etiketli alt kümeye aittir, bypass/degraded oran paydasına girmez, `abstain` ise değerlendirilmiş karar olarak kalır ve `jev_yes_on_not_needed` yalnız değerlendirilmiş, hafıza gerektirmeyen istemlerdeki ham olumlu kararları sayar.
+İki ölçü `certain_only` içinde de hesaplanır; oran paydası sıfırsa oran `null` kalır, etiket ve tanı sayıları korunur, havuz/kapı verisi bulunmayan rerank dışı çalıştırmalarda Markdown ölçülmedi der.
+
 ## Kaynak ve kapsam
 
 Yalnız mevcut kodun uygun bulduğu incelemeden geçmiş, güncel kaynaklı, yetkili kapsamdaki adaylar gönderilir. Gönderilen alanlar kimlik, başlık, kısa ifade, kapsam ve alandır; ham sohbetler, tam kaynak dosyaları ve örnek varlıklar gönderilmez. Ağ cevabından sonra kaynak sürümleri yeniden kontrol edilir. Jev kaynak kapısını aşamaz.

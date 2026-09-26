@@ -134,6 +134,53 @@ def _jsonl(path):
     return [json.loads(line) for line in Path(path).read_text(encoding='utf-8').splitlines() if line.strip()]
 
 
+def _gate_summary(evaluations):
+    gate = evaluations.get('gate')
+    if not isinstance(gate, dict):
+        fallback = evaluations.get('rerank')
+        if not isinstance(fallback, dict) or not fallback.get('degraded'):
+            return None
+        # A failed gate is carried by the local fallback under jev.rerank.
+        gate = fallback
+    diagnostics = gate.get('diagnostics', [])
+    bypass = 'explicit_recall_bypass' in diagnostics
+    degraded = bool(gate.get('degraded'))
+    return dict(evaluated=not degraded and not bypass, needed=gate.get('needed'),
+                effective_needed=gate.get('effective_needed', gate.get('needed')),
+                override='lexical_override' in diagnostics, bypass=bypass,
+                abstain='abstain' in diagnostics, degraded=degraded)
+
+
+def _pool_coverage(results):
+    measured = [r for r in results if r['pool_ids'] is not None and (r['tp'] or r['fn'])]
+    gold = sum(len(r['tp']) + len(r['fn']) for r in measured)
+    in_pool = sum(len(r['pool_hits']) for r in measured)
+    delivered = sum(len(r['tp']) for r in measured)
+    lost = sum(len(set(r['pool_hits']) - set(r['tp'])) for r in measured)
+    return dict(prompts=len(measured), gold=gold, in_pool=in_pool,
+                recall=in_pool / gold if gold else None, delivered=delivered,
+                delivered_recall=delivered / gold if gold else None, lost_after_pool=lost)
+
+
+def _gate_false_negative(results):
+    needed = [r for r in results if r['needs_memory']]
+    gates = [r['gate'] for r in needed if r['gate'] is not None]
+    evaluated = [gate for gate in gates if gate['evaluated']]
+    jev_no = sum(gate['needed'] is False for gate in evaluated)
+    effective_no = sum(gate['effective_needed'] is False for gate in evaluated)
+    not_needed = [r for r in results if not r['needs_memory']]
+    return dict(labeled_needed=len(needed), evaluated=len(evaluated), jev_no=jev_no,
+                jev_rate=jev_no / len(evaluated) if evaluated else None,
+                effective_no=effective_no,
+                effective_rate=effective_no / len(evaluated) if evaluated else None,
+                overrides=sum(gate['override'] for gate in gates),
+                bypass=sum(gate['bypass'] for gate in gates),
+                degraded=sum(gate['degraded'] for gate in gates),
+                labeled_not_needed=len(not_needed),
+                jev_yes_on_not_needed=sum(r['gate'] is not None and r['gate']['evaluated']
+                                          and r['gate']['needed'] is True for r in not_needed))
+
+
 def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_seed=None,
              split_half='all', threshold=None, gate_scope='memory', write=True):
     if jev_mode not in ('local', 'assist', 'on', 'rerank') or split_half not in ('all', 'first', 'second'):
@@ -165,8 +212,11 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
     with advisor:
         for row in prompts:
             label = labels[row['id']]
+            if 'needs_memory' in label and not isinstance(label['needs_memory'], bool):
+                raise ValueError('needs_memory must be a bool: ' + row['id'])
             gold_memory = {value.removeprefix('memory:') for value in label.get('relevant_memory_ids', [])}
             gold_notes = {value.removeprefix('note:') for value in label.get('relevant_notes', [])}
+            needs_memory = label.get('needs_memory', bool(gold_memory or gold_notes))
             if gold_memory - catalog or gold_notes - note_ids:
                 raise ValueError('label refers to unknown or inactive record: ' + row['id'])
             started = time.monotonic()
@@ -189,12 +239,20 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
                            'project' if ident == package.get('project_id') or ident in (package.get('summary') or {}).get('task_ids', []) else 'other')
                 channels[channel] += len(text)
             evaluations = package.get('jev') or {}
+            catalog_evaluation = evaluations.get('catalog')
+            pool = (set(catalog_evaluation['pool_ids'])
+                    if isinstance(catalog_evaluation, dict) and isinstance(catalog_evaluation.get('pool_ids'), list)
+                    else None)
             degraded = any(isinstance(value, dict) and value.get('degraded') for value in evaluations.values())
             abstain = any(isinstance(value, dict) and 'abstain' in value.get('diagnostics', []) for value in evaluations.values())
             results.append(dict(id=row['id'], client=row['client'], prompt=row['prompt'],
                                 tp=sorted(actual & gold), fp=sorted(actual - gold), fn=sorted(gold - actual),
                                 selected_memory_ids=sorted(actual_memory), selected_notes=sorted(actual_notes),
                                 relevant_memory_ids=sorted(gold_memory), relevant_notes=sorted(gold_notes),
+                                pool_ids=sorted(pool) if pool is not None else None,
+                                pool_hits=sorted(gold & pool) if pool is not None else None,
+                                pool_misses=sorted(gold - pool) if pool is not None else None,
+                                needs_memory=needs_memory, gate=_gate_summary(evaluations),
                                 injected_chars=len(package['text']), channel_chars=channels, latency_ms=latency_ms,
                                 requested_mode=jev_mode, effective_mode='local' if degraded else jev_mode,
                                 degraded=degraded, abstain=abstain,
@@ -216,6 +274,8 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
                    requested_mode_counts=dict(Counter(r['requested_mode'] for r in results)),
                    effective_mode_counts=dict(Counter(r['effective_mode'] for r in results)),
                    channel_chars={name:sum(r['channel_chars'][name] for r in results) for name in ('catalog','note','procedure','project','other')})
+    metrics['pool_coverage'] = _pool_coverage(results)
+    metrics['gate_false_negative'] = _gate_false_negative(results)
     latencies=sorted(r['latency_ms'] for r in results)
     metrics['latency_p50_ms']=latencies[int(.5*(len(latencies)-1))] if latencies else None
     metrics['latency_p95_ms']=latencies[int(.95*(len(latencies)-1))] if latencies else None
@@ -223,7 +283,9 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
     ctp, cfp, cfn = (sum(len(r[key]) for r in certain) for key in ('tp', 'fp', 'fn'))
     metrics['certain_only'] = dict(prompts=len(certain), tp=ctp, fp=cfp, fn=cfn,
                                    precision=ctp / (ctp + cfp) if ctp + cfp else None,
-                                   recall=ctp / (ctp + cfn) if ctp + cfn else None)
+                                   recall=ctp / (ctp + cfn) if ctp + cfn else None,
+                                   pool_coverage=_pool_coverage(certain),
+                                   gate_false_negative=_gate_false_negative(certain))
     report = dict(mode=jev_mode, split_half=split_half, split_seed=split_seed, gate_scope=gate_scope,
                   threshold=threshold, metrics=metrics, results=results)
     out_dir = Path(out_dir)
@@ -235,11 +297,24 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
         return '\n'.join(f"- `{r['id']}` {r['prompt'][:80].replace(chr(10), ' ')} — {', '.join(r[kind])}" for r in ranked) or '- Yok'
     common_fp = Counter(item for row in results for item in row['fp']).most_common(5)
     common_fn = Counter(item for row in results for item in row['fn']).most_common(5)
+    pool_metrics = metrics['pool_coverage']
+    pool_summary = (f"Recall: {pool_metrics['recall']}; delivered_recall: {pool_metrics['delivered_recall']}; "
+                    f"lost_after_pool: {pool_metrics['lost_after_pool']} "
+                    f"({pool_metrics['prompts']} istem, {pool_metrics['gold']} gold)."
+                    if any(r['pool_ids'] is not None for r in results)
+                    else 'havuz ölçülmedi (rerank modu değil)')
+    gate_metrics = metrics['gate_false_negative']
+    gate_summary = (f"Jev yanlış negatif oranı: {gate_metrics['jev_rate']}; "
+                    f"etkili yanlış negatif oranı: {gate_metrics['effective_rate']} "
+                    f"({gate_metrics['evaluated']} değerlendirilmiş, hafıza gerektiren istem)."
+                    if gate_metrics['evaluated'] else 'kapı ölçülmedi')
     md = (f"# Erişim değerlendirmesi\n\nİstem: {len(results)}; TP: {tp}; FP: {fp}; FN: {fn}.\n"
           f"Precision: {metrics['precision']}; recall: {metrics['recall']}; alakasız kümede tüm metnin boş dönmesi: {metrics['empty_return_rate']}; katalog/notun boş dönmesi: {metrics['empty_memory_return_rate']}.\n"
           f"Ortalama enjekte karakter: {metrics['average_injected_chars']:.1f}; belirsiz etiket: {metrics['uncertain_labels']}.\n\n"
           f"Kesin etiketli {len(certain)} istemde precision: {metrics['certain_only']['precision']}; recall: {metrics['certain_only']['recall']} (TP {ctp}, FP {cfp}, FN {cfn}).\n\n"
           f"TP/FP/FN yalnız aktif katalog ve teslim edilmiş bilgi notu kimlikleri içindir; karakter ve boş dönme tüm paket metnini kapsar. Belirsiz etiketler metriklere dahildir.\n\n"
+          f"## Havuz kapsaması\n\n{pool_summary}\n\n"
+          f"## Kapı yanlış negatifi\n\n{gate_summary}\n\n"
           f"## En kötü 10 FP\n\n{examples('fp')}\n\n## En kötü 10 FN\n\n{examples('fn')}\n\n"
           f"## Gözlenen desenler\n\n"
           f"- En sık FP: {', '.join(f'{name} ({count})' for name, count in common_fp) or 'yok'}.\n"
