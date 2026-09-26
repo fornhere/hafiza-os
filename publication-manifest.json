@@ -44,6 +44,10 @@
       "public_sha256": "d440cca49620031263c7ea10cb48cc0000f6ef88f1d22c03d511f1f56a920b76"
     },
     {
+      "path": "araclar/kayit_denetimi.py",
+      "mode": "shared"
+    },
+    {
       "path": "araclar/konsolidasyon.py",
       "mode": "reviewed-variant",
       "reason": "Private historic exclusion and memory ID prefix versus public defaults.",

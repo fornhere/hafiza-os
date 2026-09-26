@@ -1,4 +1,5 @@
 """Source-validated task context with optional bounded Jev advice; no memory writes."""
+import datetime as dt
 import math
 import hashlib
 import json
@@ -256,7 +257,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                         skip_memory = True
                         if jev_client.load_config(vault)['rerank_gate_scope'] == 'all':
                             result = dict(text='', selected_ids=[], source_versions={}, assets=[], knowledge=None,
-                                          omitted_reasons=[], project_id=None, jev={'gate': gate},
+                                          omitted_reasons=[], project_id=None, suppressed_count=0, jev={'gate': gate},
                                           history={'mode': history, 'included': False},
                                           procedure_reading={'paths': [], 'delivered': False},
                                           summary={'record_ids': [], 'task_ids': [], 'derived': True},
@@ -286,7 +287,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
         # Never relabel an old claim with a freshly computed source hash.
         text = 'Bağlam hazırlanırken kaynak değişti; güncel kaynağı yeniden doğrula.'
         result.update(text=text[:max(0,int(budget))], selected_ids=[], assets=[],
-                      source_versions={}, knowledge=None, decision_history=None, reuse=None)
+                      source_versions={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0)
         result['omitted_reasons'].append('source_changed_during_package')
         result['summary'] = dict(record_ids=[],task_ids=[],derived=True)
         result['procedure_reading'].update(paths=[],delivered=False)
@@ -360,7 +361,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     def add(ident, text):
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
-                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'decision-history':4, 'knowledge':2, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
+                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'suppressed-history':6, 'decision-history':4, 'knowledge':2, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
         if ident in task_ids: priority=4
         if ident.startswith('output:'): priority=5
@@ -378,9 +379,21 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     overrides=asset_claim_overrides(vault)
     eligible=[]
     eligible_versions={}
+    suppressed_count=0
+    context_scopes=[scope]+['project:'+w['id'] for w in workflows]
+    today=dt.datetime.now(dt.timezone.utc).date().isoformat()
     for row in h.load_catalog(vault):
         if decision_data and row.get('memory_id') in decision_data['considered_ids']: continue
-        if not any(h.retrievable(row,context_scope) for context_scope in [scope]+['project:'+w['id'] for w in workflows]): continue
+        if not any(h.retrievable(row,context_scope) for context_scope in context_scopes):
+            if row.get('sensitivity','normal') == 'normal' and row.get('scope') in ['user']+context_scopes:
+                stale=row.get('status') == 'superseded'
+                if row.get('status') == 'active' and row.get('valid_to'):
+                    try:
+                        stale=dt.date.fromisoformat(str(row['valid_to'])[:10]).isoformat() <= today
+                    except ValueError:
+                        pass
+                if stale and rank_records([row], query): suppressed_count+=1
+            continue
         if row.get('memory_id') in overrides:
             if rank_records([row], query): omitted.append(row['memory_id']+':'+overrides[row['memory_id']])
             continue
@@ -389,6 +402,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             continue
         eligible.append(row)
         eligible_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
+    # A gate that skipped memory must not reintroduce a memory hint.
+    if skip_memory: suppressed_count=0
+    if suppressed_count:
+        add('suppressed-history',f'{suppressed_count} eski kayıt bastırıldı; tarihçe için karar_gecmisi.')
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
     if skip_memory:
         ranked_catalog, knowledge_data, catalog_evaluation = [], None, None
@@ -434,7 +451,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if pinned: card_facts.append(row)
         prefix = 'Bilgi kartı: ' if resume and pinned else 'Güncel kayıt: '
         details = ''.join(' '+label+': '+row[key] for key,label in (('rationale','Gerekçe'),('conditions','Geçerlilik koşulu')) if isinstance(row.get(key),str) and row[key] in content and not h.contains_secret(row[key]))
-        if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+row['source_path']+')'):
+        if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+row['source_path']+'; kapsam: '+row.get('scope','bilinmiyor')+'; sınıf: '+h.context_source_class(row)+')'):
             current_facts.append(row)
             priority,sequence,ident,text=candidates[-1]
             candidates[-1]=(4,sequence,ident,text)
@@ -552,8 +569,18 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if used+cost>budget:
             omitted.append(ident+':budget'); continue
         lines.append(text);selected.append(ident);delivered_segments[ident]=text;used+=cost
+    if 'suppressed-history' in selected or any(row['memory_id'] in selected for row in current_facts):
+        header = h.context_scope_header(scope, ['project:'+w['id'] for w in workflows])
+        if used + len(header) + 1 <= budget:
+            lines.insert(0, header)
+            selected.insert(0, 'scope-header')
+            delivered_segments['scope-header'] = header
+            used += len(header) + 1
+        else:
+            omitted.append('scope-header:budget')
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
+    result['suppressed_count']=suppressed_count
     if knowledge_data and 'knowledge' in selected:
         source_versions.update(knowledge_data.get('source_versions',{}))
     if 'procedure-reading' in selected:

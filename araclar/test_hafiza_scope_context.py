@@ -165,16 +165,79 @@ class ContextContractTests(VaultFixture):
         row.pop("conditions")
         result = self.package([self.item(row)])
         self.assertEqual(
-            "- [presentation-style] " + STATEMENT
-            + " (kaynak: source.md; tarih: 2020-01-01; güven: explicit-user)", result["text"])
+            "Aranan kapsam: user + project:alpha\n- [presentation-style] " + STATEMENT
+            + " (kaynak: source.md; tarih: 2020-01-01; güven: explicit-user; "
+            "kapsam: project:alpha; sınıf: incelenmiş kayıt)", result["text"])
+
+    def test_source_class_labels_follow_evidence_and_review_priority(self):
+        cases = [({}, "aday"), ({"evidence_source": "", "reviewed_by": None}, "aday"),
+                 ({"reviewed_by": "reviewer"}, "incelenmiş kayıt"),
+                 ({"evidence_source": None, "reviewed_by": "reviewer"}, "incelenmiş kayıt"),
+                 ({"evidence_source": "user-message.md"}, "doğrulanmış kullanıcı beyanı"),
+                 ({"evidence_source": "user-message.md", "reviewed_by": "reviewer"},
+                  "doğrulanmış kullanıcı beyanı")]
+        for fields, expected in cases:
+            row = dict(self.row)
+            row.pop("reviewed_by")
+            row.update(fields)
+            for canonical in (False, True):
+                with self.subTest(fields=fields, canonical=canonical):
+                    result = (self.package([self.remote_item()], records=[row]) if canonical
+                              else self.package([self.item(row)]))
+                    self.assertIn("sınıf: " + expected + ")", result["text"])
+
+    def test_canonical_scope_and_class_override_remote_metadata(self):
+        item = self.item(dict(self.row, evidence_source="remote-message.md"))
+        row = dict(self.row, scope="user")
+        result = self.package([item], records=[row])
+        self.assertIn("kapsam: user; sınıf: incelenmiş kayıt)", result["text"])
+        row.pop("scope")
+        row.pop("reviewed_by")
+        result = self.package([item], records=[row])
+        self.assertIn("kapsam: bilinmiyor; sınıf: aday)", result["text"])
+
+    def test_missing_metadata_scope_is_unknown(self):
+        row = dict(self.row)
+        row.pop("scope")
+        result = h.context_from_results([self.item(row)], query="sunum", scope=None)
+        self.assertIn("kapsam: bilinmiyor; sınıf: incelenmiş kayıt)", result["text"])
+
+    def test_scope_header_is_first_and_does_not_count_as_record(self):
+        for scope, expected in ((None, "tümü"), ("user", "user"),
+                                ("project:alpha", "user + project:alpha")):
+            with self.subTest(scope=scope):
+                result = h.context_from_results(
+                    [self.item(dict(self.row, scope="user"))], query="sunum", scope=scope)
+                self.assertEqual("Aranan kapsam: " + expected, result["text"].splitlines()[0])
+                self.assertEqual(1, result["included"])
+                self.assertEqual([self.row["memory_id"]], result["memory_ids"])
+                self.assertIn("kapsam: user; sınıf: incelenmiş kayıt)", result["text"])
+
+    def test_scope_header_deduplicates_extra_scopes_in_order(self):
+        self.assertEqual(
+            "Aranan kapsam: user + project:alpha + project:w + project:z",
+            h.context_scope_header("project:alpha",
+                                   ["project:w", "project:alpha", "user", "project:z", "project:w"]))
+
+    def test_no_records_means_no_scope_header(self):
+        for items in ([], [self.item(dict(self.row, scope="project:beta"))]):
+            with self.subTest(items=items):
+                result = self.package(items)
+                self.assertEqual("", result["text"])
+                self.assertEqual(0, result["included"])
+                self.assertEqual([], result["memory_ids"])
 
     def test_budget_is_atomic_and_later_small_record_can_fit(self):
         full = self.package()
         size = len(full["text"])
-        self.assert_details(self.package(char_budget=size))
+        exact = self.package(char_budget=size)
+        self.assert_details(exact)
+        self.assertEqual(full["text"], exact["text"])
+        self.assertEqual(1, exact["included"])
         for budget in (0, size - 1):
             with self.subTest(budget=budget):
                 result = self.package(char_budget=budget)
+                self.assertEqual(0, result["included"])
                 self.assertEqual([], result["memory_ids"])
                 self.assertEqual("", result["text"])
         short = dict(self.row, memory_id="short", statement="Kısa not.")
@@ -275,6 +338,10 @@ class ContextContractTests(VaultFixture):
         self.assertEqual(0, code)
         self.assertEqual({"presentation-style", "general"}, set(result["memory_ids"]))
         self.assertEqual(2, result["text"].count(CONDITIONS))
+        self.assertEqual("Aranan kapsam: user + project:alpha", result["text"].splitlines()[0])
+        self.assertEqual(2, result["included"])
+        self.assertIn("kapsam: project:alpha; sınıf: incelenmiş kayıt)", result["text"])
+        self.assertIn("kapsam: user; sınıf: incelenmiş kayıt)", result["text"])
 
 
 class FakeSearch:
