@@ -71,7 +71,7 @@ def catalog_relations(vault, candidate, proposal):
     result.update(status='advisory',checked_count=len(peers));return result
 
 
-def review_pending(vault, project_id=None, limit=5, apply=False):
+def review_pending(vault, project_id=None, limit=5, apply=False, conflict_pairs=3):
     from konsolidasyon import pending
     vault=Path(vault); limit=max(1,min(20,int(limit)))
     scopes={'user', 'project:'+project_id if project_id else 'user'}
@@ -138,7 +138,13 @@ def review_pending(vault, project_id=None, limit=5, apply=False):
         except (ValueError,OSError,KeyError,TypeError):advice=dict(status='degraded',diagnostics=['source_or_policy_validation_failed'])
         row=dict(receipt_id=key,candidate_id=ident,queue=kind,deterministic_assessment=c.get('assessment'),status=advice['status'],advice=advice,at=dt.datetime.now(dt.timezone.utc).isoformat(),canonical_writes=False)
         results.append(append_once(vault,RECEIPTS,row) if apply else dict(row=row,changed=False))
-    return dict(reviews=results,already_reviewed=skipped,limit=limit,pending_total=len(proposals),applied=apply,requires_reviewer=True)
+    result=dict(reviews=results,already_reviewed=skipped,limit=limit,pending_total=len(proposals),applied=apply,requires_reviewer=True)
+    try:
+        from kayit_denetimi import active_conflict_audit
+        result['active_conflicts']=active_conflict_audit(vault,scopes=scopes,jev_pairs=max(0,min(10,int(conflict_pairs))))
+    except Exception:
+        result['active_conflicts']=dict(status='degraded',diagnostics=['conflict_audit_failed'],pairs=[],canonical_writes=False)
+    return result
 
 
 def outcome(vault,data,apply=False):
@@ -186,14 +192,14 @@ def review_lesson(vault,data,apply=False):
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vault',type=Path,required=True)
     sub=p.add_subparsers(dest='cmd',required=True)
-    r=sub.add_parser('review-pending');r.add_argument('--project-id');r.add_argument('--limit',type=int,default=5);r.add_argument('--apply',action='store_true')
+    r=sub.add_parser('review-pending');r.add_argument('--project-id');r.add_argument('--limit',type=int,default=5);r.add_argument('--apply',action='store_true');r.add_argument('--conflict-pairs',type=int,default=3)
     for name in ('outcome','review-lesson','verify-answer'):
         r=sub.add_parser(name);r.add_argument('--input-json',type=Path,required=True)
         if name!='verify-answer':r.add_argument('--apply',action='store_true')
         else:r.add_argument('--project-id')
     r=sub.add_parser('context');r.add_argument('query');r.add_argument('--cwd');r.add_argument('--budget',type=int,default=5000)
     a=p.parse_args(argv);v=a.vault.resolve()
-    if a.cmd=='review-pending':result=review_pending(v,a.project_id,a.limit,a.apply)
+    if a.cmd=='review-pending':result=review_pending(v,a.project_id,a.limit,a.apply,conflict_pairs=a.conflict_pairs)
     elif a.cmd=='context':
         from gorev_baglam import build_task_package
         result=build_task_package(v,a.query,a.cwd,a.budget)

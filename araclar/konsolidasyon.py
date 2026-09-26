@@ -306,7 +306,7 @@ def main():
     sub = parser.add_subparsers(dest='cmd', required=True)
     sub.add_parser('pending'); sub.add_parser('status')
     sub.add_parser('scope-audit')
-    p = sub.add_parser('review-pending'); p.add_argument('--project-id'); p.add_argument('--limit',type=int,default=5); p.add_argument('--apply',action='store_true')
+    p = sub.add_parser('review-pending'); p.add_argument('--project-id'); p.add_argument('--limit',type=int,default=5); p.add_argument('--apply',action='store_true'); p.add_argument('--conflict-pairs',type=int,default=3)
     p = sub.add_parser('health'); p.add_argument('--check', action='store_true')
     p = sub.add_parser('review'); p.add_argument('--input-json', type=Path, required=True)
     p.add_argument('--apply', action='store_true')
@@ -321,7 +321,7 @@ def main():
         result = scope_audit(vault)
     elif args.cmd == 'review-pending':
         from hafiza_dongusu import review_pending
-        result = review_pending(vault,args.project_id,args.limit,args.apply)
+        result = review_pending(vault,args.project_id,args.limit,args.apply,conflict_pairs=args.conflict_pairs)
     elif args.cmd == 'status': result = status(vault)
     elif args.cmd == 'health': result = health(vault)
     elif args.cmd == 'review': result = review(vault, json.loads(args.input_json.read_text()), args.apply)
