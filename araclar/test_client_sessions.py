@@ -227,7 +227,7 @@ class NativeSessions(NativeFixture):
                     out, _ = self.cli('SessionStart', payload)
                     self.assertIn(decision['summary'], out['hookSpecificOutput']['additionalContext'])
                     again, _ = self.cli('SessionStart', payload)
-                    self.assertEqual(again, {})
+                    self.assertIn(decision['summary'], again['hookSpecificOutput']['additionalContext'])
                 else:
                     payload = dict(self.payload(), conversationId=fresh, initialNumSteps=0,
                                    transcriptPath=str(self.root / 'brain' / fresh / '.system_generated/logs/transcript_full.jsonl'))
@@ -593,6 +593,38 @@ class NativeSessions(NativeFixture):
             out, _ = hooks.hook(self.vault, self.client, 'UserPromptSubmit', dict(self.payload(), prompt='Yerel işte devam edelim'))
         self.assertEqual(out['hookSpecificOutput']['hookEventName'], 'UserPromptSubmit')
         self.assertIs(jev_retrieval.mode, original)
+
+    def test_claude_session_start_restores_context_after_resume_or_compaction(self):
+        prompt = self.rows[-2]['message']['content']
+        payload = dict(self.payload(), prompt=prompt)
+        with (patch.object(hooks, 'claude_task_package', return_value={'text': 'Current task context'}),
+              patch('codex_hafiza.opening_brief', return_value='Opening summary') as opening,
+              patch('codex_hafiza.latest_session_section', return_value='Latest session summary'),
+              patch.object(hooks, 'recall', return_value='Reviewed session context')):
+            hooks.hook(self.vault, self.client, 'UserPromptSubmit', payload)
+            repeated, _ = hooks.hook(self.vault, self.client, 'UserPromptSubmit', payload)
+            self.assertEqual(repeated, {})
+            for reason in ('startup', 'resume', 'compact'):
+                with self.subTest(source=reason):
+                    output, _ = hooks.hook(self.vault, self.client, 'SessionStart',
+                                           dict(self.payload(), source=reason))
+                    text = output['hookSpecificOutput']['additionalContext']
+                    for expected in ('Opening summary', 'Latest session summary',
+                                     'Reviewed session context', 'Current task context'):
+                        self.assertIn(expected, text)
+                    repeated, _ = hooks.hook(self.vault, self.client, 'UserPromptSubmit', payload)
+                    self.assertEqual(repeated, {})
+            self.assertEqual(opening.call_count, 4)
+
+    def test_claude_session_start_keeps_existing_privacy_exclusion(self):
+        with self.assertRaisesRegex(SourceError, 'privacy_blocked'):
+            hooks.hook(self.vault, self.client, 'UserPromptSubmit',
+                       dict(self.payload(), prompt='Do not save this request'))
+        with patch.object(hooks, 'claude_task_package') as package:
+            with self.assertRaisesRegex(SourceError, 'privacy_blocked'):
+                hooks.hook(self.vault, self.client, 'SessionStart',
+                           dict(self.payload(), source='compact'))
+        package.assert_not_called()
 
     def test_symlink_queue_rejected_without_outside_write(self):
         outside = self.root / 'outside'; outside.mkdir()
