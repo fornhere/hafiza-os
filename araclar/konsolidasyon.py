@@ -104,7 +104,10 @@ from capture_source import clean_user, snapshot, excluded, validate_source
 
 def heartbeat_threads(root):
     """Thread ids that scheduled heartbeats keep appending to."""
-    import tomllib
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # Python 3.10 has no standard-library TOML reader.
+        import _toml_compat as tomllib
     threads = set()
     for path in (Path(root) / 'automations').glob('*/automation.toml'):
         try: config = tomllib.loads(path.read_text(encoding='utf-8'))

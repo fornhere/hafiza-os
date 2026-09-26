@@ -2,6 +2,10 @@
   "version": 1,
   "files": [
     {
+      "path": "araclar/_toml_compat.py",
+      "mode": "shared"
+    },
+    {
       "path": "araclar/ajan_kur.py",
       "mode": "shared"
     },
