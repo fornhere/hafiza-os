@@ -134,3 +134,26 @@ zorunludur ve derste saklanır. Oturum kimlikleri birebir karşılaştırılır.
 Alanlar verilmezse outcome makbuz parmak izi değişmez. Adlar ve oturum kimlikleri
 beyandır; bu karşılaştırmalar kimlik doğrulaması veya gerçek bağımsızlık kanıtı
 değildir.
+
+## Ders tetiklenme ölçümü
+
+`python3 araclar/ders_tetik.py run --vault KASA --spec spec.json --output rapor.json`
+yalnız yerel sözcük eşleşmesini ölçer; Jev çağrısı veya kanonik ders değişikliği yapmaz.
+İncelenmiş spec örneği, tetiklemesi gereken 3 / tetiklememesi gereken 3 istem içerir:
+
+```json
+{"schema":1,"label_review":{"status":"reviewed","kind":"human","reviewed_by":"inceleyen"},"cases":[{"lesson_id":"kapak","project_id":null,"workflow_ids":[],"should_trigger":["kapak üret","kapak tasarla","kapak düzenle"],"should_not_trigger":["ses düzenle","metni kısalt","raporu denetle"]}]}
+```
+
+Spec 1–50 benzersiz ders içerir. Her istem listesi 3–10 benzersiz, boş olmayan,
+en fazla 1500 karakterlik metin alır; iki liste kesişmez. `label_review.kind`
+`human`, `agent` veya `fixture` olabilir; sır içeren spec reddedilir.
+Eksik/uygunsuz ders, kapsam uyuşmazlığı, bağlam hatası, bütçe müdahalesi veya
+koşu sırasında değişen kaynak ölçümü durdurur; hata recall 0 diye kaydedilmez,
+rapor yazılmaz. CLI hatayı stderr'e JSON olarak yazar ve 2 ile çıkar.
+
+Başarılı rapor değişmezdir: var olan çıktı üzerine yazılmaz. Rapor kaynak
+SHA256'larını, ders sürümlerini, kaçırılan ve yanlış tetiklenen istemleri içerir.
+Ders başına ve raporun üst düzeyinde `recall` ile `false_trigger_rate` bulunur;
+üst düzey oranlar bütün istemler üzerinden micro hesaplanır. Bu bir sözcük
+tetiği ölçümüdür, dersin faydasının veya kullanıcı kabulünün kanıtı değildir.
