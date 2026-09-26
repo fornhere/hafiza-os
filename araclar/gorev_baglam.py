@@ -288,7 +288,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
         # Never relabel an old claim with a freshly computed source hash.
         text = 'Bağlam hazırlanırken kaynak değişti; güncel kaynağı yeniden doğrula.'
         result.update(text=text[:max(0,int(budget))], selected_ids=[], assets=[],
-                      source_versions={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0, lessons=dict(applied=[],diagnostics=[]))
+                      source_versions={}, delivered_segments={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0, lessons=dict(applied=[],diagnostics=[]))
         result['omitted_reasons'].append('source_changed_during_package')
         result['summary'] = dict(record_ids=[],task_ids=[],derived=True)
         result['procedure_reading'].update(paths=[],delivered=False)
