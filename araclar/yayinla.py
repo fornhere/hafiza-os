@@ -10,6 +10,8 @@ import subprocess
 import tarfile
 import tempfile
 
+from hafiza import SECRET_RULES
+
 
 def run(repo, *args):
     return subprocess.check_output(['git', '-C', str(repo), *args], stderr=subprocess.PIPE).decode().strip()
@@ -45,16 +47,16 @@ def parity(repo, vault):
         raise ValueError('runtime missing from manifest: ' + ', '.join(sorted(required - covered)))
 
 
-# Secret-shaped literals must not reach the public tree. The detector examples
-# live in this module only, so its own source is excluded from the scan below.
+# Secret-shaped literals must not reach the public tree. Keep the historical
+# self-exclusion; other source/tests must assemble synthetic examples at runtime.
 SELF_PATH = 'araclar/yayinla.py'
-SECRET_PATTERNS = [r'\bsk-[A-Za-z0-9_-]{20,}',
-                   r'\bgh[pousr]_[A-Za-z0-9]{30,}',
-                   r'\bAKIA[0-9A-Z]{16}\b',
-                   r'\bxox[abeprs]-[A-Za-z0-9-]{10,}',
-                   r'-----BEGIN (?:[A-Z][A-Z0-9 ]* )?PRIVATE KEY-----',
-                   r'/home/[A-Za-z0-9._-]+/',
-                   r'/Users/[A-Za-z0-9._-]+/']
+# The legacy assignment heuristic accepts ANY non-space word, including source
+# expressions/placeholders. Publication uses the shared provider/shape rules.
+SECRET_PATTERNS = tuple((name, pattern) for name, pattern in SECRET_RULES
+                        if name != 'legacy_assignment') + (
+    ('home_path_linux', re.compile(r'/home/[A-Za-z0-9._-]+/')),
+    ('home_path_macos', re.compile(r'/Users/[A-Za-z0-9._-]+/')),
+)
 EMAIL_PATTERN = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b')
 
 
@@ -67,7 +69,7 @@ def email_allowed(address):
 
 
 def findings(text):
-    hits = [p for p in SECRET_PATTERNS if re.search(p, text)]
+    hits = [name for name, pattern in SECRET_PATTERNS if pattern.search(text)]
     hits += ['email:' + a for a in EMAIL_PATTERN.findall(text) if not email_allowed(a)]
     return hits
 

@@ -51,7 +51,7 @@ class LearningPilot(unittest.TestCase):
                 propose(self.vault, dict(self.brief, source_path=path))
 
     def test_sensitive_input_and_source(self):
-        for field, value in [('sensitivity', 'private'), ('question', 'password=supersecret123')]:
+        for field, value in [('sensitivity', 'private'), ('question', 'password=' + 'supersecret123')]:
             with self.subTest(field=field), self.assertRaises(ValueError):
                 propose(self.vault, dict(self.brief, **{field: value}))
         self.source.write_text('sensitivity: private\n' + self.quote, encoding='utf-8')

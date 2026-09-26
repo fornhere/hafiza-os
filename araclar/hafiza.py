@@ -25,11 +25,50 @@ CATALOG_PATH = Path("zihin/hafıza-kataloğu.jsonl")
 CANDIDATE_PATH = Path("gelen-kutusu/hafıza-adayları.jsonl")
 EVENT_PATH = Path("günlük/hafıza-olayları.jsonl")
 DEFAULT_USER_ID = os.environ.get("HAFIZA_MEM0_USER_ID", "kullanici")
-SECRET_PATTERNS = (
-    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
-    re.compile(r"\b(?:api[_ -]?key|token|parola|şifre)\s*[:=]\s*\S+", re.IGNORECASE),
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+# Rule names, never matched values, are safe to use in audit/publication reports.
+# Keep the historical assignment rule for existing short-password protection;
+# the new context rule also understands quoted fields and natural-language labels.
+_SECRET_CONTEXT = (
+    r"(?i:\b(?:anahtar(?:[ıi](?:m|n|m[ıi]z|n[ıi]z)?)?"
+    r"|şifre(?:m|n|si|miz|niz)?|sifre|parola(?:m|n|sı|mız|nız)?"
+    r"|kurtarma[ _-]+kod(?:u|um|un|umuz|unuz)?"
+    r"|(?:api|access|secret)[ _-]?key|(?:access[ _-]?)?token"
+    r"|(?:recovery|backup)[ _-]+code|password|passwd|passphrase|secret|key)\b)"
 )
+_SECRET_SEPARATOR = (
+    r"(?:[ \t]*[\"'`*]{0,3}\s*[:=][*]{0,3}\s*[\"'`*]{0,3}"
+    r"|[ \t]+(?:[-–—][ \t]+)?[\"'`*]{0,3})"
+)
+# Do not accept a prefix of an identifier, path or filename as a whole value.
+_SECRET_END = r"(?![\w/\\-]|\.\w)"
+_MIXED_SECRET_GROUP = r"(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{3,8}"
+_PLAIN_SECRET_GROUP = r"(?:[A-Za-z]{3,8}|[0-9]{3,8})"
+SECRET_RULES = (
+    ("provider_sk", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
+    ("provider_github", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})\b")),
+    ("provider_slack", re.compile(r"\b(?:xox[abeprs]-|xapp-|xwfp-)[A-Za-z0-9-]{10,}")),
+    ("provider_aws", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("provider_google", re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![\w-])")),
+    ("provider_gitlab", re.compile(r"\bglpat-[0-9A-Za-z_-]{20,}")),
+    ("provider_huggingface", re.compile(r"\bhf_[0-9A-Za-z]{30,}\b")),
+    ("provider_vercel", re.compile(r"\b(?:vck|vcp)_[0-9A-Za-z_-]{20,}")),
+    ("legacy_assignment", re.compile(r"\b(?:api[_ -]?key|token|parola|şifre)\s*[:=]\s*\S+", re.IGNORECASE)),
+    ("private_key", re.compile(r"-----BEGIN (?:[A-Z][A-Z0-9 ]* )?PRIVATE KEY-----")),
+    ("context_value", re.compile(
+        _SECRET_CONTEXT + _SECRET_SEPARATOR
+        + r"(?P<secret>(?=[A-Za-z0-9_-]*[A-Za-z])(?=[A-Za-z0-9_-]*[0-9])[A-Za-z0-9_-]{12,})"
+        + _SECRET_END)),
+    # Require two mixed groups without a label: numbered slugs usually have at
+    # most one. Context still catches codes with only one digit-bearing group.
+    # UUIDs have a 12-character final group; ordinary hashes have no groups.
+    ("grouped_key", re.compile(
+        r"(?<![\w/\\.-])"
+        + rf"(?=(?:{_PLAIN_SECRET_GROUP}-)*{_MIXED_SECRET_GROUP}-"
+        + rf"(?:{_PLAIN_SECRET_GROUP}-)*{_MIXED_SECRET_GROUP}(?:-|{_SECRET_END}))"
+        + r"(?P<secret>"
+        r"[A-Za-z0-9]{3,8}(?:-[A-Za-z0-9]{3,8}){2,})" + _SECRET_END)),
+)
+SECRET_PATTERNS = tuple(pattern for _, pattern in SECRET_RULES)
 REQUIRED_FIELDS = {
     "memory_id",
     "kind",
