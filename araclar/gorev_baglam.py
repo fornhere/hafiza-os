@@ -126,7 +126,8 @@ def select_projects(projects, query, cwd=None):
         return any(alias_match(alias,words,fuzzy) and not (deictic and set(query_words(alias)) <= _GENERIC)
                    for alias in project.get('aliases',[]))
     # Archived projects answer only an exact alias, never a fuzzy match or cwd.
-    active=[p for p in projects if p.get('status','aktif')!='arsiv']
+    # Config uses both Turkish and English status words; both mean archived.
+    active=[p for p in projects if p.get('status','aktif') not in ('arsiv', 'arşiv', 'archived')]
     explicit=[p for p in projects if matches(p)]
     if not explicit: explicit=[p for p in active if matches(p,True)]
     specific=[p for p in explicit if any(alias_match(a,words) and not set(query_words(a)) <= _GENERIC for a in p.get('aliases',[]))]
