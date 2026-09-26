@@ -708,6 +708,11 @@ class RerankTests(unittest.TestCase):
         self.assertEqual(selected,[])
 
 
+def memory_ids(ids):
+    """F2'nin kapsam başlığı segmenti kayıt değildir; teslim edilen kayıtları karşılaştır."""
+    return [i for i in ids if i != 'scope-header']
+
+
 class RecallSafetyTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -799,7 +804,7 @@ class RecallSafetyTests(unittest.TestCase):
         self.memory('uncategorized', category=None)
         self.memory('entity', category='entity')
         result = self.package()
-        self.assertEqual(result['selected_ids'], ['pref', 'profile'])
+        self.assertEqual(memory_ids(result['selected_ids']), ['pref', 'profile'])
         for row in (pref, profile):
             self.assertIn(row['statement'], result['text'])
             self.assertIn(row['source_path'], result['source_versions'])
@@ -813,7 +818,7 @@ class RecallSafetyTests(unittest.TestCase):
                          dict(static_preferences_chars='600')):
             with self.subTest(settings=settings):
                 self.recall_config(**settings)
-                self.assertEqual(self.package()['selected_ids'], [])
+                self.assertEqual(memory_ids(self.package()['selected_ids']), [])
 
     def test_static_character_budget_skips_oversized_and_keeps_later_fit(self):
         self.memory('a-long')
@@ -821,7 +826,7 @@ class RecallSafetyTests(unittest.TestCase):
         self.memory('c-extra', 'Sade yaz.')
         self.recall_config(static_preferences_chars=len(short['statement']))
         result = self.package()
-        self.assertEqual(result['selected_ids'], ['b-short'])
+        self.assertEqual(memory_ids(result['selected_ids']), ['b-short'])
         self.assertIn(short['statement'], result['text'])
 
     def test_static_order_is_user_then_id_without_already_selected(self):
@@ -844,7 +849,7 @@ class RecallSafetyTests(unittest.TestCase):
                     self.config(retrieval_mode=mode)
                     self.recall_config(**({'static_preferences': static} if static == 'always' else {}))
                     result = self.package()
-                    self.assertEqual(result['selected_ids'], ['pref'] if static == 'always' else [])
+                    self.assertEqual(memory_ids(result['selected_ids']), ['pref'] if static == 'always' else [])
 
     def test_static_preferences_keep_source_scope_and_status_gates(self):
         stale = self.memory('stale')
@@ -855,11 +860,11 @@ class RecallSafetyTests(unittest.TestCase):
         self.memory('superseded', status='superseded')
         self.memory('invalid', source_hash='invalid')
         self.memory('valid')
-        self.assertEqual(self.package()['selected_ids'], ['valid'])
+        self.assertEqual(memory_ids(self.package()['selected_ids']), ['valid'])
 
     def test_static_preferences_still_obey_final_package_budget(self):
         self.memory()
-        self.assertEqual(self.package(budget=1)['selected_ids'], [])
+        self.assertEqual(memory_ids(self.package(budget=1)['selected_ids']), [])
         self.assertEqual(self.package(budget=1)['text'], '')
 
     def test_static_preferences_follow_rerank_limit_and_degraded_fallback(self):
@@ -871,15 +876,15 @@ class RecallSafetyTests(unittest.TestCase):
                     return RerankTests.high_answer(vault, query, cards, **kwargs)
                 self.evaluate.side_effect = answer
                 result = self.package('Hatırla')
-                self.assertEqual(result['selected_ids'], ['m0', 'm1', 'm2', 'm3'])
-                self.assertEqual(len(set(result['selected_ids'])), 4)
+                self.assertEqual(memory_ids(result['selected_ids']), ['m0', 'm1', 'm2', 'm3'])
+                self.assertEqual(len(set(memory_ids(result['selected_ids']))), 4)
 
     def test_gate_scope_all_still_suppresses_static_preferences(self):
         self.memory()
         self.config(rerank_gate_scope='all')
         result = self.package()
         self.assertEqual(result['text'], '')
-        self.assertEqual(result['selected_ids'], [])
+        self.assertEqual(memory_ids(result['selected_ids']), [])
         self.assertFalse(result['jev']['gate']['effective_needed'])
 
     def test_lexical_override_reopens_rerank_without_forcing_delivery(self):
@@ -895,7 +900,7 @@ class RecallSafetyTests(unittest.TestCase):
         self.assertEqual(gate['override_ids'], ['memory:match'])
         self.assertEqual([c.kwargs['purpose'] for c in self.evaluate.call_args_list],
                          ['retrieval_gate', 'retrieval_rerank'])
-        self.assertEqual(result['selected_ids'], [])
+        self.assertEqual(memory_ids(result['selected_ids']), [])
 
     def test_single_term_and_disabled_override_keep_skip_memory(self):
         self.memory('match', 'Tipografi kontrastı korunsun.', category='entity')
