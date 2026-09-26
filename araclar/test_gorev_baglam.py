@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+import hafiza as h
 from gorev_baglam import build_task_package, digest, rank_records, validate_inputs
 from codex_hafiza import hook
 
@@ -121,6 +122,82 @@ class Package(unittest.TestCase):
    if expected=='game': self.assertIn('/tmp/game',package['text'])
   package=build_task_package(self.v,'Ornekaltı devam')
   self.assertEqual(package['assets'],[]);self.assertEqual(package['workflow_ids'],[])
+
+
+class ScopeContextPackageTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.vault = Path(tmp.name)
+        statement = 'Sunumlarda kısa cümle kullan.'
+        (self.vault / 'source.md').write_text(statement, encoding='utf-8')
+        self.row = dict(
+            memory_id='presentation-style', kind='semantic', scope='project:alpha',
+            subject_key='presentation.style', statement=statement, status='active',
+            source_path='source.md', source_anchor='sunum',
+            source_hash=h.statement_hash(statement), source_content_hash=h.statement_hash(statement),
+            observed_at='2020-01-01', valid_from='2020-01-01', valid_to=None,
+            confidence='explicit-user', sensitivity='normal', mem0_id=None,
+            supersedes=None, reviewed_by='reviewer', schema_version=1,
+        )
+        h._write_jsonl(self.vault / h.CATALOG_PATH, [self.row])
+        (self.vault / 'komuta').mkdir()
+        (self.vault / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': [
+            dict(id='alpha', aliases=['alpha']), dict(id='youtube', aliases=['kapak']),
+        ]}), encoding='utf-8')
+
+    def test_catalog_labels_and_header_for_current_records_and_cards(self):
+        for scope in ('user', 'project:alpha'):
+            h._write_jsonl(self.vault / h.CATALOG_PATH, [dict(self.row, scope=scope)])
+            for view, prefix in (('standard', 'Güncel kayıt: '), ('resume', 'Bilgi kartı: ')):
+                with self.subTest(scope=scope, view=view):
+                    result = build_task_package(self.vault, 'alpha sunum', view=view, history='never')
+                    header = 'Aranan kapsam: user + project:alpha'
+                    self.assertEqual(header, result['text'].splitlines()[0])
+                    self.assertEqual('scope-header', result['selected_ids'][0])
+                    self.assertEqual(header, result['delivered_segments']['scope-header'])
+                    line = result['delivered_segments'][self.row['memory_id']]
+                    self.assertTrue(line.startswith(prefix))
+                    self.assertTrue(line.endswith(
+                        '(kaynak: source.md; kapsam: '+scope+'; sınıf: incelenmiş kayıt)'))
+                    self.assertEqual(len(result['text']), result['usage']['context_chars'])
+                    self.assertEqual(len(result['selected_ids']), result['usage']['selected_count'])
+
+    def test_scope_header_includes_searched_workflow(self):
+        h._write_jsonl(self.vault / h.CATALOG_PATH, [dict(self.row, scope='project:youtube')])
+        result = build_task_package(self.vault, 'alpha kapak sunum')
+        self.assertEqual(['youtube'], result['workflow_ids'])
+        self.assertEqual('Aranan kapsam: user + project:alpha + project:youtube',
+                         result['text'].splitlines()[0])
+        self.assertIn('kapsam: project:youtube; sınıf: incelenmiş kayıt)', result['text'])
+
+    def test_scope_header_budget_preserves_selected_record(self):
+        h._write_jsonl(self.vault / h.CATALOG_PATH, [dict(self.row, scope='user')])
+        full = build_task_package(self.vault, 'sunum')
+        self.assertEqual('Aranan kapsam: user', full['text'].splitlines()[0])
+        size = len(full['text'])
+        exact = build_task_package(self.vault, 'sunum', budget=size)
+        self.assertEqual(full['text'], exact['text'])
+        self.assertEqual(full['package_id'], exact['package_id'])
+        smaller = build_task_package(self.vault, 'sunum', budget=size-1)
+        self.assertEqual([self.row['memory_id']], smaller['selected_ids'])
+        self.assertEqual(full['delivered_segments'][self.row['memory_id']], smaller['text'])
+        self.assertIn('scope-header:budget', smaller['omitted_reasons'])
+        self.assertNotIn('scope-header', smaller['delivered_segments'])
+        self.assertLessEqual(len(smaller['text']), size-1)
+        self.assertEqual(len(smaller['omitted_reasons']), smaller['usage']['omitted_count'])
+        empty = build_task_package(self.vault, 'sunum', budget=len(smaller['text'])-1)
+        self.assertEqual('', empty['text'])
+        self.assertEqual([], empty['selected_ids'])
+        self.assertNotIn('scope-header:budget', empty['omitted_reasons'])
+
+    def test_no_selected_catalog_record_means_no_scope_header(self):
+        for query, expected in (('OBS nasıl açılır', ''), ('alpha', 'Proje: alpha')):
+            with self.subTest(query=query):
+                result = build_task_package(self.vault, query)
+                self.assertEqual(expected, result['text'])
+                self.assertNotIn('scope-header', result['selected_ids'])
+                self.assertNotIn('scope-header', result['delivered_segments'])
 
 
 class ArchivedProjects(unittest.TestCase):

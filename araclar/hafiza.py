@@ -659,11 +659,25 @@ def _context_decision_details(record: dict[str, Any]) -> str | None:
     return "".join(details)
 
 
+def context_source_class(row) -> str:
+    if row.get("evidence_source"):
+        return "doğrulanmış kullanıcı beyanı"
+    if row.get("reviewed_by"):
+        return "incelenmiş kayıt"
+    return "aday"
+
+
+def context_scope_header(scope, extra_scopes=()) -> str:
+    scopes = ["tümü"] if scope is None else ["user", scope]
+    return "Aranan kapsam: " + " + ".join(dict.fromkeys([*scopes, *extra_scopes]))
+
+
 def context_from_results(
     results, *, query, scope, limit=5, char_budget=1200, records=None
 ):
     lines = []
     selected_ids = []
+    header = context_scope_header(scope)
     canonical = {
         str(record.get("memory_id")): record
         for record in (records or [])
@@ -676,26 +690,29 @@ def context_from_results(
         memory_id = metadata.get("memory_id") or item.get("id", "unknown")
         record = canonical.get(str(memory_id))
         # A supplied canonical row, including absent fields, wins over the index.
-        details = _context_decision_details(record if record is not None else metadata)
+        context_row = record if record is not None else metadata
+        details = _context_decision_details(context_row)
         if details is None:
             continue
         source = metadata.get("source_path", "kaynak-yok")
         block = metadata.get("block_id", "")
         suffix = f"#{block}" if block else ""
-        label = category_label((record if record is not None else metadata).get("category"))
+        label = category_label(context_row.get("category"))
         tag = f"({label}) " if label else ""
         line = (
             f"- [{memory_id}] {tag}{item.get('memory', '')}{details} "
             f"(kaynak: {source}{suffix}; tarih: {metadata.get('observed_at', 'bilinmiyor')}; "
-            f"güven: {metadata.get('confidence', 'bilinmiyor')})"
+            f"güven: {metadata.get('confidence', 'bilinmiyor')}; "
+            f"kapsam: {context_row.get('scope', 'bilinmiyor')}; "
+            f"sınıf: {context_source_class(context_row)})"
         )
-        if len("\n".join(lines + [line])) > char_budget:
+        if len("\n".join([header] + lines + [line])) > char_budget:
             continue
         lines.append(line); selected_ids.append(str(memory_id))
         if len(lines) >= limit:
             break
     return dict(query=query, scope=scope, included=len(lines), memory_ids=selected_ids,
-                char_budget=char_budget, text="\n".join(lines))
+                char_budget=char_budget, text="\n".join([header] + lines) if lines else "")
 
 
 NOTE_DENIED_DIRS = ("günlük", "gelen-kutusu", "arşiv", "araclar")

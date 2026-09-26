@@ -417,7 +417,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if pinned: card_facts.append(row)
         prefix = 'Bilgi kartı: ' if resume and pinned else 'Güncel kayıt: '
         details = ''.join(' '+label+': '+row[key] for key,label in (('rationale','Gerekçe'),('conditions','Geçerlilik koşulu')) if isinstance(row.get(key),str) and row[key] in content and not h.contains_secret(row[key]))
-        if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+row['source_path']+')'):
+        if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+row['source_path']+'; kapsam: '+row.get('scope','bilinmiyor')+'; sınıf: '+h.context_source_class(row)+')'):
             current_facts.append(row)
             priority,sequence,ident,text=candidates[-1]
             candidates[-1]=(4,sequence,ident,text)
@@ -535,6 +535,15 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if used+cost>budget:
             omitted.append(ident+':budget'); continue
         lines.append(text);selected.append(ident);delivered_segments[ident]=text;used+=cost
+    if any(row['memory_id'] in selected for row in current_facts):
+        header = h.context_scope_header(scope, ['project:'+w['id'] for w in workflows])
+        if used + len(header) + 1 <= budget:
+            lines.insert(0, header)
+            selected.insert(0, 'scope-header')
+            delivered_segments['scope-header'] = header
+            used += len(header) + 1
+        else:
+            omitted.append('scope-header:budget')
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
     if knowledge_data and 'knowledge' in selected:
