@@ -24,7 +24,7 @@ class SetupTests(unittest.TestCase):
         self.root = Path(tmp.name).resolve()
         self.args = argparse.Namespace(agent='codex', vault=str(self.root / 'örnek kasa'),
             client_home=str(self.root / 'client'), config_home=None, revision='a' * 40,
-            non_interactive=True, skip_obsidian=True)
+            non_interactive=True, skip_obsidian=True, configure_services=False)
         self.archive = self.root / 'fixture.zip'
         with zipfile.ZipFile(self.archive, 'w') as z:
             for base in ['agents.md', 'araclar', 'zihin', 'komuta']:
@@ -205,5 +205,68 @@ class SetupTests(unittest.TestCase):
     def test_noninteractive_requires_agent(self):
         self.args.agent=None
         with self.assertRaises(ValueError):self.install()
+
+    def _fixture_vault(self, name):
+        vault = self.root / name
+        (vault / 'araclar').mkdir(parents=True)
+        (vault / 'agents.md').write_text('personal')
+        (vault / 'araclar/hafiza.py').write_text('')
+        return vault
+
+    def test_configure_services_rejects_non_vault_target(self):
+        target = self.root / 'not-a-vault'; target.mkdir()
+        with self.assertRaisesRegex(ValueError, 'Geçerli bir Hafıza OS kasası'):
+            b.configure_services(target, self.root / 'secrets')
+
+    def test_configure_services_updates_only_provided_service(self):
+        vault = self._fixture_vault('mevcut')
+        report = vault / 'komuta/kurulum-sonucu.json'
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps({'agent': 'codex', 'services': {'mem0': 'skipped', 'jev': 'configured_unverified'}}))
+        with patch.object(b, 'ask_mem0', return_value=('dummy-mem0', 'tester')), patch.object(b, 'ask_jev', return_value=('', None)):
+            b.configure_services(vault, self.root / 'secrets')
+        updated = json.loads(report.read_text())
+        self.assertEqual(updated['services']['mem0'], 'configured_unverified')
+        self.assertEqual(updated['services']['jev'], 'configured_unverified')  # untouched, not downgraded
+        self.assertEqual(updated['agent'], 'codex')  # unrelated fields preserved
+
+    def test_configure_services_overwrites_existing_key(self):
+        vault = self._fixture_vault('yeniden')
+        config = self.root / 'secrets'
+        with patch.object(b, 'ask_mem0', return_value=('eski-anahtar', 'tester')), patch.object(b, 'ask_jev', return_value=('', None)):
+            b.configure_services(vault, config)
+        with patch.object(b, 'ask_mem0', return_value=('yeni-anahtar', 'tester')), patch.object(b, 'ask_jev', return_value=('', None)):
+            b.configure_services(vault, config)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(hafiza.load_api_key(vault), 'yeni-anahtar')
+
+    def test_configure_services_skipping_both_makes_no_changes(self):
+        vault = self._fixture_vault('degismez')
+        with patch.object(b, 'ask_mem0', return_value=('', None)), patch.object(b, 'ask_jev', return_value=('', None)):
+            b.configure_services(vault, self.root / 'secrets')
+        self.assertFalse((vault / 'komuta/kurulum-sonucu.json').exists())
+        self.assertFalse((vault / 'komuta/mem0.json').exists())
+
+    def test_configure_services_via_run_skips_download_and_agent(self):
+        self.args.configure_services = True
+        self.args.non_interactive = False
+        self.args.agent = None
+        vault = Path(self.args.vault)
+        (vault / 'araclar').mkdir(parents=True)
+        (vault / 'agents.md').write_text('personal')
+        (vault / 'araclar/hafiza.py').write_text('')
+        with patch.object(b, 'ask_mem0', return_value=('dummy-mem0', 'tester')), patch.object(b, 'ask_jev', return_value=('', None)):
+            with patch.object(b, 'download') as download, patch.object(b, 'get_json') as get_json, \
+                 patch.object(b.sys.stdin, 'isatty', return_value=True):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    b.run(self.args)
+                download.assert_not_called(); get_json.assert_not_called()
+        self.assertTrue((vault / 'komuta/mem0.json').exists())
+
+    def test_configure_services_rejects_noninteractive(self):
+        self.args.configure_services = True
+        self.args.non_interactive = True
+        with self.assertRaisesRegex(ValueError, 'configure-services'):
+            b.run(self.args)
 
 if __name__=='__main__':unittest.main()

@@ -249,28 +249,81 @@ def ask_jev():
     return key, provider if key else None
 
 
-def optional_services(vault, config_home):
+def optional_services(vault, config_home, overwrite=False):
+    """Ask for Mem0/Jev keys and persist them.
+
+    With overwrite=False (first install) both services are always reported,
+    'skipped' included, matching the historical contract. With overwrite=True
+    (reconfiguring an existing vault) only services the user actually entered
+    a key for are touched or reported, so an unrelated already-configured
+    service is never silently downgraded to 'skipped'; any previous key file
+    for a re-entered service is removed first since private_json refuses to
+    overwrite an existing file.
+    """
     print('\nİki bağlantı da isteğe bağlı. Anahtarlar ekranda görünmez.')
     print('Etkinleştirdiğin hizmete sorgu içeriği gönderilebilir.')
     mem0, uid = ask_mem0()
     jev, provider = ask_jev()
     if not mem0 and not jev:
-        return {'mem0': 'skipped', 'jev': 'skipped'}
+        return {} if overwrite else {'mem0': 'skipped', 'jev': 'skipped'}
     ident = hashlib.sha256(str(vault).encode()).hexdigest()[:16]
     keys_dir = safe_path(config_home) / 'hafiza-os' / ident
+    result = {}
     if mem0:
         path = keys_dir / 'mem0.json'
+        vault_ref = vault / 'komuta/mem0.json'
+        if overwrite:
+            path.unlink(missing_ok=True)
+            vault_ref.unlink(missing_ok=True)
         private_json(path, {'MEM0_API_KEY': mem0})
-        private_json(vault / 'komuta/mem0.json', {'enabled': True, 'user_id': uid, 'credentials_file': str(path)})
+        private_json(vault_ref, {'enabled': True, 'user_id': uid, 'credentials_file': str(path)})
+        result['mem0'] = 'configured_unverified'
+    elif not overwrite:
+        result['mem0'] = 'skipped'
     if jev:
         path = keys_dir / 'jev.json'
+        vault_ref = vault / 'komuta/jev.json'
         vercel = provider == 'vercel'
+        if overwrite:
+            path.unlink(missing_ok=True)
+            vault_ref.unlink(missing_ok=True)
         private_json(path, {'AI_GATEWAY_API_KEY' if vercel else 'TYPESAFE_API_KEY': jev})
-        private_json(vault / 'komuta/jev.json', {'mode': 'on', 'model': 'typesafe-ai/jev' if vercel else 'jev-latest',
+        private_json(vault_ref, {'mode': 'on', 'model': 'typesafe-ai/jev' if vercel else 'jev-latest',
                      'provider': provider, 'base_url': 'https://ai-gateway.vercel.sh/typesafe' if vercel else 'https://api.typesafe.ai',
                      'credentials_file': str(path)})
-    return {'mem0': 'configured_unverified' if mem0 else 'skipped',
-            'jev': 'configured_unverified' if jev else 'skipped'}
+        result['jev'] = 'configured_unverified'
+    elif not overwrite:
+        result['jev'] = 'skipped'
+    return result
+
+
+def configure_services(target, config_home):
+    """Reconfigure Mem0/Jev on an existing vault, without touching anything else."""
+    if not (target / 'agents.md').is_file() or not (target / 'araclar/hafiza.py').is_file():
+        raise ValueError(
+            f'Geçerli bir Hafıza OS kasası bulunamadı: {target}. '
+            '--configure-services yalnız mevcut bir kasadaki Mem0/Jev bağlantısını günceller; '
+            'ilk kurulum için bu bayrağı kullanma.')
+    updates = optional_services(target, config_home, overwrite=True)
+    if not updates:
+        print('\nDeğişiklik yapılmadı; ikisi de atlandı.')
+        return target
+    report_path = target / 'komuta/kurulum-sonucu.json'
+    if report_path.is_file():
+        report = json.loads(report_path.read_text(encoding='utf-8'))
+        if not isinstance(report, dict):
+            raise ValueError('Mevcut kurulum kaydı geçersiz.')
+    else:
+        report = {}
+    services = report.get('services')
+    report['services'] = {**services, **updates} if isinstance(services, dict) else dict(updates)
+    if report_path.is_file():
+        report_path.unlink()
+    private_json(report_path, report)
+    for service in updates:
+        print(service + ': ayarlandı; API anahtarı henüz canlı doğrulanmadı')
+    print('\nServis ayarları güncellendi: ' + str(target))
+    return target
 
 
 def check_existing_installation(home, *, isolated=False):
@@ -303,6 +356,10 @@ def run(args):
     config_home = safe_path(args.config_home or home / '.config')
     if config_home == target or target in config_home.parents:
         raise ValueError('Anahtar dizini hafıza kasasının dışında olmalı.')
+    if args.configure_services:
+        if not interactive:
+            raise ValueError('--configure-services --non-interactive ile kullanılamaz; anahtar soruları etkileşim gerektirir.')
+        return configure_services(target, config_home)
     check_existing_installation(home, isolated=bool(args.client_home))
     if target.exists():
         raise ValueError(f'Hedef zaten var; üzerine yazılmadı: {target}. Mevcut kasa için yeniden ilk kurulum çalıştırma.')
@@ -364,6 +421,8 @@ def main():
     parser.add_argument('--config-home', help='Anahtar dizininin üst klasörü; kasa dışında olmalı')
     parser.add_argument('--skip-obsidian', action='store_true')
     parser.add_argument('--non-interactive', action='store_true', help='API sorularını atla; --agent gerekir')
+    parser.add_argument('--configure-services', action='store_true',
+        help='Mevcut bir kasadaki Mem0/Jev bağlantısını günceller; kasayı veya ajan bağlantısını değiştirmez.')
     args = parser.parse_args()
     try:
         run(args)

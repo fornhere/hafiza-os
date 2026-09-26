@@ -127,6 +127,18 @@ curl -fsSL https://raw.githubusercontent.com/fornhere/hafiza-os/main/install.sh 
 atlar. Var olan kişisel kasa için bu kurucuyu kullanma; aşağıdaki ajan bağlantısı
 adımları mevcut dosyaları yeniden indirmeden uygulanabilir.
 
+Mevcut kasandaki Mem0/Jev bağlantısını sonradan eklemek veya değiştirmek
+istersen (ilk kurulumda atladıysan, ya da bir anahtarı yenilemen gerekiyorsa),
+kasayı veya ajan bağlantısını hiç etkilemeyen ayrı bir bayrak kullan:
+
+```bash
+python3 baslat.py --vault ~/Hafiza --configure-services
+```
+
+Yalnız seçtiğin servis(ler) güncellenir; diğerinin durumu değişmeden kalır.
+Var olan bir anahtarın üzerine yazarsan eskisi silinir. Bu bayrak etkileşim
+gerektirir, `--non-interactive` ile birlikte kullanılamaz.
+
 Kurucu, mevcut Codex/Claude/Antigravity Hafıza OS yönerge bağlantısını veya
 kullanıcı klasöründeki `Hafiza` / `Hafıza` kasasını bulursa indirmeden durur.
 Başka bir `--vault` vermek mevcut istemci bağlantısını değiştirme izni değildir.
