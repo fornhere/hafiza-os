@@ -431,6 +431,14 @@ class ArchivedProjects(unittest.TestCase):
         self.assertEqual(['yeni'],[p['id'] for p in select_projects(projects,'devam edelim',cwd='/tmp/eski/alt')[0]])
         self.assertEqual(['eski'],[p['id'] for p in select_projects(projects,'eskiproje notlarına bak')[0]])
 
+    def test_archived_status_words_all_mean_archived(self):
+        from gorev_baglam import select_projects
+        for status in ('arsiv', 'arşiv', 'archived'):
+            with self.subTest(status=status):
+                projects=[dict(id='eski',aliases=['eskiproje'],roots=['/tmp/eski'],status=status),
+                          dict(id='yeni',aliases=['yeniproje'],roots=['/tmp'])]
+                self.assertEqual(['yeni'],[p['id'] for p in select_projects(projects,'devam edelim',cwd='/tmp/eski/alt')[0]])
+
 
 class RankRelevance(unittest.TestCase):
     def rows(self):
