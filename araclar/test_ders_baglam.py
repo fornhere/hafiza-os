@@ -2,10 +2,150 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from ders_baglam import context, context_details, backlog
+from ders_baglam import context, context_details, backlog, trigger_match
+from gorev_baglam import alias_match, query_words, select_projects
 from codex_hafiza import hook
 from hafiza import statement_hash
 from test_is_ve_ders import acceptance_fixture
+
+
+class TriggerMatchTests(unittest.TestCase):
+    def check_pairs(self, expected, pairs):
+        for trigger, prompt in pairs:
+            with self.subTest(trigger=trigger, prompt=prompt):
+                self.assertEqual(trigger_match(trigger, query_words(prompt)), expected)
+
+    def test_verb_forms_retaining_the_trigger_prefix(self):
+        examples = {
+            'kapat': ('kapattı', 'kapattım', 'kapattın', 'kapattık', 'kapattınız',
+                      'kapattılar', 'kapatır mısın', 'kapatırım', 'kapatırsınız',
+                      'kapatma', 'kapatmadı', 'kapatmadım', 'kapatmış', 'kapatmışsınız',
+                      'kapatacak', 'kapatacağım', 'kapatacağız', 'kapatacaksınız',
+                      'kapatmayacak', 'kapatmayacağız', 'kapatıyor', 'kapatıyoruz',
+                      'kapatmıyor', 'kapatmaz', 'kapatmam', 'kapatmayız'),
+            'getir': ('getirdi', 'getirir', 'getirmiş', 'getirecek', 'getireceğim',
+                      'getirme', 'getirmedi', 'getirmeyecek', 'getiriyor'),
+            'bitir': ('bitirdik', 'bitirmedi'),
+            'çalış': ('çalıştı', 'çalıştınız', 'çalışıyor'),
+            'durdur': ('durdurdu', 'durdurur', 'durdurmuş', 'durduruyor', 'durdurmazsınız'),
+            'söndür': ('söndürdü', 'söndürür', 'söndürmüş', 'söndürüyor', 'söndürmeyiz'),
+            'çarp': ('çarptı', 'çarpar', 'çarparım'),
+            'serp': ('serpti', 'serper', 'serperiz'),
+            'hazırla': ('hazırladı', 'hazırlar', 'hazırlamıyor',
+                        'hazırlayacak', 'hazırlayacağım'),
+            'incele': ('inceledi', 'inceler', 'incelemiyor', 'inceleyecek'),
+            'yükle': ('yükledi', 'yükler', 'yüklemiyor', 'yükleyecek'),
+            'ekle': ('ekledi', 'eklenmedi', 'ekleyebilir'),
+        }
+        self.check_pairs(True, [(root, word) for root, words in examples.items() for word in words])
+
+    def test_passive_and_ability_forms_can_combine_after_the_prefix(self):
+        self.check_pairs(True, [
+            ('kapat', 'kapatılmadı'), ('kapat', 'kapatılmamış'), ('kapat', 'kapatılacak'),
+            ('kapat', 'kapatıldı'), ('kapat', 'kapatılıyor'), ('kapat', 'kapatılmayacak'),
+            ('kapat', 'kapatabilir'), ('kapat', 'kapatabilirim'), ('kapat', 'kapatabildim'),
+        ])
+        self.check_pairs(True, [('getir', 'getirebilir'), ('göster', 'gösterilmedi'),
+                                ('hazırla', 'hazırlanmadı'), ('hazırla', 'hazırlayabilir')])
+        self.check_pairs(True, [('kapat', 'kapatılabilir'), ('kapat', 'kapatılmamalı')])
+
+    def test_known_verb_prefix_does_not_validate_suffixes(self):
+        self.check_pairs(True, [
+            ('kapat', 'kapattımxyz'), ('kapat', 'kapatici'), ('kapat', 'kapattıı'),
+            ('kapat', 'kapatıracak'), ('kapat', 'kapatmışmış'),
+        ])
+
+    def test_prefix_matching_is_limited_to_known_verb_triggers(self):
+        self.check_pairs(False, [
+            ('kapat', 'kapasite'), ('kapat', 'kapalı'), ('kapat', 'kapak'),
+            ('kapak', 'kapakıyor'), ('sunum', 'sunumacak'), ('rapor', 'raporabildi'),
+            ('özetle', 'özetleyecek'), ('kapatı', 'kapattım'),
+        ])
+
+    def test_prefix_matching_does_not_contract_verb_roots(self):
+        self.check_pairs(False, [
+            ('hazırla', 'hazırlıyor'), ('incele', 'inceliyor'),
+            ('yükle', 'yüklüyor'), ('ekle', 'ekliyor'), ('yükle', 'yükliyor'),
+        ])
+
+    def test_inflected_trigger_can_match_root_or_another_nominal_form(self):
+        self.check_pairs(True, [
+            ('sekmeyi', 'sekme'), ('sekmeyi', 'sekmeleri'), ('sekmeyi', 'sekmeye'),
+            ('sekmeyi', 'sekmelerimizi'), ('sekmelerimizi', 'sekme'),
+            ('raporumuzu', 'rapor'), ('raporumuzu', 'raporları'),
+            ('kapağını', 'kapak'), ('kapağını', 'kapakları'), ('kapağı', 'kapağım'),
+        ])
+        self.check_pairs(False, [
+            ('sekmeyi', 'sek'), ('sekmeyi', 'semer'), ('sekmeyi', 'sekreter'),
+            ('sekmeyi', 'sekmedeneme'), ('kapağını', 'kapalı'), ('raporumuzu', 'raportör'),
+        ])
+
+    def test_only_existing_synonym_groups_expand(self):
+        self.check_pairs(True, [
+            ('sunum', 'slayt'), ('sunum', 'slideshow'), ('slayt', 'sunumları'),
+            ('sunumu', 'slaytları'), ('slaytları', 'sunumu'),
+            ('kapak', 'thumbnail'), ('thumbnail', 'kapağı'),
+            ('hafıza', 'belleği'), ('bellek', 'hafızayı'),
+            ('yöntem', 'prosedürü'), ('prosedür', 'yöntemi'),
+            ('yedek', 'yedekleme'), ('yedekleme', 'yedeği'),
+        ])
+        self.check_pairs(False, [
+            ('sunum', 'grafik'), ('thumbnail', 'küçük resim'), ('kapak', 'önizleme görseli'),
+            ('overlay', 'alt bant'), ('kapat', 'gizle'), ('sunum', 'slayton'),
+        ])
+
+    def test_one_derivation_and_nominal_inflection(self):
+        self.check_pairs(True, [
+            ('maskot', 'maskotlu'), ('maskot', 'maskotluyu'), ('maskot', 'maskotlular'),
+            ('sunum', 'sunumlu'), ('sunum', 'sunumluk'), ('sunum', 'slaytlık'),
+            ('sunum', 'slaytlığını'), ('slaytları', 'sunumluk'),
+            ('anlam', 'anlamlı'), ('resim', 'resimli'), ('köpük', 'köpüklü'),
+            ('kitap', 'kitaplık'), ('etkin', 'etkinlik'), ('kömür', 'kömürlük'),
+        ])
+        self.check_pairs(False, [
+            ('kapak', 'kapalı'), ('kapak', 'kabak'), ('kapak', 'kapakçılık'),
+            ('maskot', 'maskotsuz'), ('maskot', 'maskotluluktan'),
+            ('maskot', 'maskotlumtrak'), ('sunum', 'slaytlaştır'),
+        ])
+
+    def test_short_roots_are_exact_only_including_reverse_stemming(self):
+        for term in ('aç', 'sil', 'yap', 'ara', 'ses', 'göz'):
+            self.assertTrue(trigger_match(term, query_words(term)))
+        self.check_pairs(False, [
+            ('aç', 'açtı'), ('sil', 'sildi'), ('yap', 'yapıyor'), ('ara', 'aradı'),
+            ('ses', 'sesli'), ('göz', 'gözlük'), ('ses', 'sesi'),
+            ('sesi', 'ses'), ('sesi', 'sesleri'), ('gözü', 'göz'),
+        ])
+
+    def test_multiword_triggers_keep_all_parts_any_order_and_no_new_expansion(self):
+        self.check_pairs(True, [('sekme kapat', 'kapat bu sekmeyi'),
+                                ('görsel sunum', 'sunumu sonra görseli düzenle')])
+        self.check_pairs(False, [('sekme kapat', 'sekme'), ('sekme kapat', 'kapattım'),
+                                 ('sekme kapat', 'sekme kapattım'),
+                                 ('sekmeyi kapat', 'sekme kapat'),
+                                 ('görsel sunum', 'görsel slayt'),
+                                 ('maskot kapak', 'maskotlu kapak')])
+        for trigger in ('sekme kapat', 'sekmeyi kapat', 'görsel sunum', 'maskot kapak', ''):
+            for prompt in ('kapat şu sekmeyi', 'sekmeleri kapattım', 'görsel slayt', 'maskotlu kapak', ''):
+                words = query_words(prompt)
+                self.assertEqual(trigger_match(trigger, words), alias_match(trigger, words))
+
+    def test_normalization_and_complete_tokens(self):
+        self.check_pairs(True, [('KAPAT', 'Kapattım!'), ('İncele', 'İnceledi.'),
+                                ('sunum', "Slayt'ları"), ('sunum', 'slayt’ları')])
+        self.check_pairs(False, [('', 'kapak'), ('!!!', 'kapak'), ('kapak', ''),
+                                 ('kapat', 'yenikapattım'), ('sunum', 'slaytlıkxyz')])
+
+    def test_project_aliases_do_not_gain_lesson_expansions(self):
+        for trigger, prompt in [('kapat', 'kapattım'), ('sekmeyi', 'sekme'),
+                                ('sunum', 'slayt'), ('maskot', 'maskotlu')]:
+            with self.subTest(trigger=trigger):
+                words = query_words(prompt)
+                self.assertTrue(trigger_match(trigger, words))
+                self.assertFalse(alias_match(trigger, words))
+                self.assertEqual(select_projects([dict(id='p', aliases=[trigger])], prompt),
+                                 ([], 'unresolved'))
+
 
 class Lessons(unittest.TestCase):
  def lesson_fixture(self,v,ident='units',**changes):
@@ -14,6 +154,22 @@ class Lessons(unittest.TestCase):
   (v/'method.md').write_text('Birim adlarını denetle.')
   data=dict(id=ident,title=ident,status='proposed',source_path='source.md',evidence=(v/'source.md').read_text(),actor='reviewer',triggers=['rapor'],method_path='method.md',implementation_hash=statement_hash((v/'method.md').read_text()))
   return put(v,'lesson',dict(data,**changes))
+
+ def test_expanded_triggers_preserve_scope_integrity_and_read_only_context(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   v=Path(tmp)
+   for ident,trigger in [('verb','kapat'),('noun','sekmeyi'),('synonym','sunum'),('derived','maskot')]:
+    self.lesson_fixture(v,ident,triggers=[trigger],project_id='p')
+   before={p.relative_to(v):p.read_bytes() for p in v.rglob('*') if p.is_file()}
+   for ident,prompt in [('verb','Kapattım.'),('noun','Sekme'),('synonym','Slayt'),('derived','Maskotlu')]:
+    with self.subTest(ident=ident):
+     details=context_details(v,prompt,project_id='p')
+     self.assertEqual([r['id'] for r in details['lessons']],[ident])
+     self.assertEqual(context(v,prompt,project_id='other'),'')
+   self.assertEqual(before,{p.relative_to(v):p.read_bytes() for p in v.rglob('*') if p.is_file()})
+   (v/'method.md').write_text('İncelemeden sonra değişti.')
+   self.assertEqual(context_details(v,'kapattım',project_id='p'),
+                    dict(text='',lessons=[],diagnostics=[dict(id='verb',reason='method_changed')]))
 
  def test_context_details_reports_only_delivered_lessons_in_order(self):
   with tempfile.TemporaryDirectory() as tmp:
