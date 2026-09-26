@@ -318,7 +318,7 @@ class Hooks(unittest.TestCase):
     def test_fresh_session_cross_checks_explicit_items(self):
         from is_ve_ders import put
         (self.vault / 'zihin').mkdir()
-        section = '## 2026-09-23\n**Açık:** Külaltı işleri güncellenmedi; Twitter içerik sistemi'
+        section = '## 2026-09-23\n**Açık:** Örnekproje işleri güncellenmedi; Twitter içerik sistemi'
         (self.vault / 'zihin/son-oturum.md').write_text(section, encoding='utf-8')
         evidence = 'Twitter içerik üretim sistemi üzerinde çalışılacak.'
         (self.vault / 'kaynak.md').write_text(evidence, encoding='utf-8')
@@ -329,14 +329,14 @@ class Hooks(unittest.TestCase):
         result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
         self.assertIn('Özetteki açık maddeler (güncel iş kaydıyla eşleştirme; durum çıkarımı değildir):', result)
         self.assertIn('- Twitter içerik sistemi — güncel kayıt: twitter-content-system', result)
-        self.assertIn('- Külaltı işleri güncellenmedi — özette var, güncel kayıtta yok', result)
+        self.assertIn('- Örnekproje işleri güncellenmedi — özette var, güncel kayıtta yok', result)
         self.assertTrue(result.endswith(section))
         self.assertLess(result.index('Özetteki açık maddeler'), result.index('## 2026-09-23'))
 
     def test_fresh_session_without_marked_items_has_no_cross_check(self):
         (self.vault / 'zihin').mkdir()
         section = ('## 2026-09-23\nTwitter içerik sistemi üzerinde çalışıldı.\n'
-                   'Not: Açık: Külaltı\n- Açık işler\nSonraki hafta: Twitter\n> Yapılacak: Külaltı')
+                   'Not: Açık: Örnekproje\n- Açık işler\nSonraki hafta: Twitter\n> Yapılacak: Örnekproje')
         (self.vault / 'zihin/son-oturum.md').write_text(section, encoding='utf-8')
         with patch('is_ve_ders.brief') as brief:
             result = h.latest_session_section(self.vault, today=h.dt.date(2026, 9, 24))
