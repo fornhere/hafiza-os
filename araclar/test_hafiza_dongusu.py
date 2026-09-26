@@ -12,6 +12,7 @@ import is_ve_ders as work
 import jev_client
 import ders_baglam
 from gorev_baglam import build_task_package
+from test_is_ve_ders import acceptance_fixture
 
 
 class Lifecycle(unittest.TestCase):
@@ -140,6 +141,7 @@ class Lifecycle(unittest.TestCase):
         expected=dict(data,task_version=task['version'],scope='project:p',project_id='p',method_hash=h.statement_hash((self.v/'method.md').read_text()),source_path=task['source_path'],source_content_hash=task['source_content_hash'],evidence=task['evidence'],status='proposed')
         row=d.outcome(self.v,data)['row']
         self.assertNotIn('applied_lessons',row)
+        self.assertNotIn('acceptance_source',row);self.assertNotIn('actor_session_id',row)
         self.assertEqual(row['receipt_id'],d.fingerprint(expected))
         self.assertEqual(row,dict(expected,receipt_id=d.fingerprint(expected)))
         explicit=d.outcome(self.v,dict(data,applied_lessons=[]))['row']
@@ -325,6 +327,91 @@ class Lifecycle(unittest.TestCase):
         with self.assertRaises(ValueError):d.outcome(self.v,data,True)
         data['observed_result']='passed';row=d.outcome(self.v,data,True)['row']
         with self.assertRaises(ValueError):d.review_lesson(self.v,dict(receipt_id=row['receipt_id'],reviewed_by='worker',reason='Long enough explanation of alleged success.',evidence_checked=True,conditions_checked=True),True)
+
+    def review_fixture(self, row, **changes):
+        return dict(dict(receipt_id=row['receipt_id'],reviewed_by='reviewer',reason='Kaynak sonuç ve uygulama koşulları ayrıca incelendi.',evidence_checked=True,conditions_checked=True),**changes)
+
+    def test_review_normalized_same_or_empty_identity_is_rejected(self):
+        data=self.outcome_fixture();row=d.outcome(self.v,dict(data,actor='Worker'),True)['row']
+        for name in ('Worker',' worker ','wor-ker','Ｗｏｒｋｅｒ','___','   ',None,7):
+            with self.subTest(name=name),self.assertRaisesRegex(ValueError,'^independent_review_required$'):
+                d.review_lesson(self.v,self.review_fixture(row,reviewed_by=name),True)
+        empty=d.outcome(self.v,dict(data,actor='---'),True)['row']
+        with self.assertRaisesRegex(ValueError,'independent_review_required'):d.review_lesson(self.v,self.review_fixture(empty),True)
+        unicode_row=d.outcome(self.v,dict(data,actor='Straße'),True)['row']
+        with self.assertRaisesRegex(ValueError,'independent_review_required'):d.review_lesson(self.v,self.review_fixture(unicode_row,reviewed_by='STRASSE'),True)
+        self.assertEqual(work.latest(self.v,'lesson'),{})
+        self.assertTrue(d.review_lesson(self.v,self.review_fixture(row),True)['changed'])
+
+    def test_actor_session_requires_distinct_reviewer_session(self):
+        data=self.outcome_fixture();row=d.outcome(self.v,dict(data,actor_session_id='actor-session'),True)['row']
+        for changes in ({},dict(reviewer_session_id='actor-session'),dict(reviewer_session_id=''),dict(reviewer_session_id=None),dict(reviewer_session_id=4)):
+            with self.subTest(changes=changes),self.assertRaisesRegex(ValueError,'^independent_review_required$'):
+                d.review_lesson(self.v,self.review_fixture(row,**changes),True)
+        lesson=d.review_lesson(self.v,self.review_fixture(row,reviewer_session_id='reviewer-session'),True)['lesson']
+        self.assertEqual(lesson['reviewer_session_id'],'reviewer-session')
+        self.assertEqual(lesson['verification_kind'],'test_result');self.assertNotIn('acceptance_source',lesson)
+
+    def test_reviewer_session_is_optional_without_actor_session_and_persisted_if_given(self):
+        data=self.outcome_fixture();row=d.outcome(self.v,data,True)['row']
+        self.assertNotIn('reviewer_session_id',d.review_lesson(self.v,self.review_fixture(row))['lesson'])
+        lesson=d.review_lesson(self.v,self.review_fixture(row,reviewer_session_id='review-session'),True)['lesson']
+        self.assertEqual(lesson['reviewer_session_id'],'review-session')
+        self.assertNotIn('actor_session_id',h.load_jsonl(self.v/d.OUTCOMES)[0])
+
+    def test_outcome_optional_actor_session_is_bounded_nonempty_string(self):
+        data=self.outcome_fixture()
+        for value in ('','   ',None,False,7,'a'*201):
+            with self.subTest(value=value),self.assertRaisesRegex(ValueError,'^actor_session_id_invalid$'):
+                d.outcome(self.v,dict(data,actor_session_id=value),True)
+        self.assertEqual(h.load_jsonl(self.v/d.OUTCOMES),[])
+        row=d.outcome(self.v,dict(data,actor_session_id='a'*200),True)['row']
+        self.assertEqual(row['actor_session_id'],'a'*200)
+
+    def test_outcome_acceptance_source_is_validated_when_provided(self):
+        data=self.outcome_fixture();source=acceptance_fixture(self.v)
+        for bad in (None,{},dict(source,evidence='short'),dict(source,evidence_source={}),dict(source,source_snapshot={}),dict(source,session_id='other')):
+            with self.subTest(source=bad),self.assertRaisesRegex(ValueError,'^acceptance_source_invalid$'):
+                d.outcome(self.v,dict(data,acceptance_source=bad),True)
+        self.assertEqual(h.load_jsonl(self.v/d.OUTCOMES),[])
+        self.assertEqual(d.outcome(self.v,dict(data,acceptance_source=source))['row']['acceptance_source'],source)
+
+    def test_instruction_outcome_review_requires_user_acceptance_and_stays_proposed(self):
+        data=self.outcome_fixture();(self.v/'CLAUDE.md').write_text((self.v/'method.md').read_text());data['method_path']='CLAUDE.md'
+        for changes in ({},dict(verification_kind='user_acceptance',observed_result='accepted'),
+                        dict(verification_kind='user_acceptance',observed_result='rejected',acceptance_source=acceptance_fixture(self.v))):
+            row=d.outcome(self.v,dict(data,**changes),True)['row'];before=(self.v/d.OUTCOMES).read_bytes()
+            for apply in (False,True):
+                with self.subTest(changes=changes,apply=apply),self.assertRaisesRegex(ValueError,'^instruction_target_requires_user_acceptance$'):
+                    d.review_lesson(self.v,self.review_fixture(row),apply)
+            self.assertEqual((self.v/d.OUTCOMES).read_bytes(),before)
+        self.assertEqual(work.latest(self.v,'lesson'),{})
+        self.assertTrue(all(row['status']=='proposed' for row in h.load_jsonl(self.v/d.OUTCOMES)))
+
+    def test_instruction_review_copies_acceptance_and_revalidates_original_source(self):
+        data=self.outcome_fixture();source=acceptance_fixture(self.v)
+        (self.v/'CLAUDE.md').write_text((self.v/'method.md').read_text())
+        data.update(method_path='CLAUDE.md',verification_kind='user_acceptance',observed_result='accepted',acceptance_source=source,actor_session_id='worker-session')
+        row=d.outcome(self.v,data,True)['row'];review=self.review_fixture(row,reviewer_session_id='review-session')
+        lesson=d.review_lesson(self.v,review,True)['lesson']
+        self.assertEqual(lesson['verification_kind'],'user_acceptance');self.assertEqual(lesson['acceptance_source'],source)
+        self.assertEqual(lesson['reviewer_session_id'],'review-session')
+        self.assertIn('Sunum yöntemi',ders_baglam.context(self.v,'sunum',project_id='p'))
+        self.assertFalse(d.review_lesson(self.v,review,True)['changed'])
+        (self.v/'acceptance.jsonl').write_text('{}')
+        with self.assertRaisesRegex(ValueError,'acceptance_source_invalid'):d.review_lesson(self.v,review,True)
+
+    def test_lesson_utility_marks_instruction_target_and_never_edits_method(self):
+        data,lesson=self.reviewed_outcome_fixture();(self.v/'CLAUDE.md').write_text((self.v/'method.md').read_text())
+        lesson=work.put(self.v,'lesson',dict(lesson,expected_version=lesson['version'],method_path='CLAUDE.md',target_path='CLAUDE.md',
+            verification_kind='user_acceptance',observed_result='accepted',acceptance_source=acceptance_fixture(self.v)))
+        for task in ('one','two'):self.applied_outcome_fixture(data,lesson,task)
+        before=(self.v/'CLAUDE.md').read_bytes();result=d.lesson_utility(self.v,True);entry=result['lessons'][lesson['id']]
+        self.assertTrue(entry['instruction_target']);self.assertEqual(entry['action'],'review_required')
+        self.assertEqual(result['failures'],[]);self.assertEqual(work.latest(self.v,'lesson')[lesson['id']]['status'],'proposed')
+        self.assertEqual((self.v/'CLAUDE.md').read_bytes(),before)
+        self.assertEqual(ders_baglam.context(self.v,'sunum',project_id='p'),'')
+        self.assertTrue(ders_baglam.backlog(self.v)[0]['next_step'].startswith('Boşluk not edildi, uygulanmadı:'))
 
     def test_no_jev_queue_stays_pending(self):
         b.register(self.v,self.card,True)

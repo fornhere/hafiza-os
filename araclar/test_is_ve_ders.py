@@ -1,10 +1,23 @@
 import datetime as dt
+import json
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from unittest.mock import patch
 
 import hafiza as h
 import is_ve_ders as w
+
+
+def acceptance_fixture(vault, quote='Talimat dosyasındaki bu değişikliği kabul ettim.', prior=5, role='user', completed=True):
+    import capture_source as c
+    events=[dict(type='session_meta',payload=dict(id='session',source='vscode'))]
+    events += [dict(type='response_item',timestamp=str(i),payload=dict(type='message',role='user',content=[dict(text='İstek '+str(i))])) for i in range(prior)]
+    events += [dict(type='response_item',timestamp='acceptance',payload=dict(type='message',role=role,content=[dict(text=quote)]))]
+    if completed: events += [dict(type='event_msg',payload=dict(type='task_complete',turn_id='acceptance'))]
+    path=vault/'acceptance.jsonl';path.write_text('\n'.join(json.dumps(event,ensure_ascii=False) for event in events))
+    source=c.snapshot(path,completed_prefix=True)
+    return dict(session_id='session',source_snapshot=source,evidence_source=dict(source,line=prior+2,message_hash=c.digest(quote),quote=quote),evidence=quote)
 
 
 class Work(unittest.TestCase):
@@ -70,6 +83,81 @@ class Work(unittest.TestCase):
             target_path='kaynak.md', target_hash=h.statement_hash((self.vault / 'kaynak.md').read_text()),
             verification_path='kaynak.md', verification_evidence='İşin uygulaması tamamlandı, testler geçti.'))
         self.assertEqual('verified', w.latest(self.vault, 'lesson')['test']['status'])
+
+    def verified_fixture(self, target='CLAUDE.md'):
+        path=self.vault/target;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('Talimat değişikliği: önce kaynakları doğrula.')
+        return dict(self.row,status='verified',target_path=target,target_hash=h.statement_hash(path.read_text()),
+            verification_path='kaynak.md',verification_evidence=(self.vault/'kaynak.md').read_text(),verification_kind='test_result',observed_result='passed')
+
+    def test_instruction_target_defaults_at_any_depth_and_windows_paths(self):
+        names=('CLAUDE.md','claude.local.md','AGENTS.md','gemini.md','SKILL.md','.cursorrules','hooks.json',
+               '.claude/settings.json','.codex/config.toml','.agents/config.json','skills/y/SKILL.md','hooks/pre.sh')
+        for name in names:
+            for prefix in ('','a/','a/b/'):
+                with self.subTest(path=prefix+name):self.assertTrue(w.is_instruction_target(self.vault,prefix+name))
+        self.assertTrue(w.is_instruction_target(self.vault,PureWindowsPath('X/.CLAUDE/settings.json')))
+        self.assertTrue(w.is_instruction_target(self.vault,r'X\HOOKS\pre.sh'))
+        for name in ('komuta/method.md','my-skills/file.md','hooks.md','AGENTS.md.bak',None):
+            with self.subTest(path=name):self.assertFalse(w.is_instruction_target(self.vault,name))
+
+    def test_instruction_extra_patterns_only_extend_defaults(self):
+        path=self.vault/'komuta/talimat-dosyalari.json';path.parent.mkdir()
+        path.write_text(json.dumps(dict(extra_patterns=['komuta/ajan-*.md',None,7],patterns=[])))
+        self.assertTrue(w.is_instruction_target(self.vault,'komuta/AJAN-test.md'))
+        self.assertTrue(w.is_instruction_target(self.vault,'CLAUDE.md'))
+        self.assertFalse(w.is_instruction_target(self.vault,'komuta/method.md'))
+        for raw in ('{','[]','null','{"extra_patterns": null}','{"extra_patterns": "*"}'):
+            with self.subTest(raw=raw):
+                path.write_text(raw)
+                self.assertTrue(w.is_instruction_target(self.vault,'x/.codex/config.toml'))
+                self.assertFalse(w.is_instruction_target(self.vault,'komuta/method.md'))
+        path.write_bytes(b'\xff')
+        self.assertTrue(w.is_instruction_target(self.vault,'a/AGENTS.md'))
+        with patch.object(Path,'read_text',side_effect=PermissionError('unreadable fixture')):
+            self.assertTrue(w.is_instruction_target(self.vault,'hooks/pre.sh'))
+
+    def test_instruction_verified_put_requires_acceptance_for_either_path(self):
+        row=self.verified_fixture();ordinary=self.verified_fixture('komuta/method.md')
+        for data in (row,dict(ordinary,method_path='hooks/pre.sh'),dict(row,verification_kind='user_acceptance',observed_result='accepted'),
+                     dict(row,verification_kind='user_acceptance',observed_result='rejected',acceptance_source=acceptance_fixture(self.vault))):
+            with self.subTest(data=data),self.assertRaisesRegex(ValueError,'^talimat dosyası dersi kullanıcı kabulü gerektirir$'):
+                w.put(self.vault,'lesson',data)
+        self.assertEqual(w.latest(self.vault,'lesson'),{})
+        self.assertEqual(w.put(self.vault,'lesson',ordinary)['status'],'verified')
+
+    def test_instruction_verified_put_accepts_original_user_and_keeps_existing_gates(self):
+        row=dict(self.verified_fixture(),verification_kind='user_acceptance',observed_result='accepted',acceptance_source=acceptance_fixture(self.vault))
+        for changes in (dict(target_hash='wrong'),dict(verification_evidence='Alıntı yok'),dict(evidence='Kaynakta olmayan sonuç')):
+            with self.subTest(changes=changes),self.assertRaises(ValueError):w.put(self.vault,'lesson',dict(row,**changes))
+        saved=w.put(self.vault,'lesson',row)
+        self.assertEqual(saved['status'],'verified');self.assertEqual(saved['acceptance_source'],row['acceptance_source'])
+
+    def test_instruction_acceptance_rejects_invalid_original_source(self):
+        row=dict(self.verified_fixture(),verification_kind='user_acceptance',observed_result='accepted')
+        for options in (dict(prior=4),dict(prior=6,role='assistant'),dict(completed=False),dict(quote='Bu oturumu kaydetme.'),dict(quote='Tamam.')):
+            with self.subTest(options=options),self.assertRaisesRegex(ValueError,'talimat dosyası dersi kullanıcı kabulü gerektirir'):
+                w.put(self.vault,'lesson',dict(row,acceptance_source=acceptance_fixture(self.vault,**options)))
+        source=acceptance_fixture(self.vault)
+        for bad in (None,{},dict(source,session_id='wrong'),dict(source,source_snapshot={}),dict(source,evidence_source={}),dict(source,evidence='Kullanıcının söylemediği bir kabul.')):
+            with self.subTest(source=bad),self.assertRaisesRegex(ValueError,'talimat dosyası dersi kullanıcı kabulü gerektirir'):
+                w.put(self.vault,'lesson',dict(row,acceptance_source=bad))
+        path=self.vault/'acceptance.jsonl';path.write_text(path.read_text().replace('İstek','Değişen'))
+        with self.assertRaisesRegex(ValueError,'talimat dosyası dersi kullanıcı kabulü gerektirir'):
+            w.put(self.vault,'lesson',dict(row,acceptance_source=source))
+        self.assertEqual(w.latest(self.vault,'lesson'),{})
+
+    def test_instruction_acceptance_preserves_secret_and_session_exclusion_gates(self):
+        source=acceptance_fixture(self.vault)
+        row=dict(self.verified_fixture(),verification_kind='user_acceptance',observed_result='accepted',acceptance_source=source)
+        with patch.object(h,'contains_secret',return_value=True),self.assertRaisesRegex(ValueError,'sır kaydedilemez'):
+            w.put(self.vault,'lesson',row)
+        h._append_jsonl(self.vault/h.EVENT_PATH,dict(event_type='session.policy',session_id='session',policy='do-not-record'))
+        with self.assertRaisesRegex(ValueError,'talimat dosyası dersi kullanıcı kabulü gerektirir'):w.put(self.vault,'lesson',row)
+
+    def test_extra_instruction_pattern_enforces_verified_put_gate(self):
+        row=self.verified_fixture('komuta/ajan-work.md')
+        (self.vault/'komuta/talimat-dosyalari.json').write_text('{"extra_patterns":["komuta/ajan-*.md"]}')
+        with self.assertRaisesRegex(ValueError,'talimat dosyası dersi kullanıcı kabulü gerektirir'):w.put(self.vault,'lesson',row)
 
 
 class Retrieval(unittest.TestCase):

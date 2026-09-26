@@ -1,6 +1,6 @@
 """Select applicable, source-backed procedural lessons without blocking turns."""
 import re
-from is_ve_ders import latest
+from is_ve_ders import latest, is_instruction_target, has_user_acceptance
 from hafiza import statement_hash, source_file
 
 
@@ -9,6 +9,8 @@ def context(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
 
 
 def _integrity(vault, row):
+    if any(is_instruction_target(vault,row.get(k)) for k in ('target_path','method_path')) and (row.get('status')!='verified' or not has_user_acceptance(row)):
+        return 'instruction_target_unaccepted'
     if row.get('verification_hash'):
         from bilgi_agi import digest
         try:
@@ -82,5 +84,9 @@ def backlog(vault):
             entry['recheck_reason']=reason
             if r['status']=='verified':
                 entry['next_step']=f"Yeniden kontrol: {reason}. Kaynağı/yöntemi incele ve yeni sürümü is_ve_ders put ile bağla; o zamana kadar bağlama alınmaz."
+        if any(is_instruction_target(vault,r.get(k)) for k in ('target_path','method_path')):
+            entry['instruction_target']=True
+            if reason=='instruction_target_unaccepted':
+                entry['next_step']='Boşluk not edildi, uygulanmadı: talimat dosyası değişikliği kullanıcı kabulü (özgün kullanıcı mesajı alıntısı) ister.'
         output.append(entry)
     return output

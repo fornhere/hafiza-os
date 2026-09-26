@@ -5,6 +5,7 @@ from pathlib import Path
 from ders_baglam import context, context_details, backlog
 from codex_hafiza import hook
 from hafiza import statement_hash
+from test_is_ve_ders import acceptance_fixture
 
 class Lessons(unittest.TestCase):
  def lesson_fixture(self,v,ident='units',**changes):
@@ -144,6 +145,51 @@ class Lessons(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    v=Path(tmp);self.lesson_fixture(v,proposal='Önce birimleri denetle.')
    self.assertEqual(backlog(v),[dict(id='units',status='proposed',implementation_status='not_applied',next_step='Önce birimleri denetle.')])
+
+ def test_instruction_unaccepted_is_excluded_diagnosed_and_reported_without_writes(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   v=Path(tmp);(v/'CLAUDE.md').write_text('Birim adlarını denetle.')
+   row=self.lesson_fixture(v,method_path='CLAUDE.md',next_step='Talimat dosyasını otomatik düzenle.')
+   source=acceptance_fixture(v);accepted=dict(verification_kind='user_acceptance',observed_result='accepted',acceptance_source=source)
+   cases=[{},dict(status='verified'),dict(status='verified',**dict(accepted,verification_kind='test_result')),
+          dict(status='verified',**dict(accepted,observed_result='rejected')),accepted,
+          dict(status='verified',**dict(accepted,acceptance_source=None))]
+   cases += [dict(status='verified',**dict(accepted,acceptance_source={k:value for k,value in source.items() if k!=missing})) for missing in source]
+   for changes in cases:
+    with self.subTest(changes=changes):
+     (v/'zihin/ders-durumu.jsonl').write_text(json.dumps(dict(row,**changes))+'\n')
+     before={p.relative_to(v):p.read_bytes() for p in v.rglob('*') if p.is_file()}
+     self.assertEqual(context(v,'rapor'),'')
+     self.assertEqual(context_details(v,'rapor'),dict(text='',lessons=[],diagnostics=[dict(id='units',reason='instruction_target_unaccepted')]))
+     entry=backlog(v)[0]
+     self.assertTrue(entry['instruction_target']);self.assertEqual(entry['recheck_reason'],'instruction_target_unaccepted')
+     self.assertEqual(entry['next_step'],'Boşluk not edildi, uygulanmadı: talimat dosyası değişikliği kullanıcı kabulü (özgün kullanıcı mesajı alıntısı) ister.')
+     self.assertEqual(before,{p.relative_to(v):p.read_bytes() for p in v.rglob('*') if p.is_file()})
+
+ def test_instruction_target_path_alone_and_extra_patterns_gate_context(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   v=Path(tmp);self.lesson_fixture(v,target_path='a/AGENTS.md')
+   self.assertEqual(context_details(v,'rapor')['diagnostics'],[dict(id='units',reason='instruction_target_unaccepted')])
+  with tempfile.TemporaryDirectory() as tmp:
+   v=Path(tmp);self.lesson_fixture(v);(v/'komuta').mkdir()
+   self.assertIn('Birim adlarını',context(v,'rapor'))
+   (v/'komuta/talimat-dosyalari.json').write_text('{"extra_patterns":["method.md"]}')
+   self.assertEqual(context_details(v,'rapor')['diagnostics'],[dict(id='units',reason='instruction_target_unaccepted')])
+   self.assertTrue(backlog(v)[0]['instruction_target'])
+
+ def test_accepted_instruction_context_still_checks_hashes_and_marks_backlog(self):
+  from is_ve_ders import put
+  with tempfile.TemporaryDirectory() as tmp:
+   v=Path(tmp);(v/'hooks').mkdir();method=v/'hooks/pre.sh';method.write_text('Birim adlarını denetle.')
+   row=self.lesson_fixture(v,method_path='hooks/pre.sh')
+   (v/'verified.md').write_text('Test sonucu birim adları için doğrulandı.')
+   put(v,'lesson',dict(row,status='verified',expected_version=row['version'],target_path='hooks/pre.sh',target_hash=row['implementation_hash'],
+       verification_path='verified.md',verification_evidence=(v/'verified.md').read_text(),verification_kind='user_acceptance',observed_result='accepted',acceptance_source=acceptance_fixture(v)))
+   self.assertIn('Birim adlarını',context(v,'rapor'));self.assertEqual(context_details(v,'rapor')['diagnostics'],[]);self.assertEqual(backlog(v),[])
+   method.write_text('Değişmiş talimat içeriği.')
+   self.assertEqual(context(v,'rapor'),'')
+   self.assertEqual(context_details(v,'rapor')['diagnostics'],[dict(id='units',reason='method_changed')])
+   entry=backlog(v)[0];self.assertTrue(entry['instruction_target']);self.assertEqual(entry['recheck_reason'],'method_changed')
 
  def test_routing_after_first_turn_and_no_block(self):
   with tempfile.TemporaryDirectory() as tmp:

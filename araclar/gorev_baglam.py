@@ -484,6 +484,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if lesson_diagnostics:
         groups=(('değişmiş kaynak/yöntem/doğrulama',{'source_changed','method_changed','verification_changed'}),
                 ('eksik yöntem',{'method_missing'}),('eski kayıt',{'legacy_unreviewed'}),
+                ('kullanıcı kabulü bekleyen talimat',{'instruction_target_unaccepted'}),
                 ('inceleme gerekli',{'review_required'}),('bütçe',{'budget'}))
         counts=[(label,sum(d['reason'] in reasons for d in lesson_diagnostics)) for label,reasons in groups]
         detail=', '.join(label+': '+str(count) for label,count in counts if count)

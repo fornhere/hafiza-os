@@ -99,3 +99,38 @@ listesini alır (sürüm içermez, en fazla 20 benzersiz mevcut kimlik).
 `summarize()['lessons']` en güncel gözlemlerden ders başına
 `accepted`, `rejected`, `abandoned`, `unknown` sayar. Ham sayımlar nedensel
 başarı veya dersin doğruluğu hakkında karar değildir.
+
+## Talimat dosyası dersleri ve inceleyen kimliği
+
+Her dizin derinliğinde `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`,
+`SKILL.md`, `.cursorrules`, `hooks.json` ve `.claude/`, `.codex/`, `.agents/`,
+`skills/`, `hooks/` altındaki dosyalar talimat hedefidir. Yollar POSIX biçimine
+çevrilip küçük harfle `fnmatch` desenlerine eşlenir. İsteğe bağlı
+`komuta/talimat-dosyalari.json` içindeki `{"extra_patterns":["komuta/ajan-*.md"]}`
+yalnız ek desen tanımlar; bozuk veya okunamayan ayar varsayılanları kaldırmaz.
+
+`target_path` veya `method_path` bu kapsama giriyorsa `verified` ders için
+mevcut kaynak/hash/test makbuzu kapılarına ek olarak
+`verification_kind=user_acceptance`, `observed_result=accepted` ve
+`acceptance_source={session_id, source_snapshot, evidence_source, evidence}`
+gerekir. En az 10 karakterlik alıntı `capture_source.validate_candidate_evidence`
+ile özgün kullanıcı mesajına bağlanır; ilk beş mesaj, kaydetmeme ve sır taraması
+korunur. `outcome` bu alan verilirse doğrular; ayrı `review-lesson` yeniden
+doğrular. Test sonucu tek başına talimat dersini onaylamaz; reddedilen sonuç
+kuyrukta `proposed` kalır. Bağlam kapısı ayrıca verified/kabul alanlarını arar,
+hash kontrollerini sürdürür; kabul eksikse `instruction_target_unaccepted`
+tanısı ve backlog görünür. Bağlam okuması transcript'i yeniden doğrulamaz.
+
+Gözetimsiz bakım talimat hedef dosyasına yazmaz; kabul bekleyen değişiklik için
+yalnız “Boşluk not edildi, uygulanmadı: talimat dosyası değişikliği kullanıcı
+kabulü (özgün kullanıcı mesajı alıntısı) ister.” raporlar. `lesson-utility`
+güvenli düşürmeyi sürdürebilir; sonuç ve backlog girdisi `instruction_target=true`
+taşır.
+
+`reviewed_by` ve `actor`, NFKC + casefold + yalnız harf/rakam ile karşılaştırılır;
+eşit veya boş normalizasyon reddedilir. İsteğe bağlı `actor_session_id` boş
+olmayan, en fazla 200 karakterlik dizgedir; varsa farklı `reviewer_session_id`
+zorunludur ve derste saklanır. Oturum kimlikleri birebir karşılaştırılır.
+Alanlar verilmezse outcome makbuz parmak izi değişmez. Adlar ve oturum kimlikleri
+beyandır; bu karşılaştırmalar kimlik doğrulaması veya gerçek bağımsızlık kanıtı
+değildir.

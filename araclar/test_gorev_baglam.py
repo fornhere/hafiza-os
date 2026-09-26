@@ -99,6 +99,16 @@ class Package(unittest.TestCase):
   self.assertEqual(package['lessons']['diagnostics'],[dict(id='missing',reason='method_missing')])
   self.assertLessEqual(len(package['text']),budget)
 
+ def test_lesson_check_counts_instruction_targets_awaiting_acceptance(self):
+  from is_ve_ders import put
+  from hafiza import statement_hash
+  method='Henüz kabul edilmemiş kapak talimatı.';(self.v/'CLAUDE.md').write_text(method)
+  put(self.v,'lesson',dict(id='instruction',title='Talimat dersi',status='proposed',source_path='approval.md',evidence=self.source.read_text(),
+      actor='reviewer',triggers=['kapak'],method_path='CLAUDE.md',implementation_hash=statement_hash(method)))
+  package=build_task_package(self.v,'kapak',budget=5000)
+  self.assertEqual(package['lessons'],dict(applied=[],diagnostics=[dict(id='instruction',reason='instruction_target_unaccepted')]))
+  self.assertIn('kullanıcı kabulü bekleyen talimat: 1',package['text']);self.assertNotIn(method,package['text'])
+
  def test_hydrate_uses_canonical_text_and_rejects_obsolete(self):
   import hafiza as h
   from gorev_baglam import hydrate_remote

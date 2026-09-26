@@ -314,3 +314,29 @@ dersin doğruluğuna karar vermez, dersi silmez; yalnız `proposed` ve
 ayrı incelemeden geçene kadar ders bağlama girmez. Eski zararlar yeniden
 onaydan sonra tekrar düşürmez. `zihin/ders-faydasi.json` türetilmiş görünümdür;
 kanonik ders geçmişinin veya kaynak incelemesinin yerine geçmez.
+
+## Talimat dosyası kapısı
+
+Her derinlikte `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, `SKILL.md`,
+`.cursorrules`, `hooks.json` ile `.claude/`, `.codex/`, `.agents/`, `skills/`,
+`hooks/` altındaki dosyalar talimat hedefidir. POSIX'e çevrilen küçük harfli
+yollar `fnmatch` ile eşlenir. `komuta/talimat-dosyalari.json` isteğe bağlı
+`{"extra_patterns":["komuta/ajan-*.md"]}` ekler; varsayılanları kaldıramaz,
+bozuk veya okunamayan dosya da kapıyı gevşetmez.
+
+Talimat hedefli ders kaynak/hash/test makbuzu ve ayrı incelemeye ek olarak
+`verification_kind=user_acceptance`, `observed_result=accepted` ve
+`acceptance_source={session_id, source_snapshot, evidence_source, evidence}`
+ister. En az 10 karakterlik alıntı özgün kullanıcı mesajıyla doğrulanır;
+ilk beş mesaj, kaydetmeme ve sır taraması korunur. Kabulsüz ders bağlama girmez;
+`instruction_target_unaccepted` tanısı ve `instruction_target=true` backlog
+işareti görünür. Bakım turu hedef talimat dosyasına YAZMAZ; yalnız “Boşluk not
+edildi, uygulanmadı: talimat dosyası değişikliği kullanıcı kabulü (özgün kullanıcı
+mesajı alıntısı) ister.” raporlar. Fayda incelemesi dersi `proposed` durumuna
+düşürebilir, sonuç satırında talimat hedefi olduğunu gösterir.
+
+`reviewed_by`/`actor` NFKC + casefold + yalnız harf/rakam normalizasyonunda eşit
+veya boşsa inceleme reddedilir. Outcome `actor_session_id` taşıyorsa farklı
+`reviewer_session_id` zorunludur; verilen reviewer oturum kimliği derste tutulur.
+Oturum kimlikleri birebir karşılaştırılır. Bu alanlar beyan edilir; kontrol
+kimlik doğrulaması veya gerçek bağımsızlık kanıtı değildir.

@@ -2,8 +2,9 @@
 """Append-only, source-backed task and procedural lesson ledger."""
 import argparse
 import datetime as dt
+from fnmatch import fnmatchcase
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import hafiza as h
 from codex_hafiza import atomic
@@ -13,6 +14,39 @@ LESSONS = Path('zihin/ders-durumu.jsonl')
 
 
 STALE_DAYS = 7
+
+
+def is_instruction_target(vault, path):
+    if not path: return False
+    path = PurePosixPath(str(path).replace('\\', '/')).as_posix().lower()
+    patterns = ['claude.md', 'claude.local.md', 'agents.md', 'gemini.md', 'skill.md', '.cursorrules', 'hooks.json',
+                '.claude/*', '.codex/*', '.agents/*', 'skills/*', 'hooks/*']
+    try:
+        config = json.loads((vault / 'komuta/talimat-dosyalari.json').read_text(encoding='utf-8'))
+        extra = config.get('extra_patterns', []) if isinstance(config, dict) else []
+        if isinstance(extra, list): patterns += [p.replace('\\', '/').lower() for p in extra if isinstance(p, str) and p.strip()]
+    except (OSError, ValueError): pass
+    return any(fnmatchcase(path, p) or fnmatchcase(path, '*/' + p) for p in patterns)
+
+
+def has_user_acceptance(data):
+    source = data.get('acceptance_source')
+    return (data.get('verification_kind') == 'user_acceptance' and data.get('observed_result') == 'accepted'
+        and isinstance(source, dict) and isinstance(source.get('session_id'), str) and bool(source['session_id'].strip())
+        and isinstance(source.get('source_snapshot'), dict) and isinstance(source.get('evidence_source'), dict)
+        and isinstance(source.get('evidence'), str) and len(source['evidence']) >= 10)
+
+
+def validate_acceptance_source(vault, source):
+    from capture_source import validate_candidate_evidence
+    if (not isinstance(source, dict) or not isinstance(source.get('session_id'), str) or not source['session_id'].strip()
+        or not isinstance(source.get('source_snapshot'), dict) or not isinstance(source.get('evidence_source'), dict)
+        or not isinstance(source.get('evidence'), str) or len(source['evidence']) < 10):
+        raise ValueError('acceptance_source_invalid')
+    try:
+        validate_candidate_evidence(vault, source['session_id'], source['source_snapshot'], source['evidence_source'], source['evidence'])
+    except (ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError('acceptance_source_invalid') from exc
 
 
 def latest(vault, kind):
@@ -55,6 +89,12 @@ def put(vault, kind, data):
         if data['status'] not in ('proposed', 'verified', 'rejected'):
             raise ValueError('geçersiz ders durumu')
         if data['status'] == 'verified':
+            if any(is_instruction_target(vault, data.get(k)) for k in ('target_path', 'method_path')):
+                try:
+                    if not has_user_acceptance(data): raise ValueError('acceptance_source_required')
+                    validate_acceptance_source(vault, data['acceptance_source'])
+                except ValueError as exc:
+                    raise ValueError('talimat dosyası dersi kullanıcı kabulü gerektirir') from exc
             target = h.source_file(vault, data.get('target_path', ''))
             if data.get('target_hash') != h.statement_hash(target.read_text()):
                 raise ValueError('dersin uygulandığı dosya hash ile doğrulanmalı')

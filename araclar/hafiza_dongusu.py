@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import unicodedata
 from pathlib import Path
 import hafiza as h
 import bilgi_agi as b
@@ -143,11 +144,13 @@ def review_pending(vault, project_id=None, limit=5, apply=False):
 
 def outcome(vault,data,apply=False):
     """Queue externally verifiable work evidence; never self-promote lessons."""
-    from is_ve_ders import latest
+    from is_ve_ders import latest, validate_acceptance_source
     vault=Path(vault)
     required=('task_id','title','lesson','conditions','method_path','verification_path','verification_evidence','verification_hash','verification_kind','observed_result','actor')
     if any(not isinstance(data.get(k),str) or not data[k].strip() for k in required):raise ValueError('outcome_fields_required')
     if h.contains_secret(json.dumps(data,ensure_ascii=False)):raise ValueError('restricted_outcome')
+    if 'actor_session_id' in data and (not isinstance(data['actor_session_id'],str) or not data['actor_session_id'].strip() or len(data['actor_session_id'])>200):raise ValueError('actor_session_id_invalid')
+    if 'acceptance_source' in data:validate_acceptance_source(vault,data['acceptance_source'])
     if 'applied_lessons' in data:
         lessons=latest(vault,'lesson');applied=data['applied_lessons'];seen=set()
         if not isinstance(applied,list) or len(applied)>20:raise ValueError('applied_lessons_invalid')
@@ -179,13 +182,23 @@ def outcome(vault,data,apply=False):
 
 
 def review_lesson(vault,data,apply=False):
-    from is_ve_ders import put
+    """Compare declared reviewer names/sessions; this is not identity authentication."""
+    from is_ve_ders import put, is_instruction_target, has_user_acceptance
     row=next((r for r in h.load_jsonl(vault/OUTCOMES) if r['receipt_id']==data.get('receipt_id')),None)
     if not row:raise ValueError('outcome_missing')
-    if not data.get('reviewed_by') or data['reviewed_by']==row['actor'] or len(data.get('reason',''))<20 or data.get('evidence_checked') is not True or data.get('conditions_checked') is not True:raise ValueError('independent_review_required')
+    def identity(value):
+        return ''.join(c for c in unicodedata.normalize('NFKC',value).casefold() if c.isalnum()) if isinstance(value,str) else ''
+    reviewer=identity(data.get('reviewed_by'));actor=identity(row['actor'])
+    if not reviewer or not actor or reviewer==actor or len(data.get('reason',''))<20 or data.get('evidence_checked') is not True or data.get('conditions_checked') is not True:raise ValueError('independent_review_required')
+    if 'actor_session_id' in row and 'reviewer_session_id' not in data:raise ValueError('independent_review_required')
+    if 'reviewer_session_id' in data and (not isinstance(data['reviewer_session_id'],str) or not data['reviewer_session_id'].strip() or len(data['reviewer_session_id'])>200 or data['reviewer_session_id']==row.get('actor_session_id')):raise ValueError('independent_review_required')
+    if is_instruction_target(vault,row['method_path']) and not has_user_acceptance(row):raise ValueError('instruction_target_requires_user_acceptance')
     fresh=outcome(vault,{k:v for k,v in row.items() if k not in ('receipt_id','status','task_version','scope','project_id','method_hash','source_path','source_content_hash','evidence')})['row']
     if fresh['receipt_id']!=row['receipt_id']:raise ValueError('outcome_changed')
     lesson=dict(id='lesson-'+row['receipt_id'][:24],title=row['title'],status='verified',source_path=row['source_path'],evidence=row['evidence'],actor=data['reviewed_by'],reviewed_by=data['reviewed_by'],review_reason=data['reason'],scope=row['scope'],project_id=row.get('project_id'),proposal=row['lesson'],observed_result=row['observed_result'],conditions=row['conditions'],method_path=row['method_path'],target_path=row['method_path'],target_hash=row['method_hash'],verification_path=row['verification_path'],verification_evidence=row['verification_evidence'],verification_hash=row['verification_hash'],triggers=row.get('triggers',[row['title']]),outcome_id=row['receipt_id'])
+    lesson['verification_kind']=row['verification_kind']
+    if 'acceptance_source' in row:lesson['acceptance_source']=row['acceptance_source']
+    if 'reviewer_session_id' in data:lesson['reviewer_session_id']=data['reviewer_session_id']
     from is_ve_ders import latest
     previous=latest(vault,'lesson').get(lesson['id'])
     if previous and previous.get('outcome_id')==row['receipt_id']:return dict(changed=False,lesson=previous)
@@ -198,7 +211,7 @@ def lesson_utility(vault, apply=False, min_harm=2):
     Count each task/verification once, after the last review-required version;
     harmless version updates do not reset accumulated observations.
     """
-    from is_ve_ders import latest, put, LESSONS
+    from is_ve_ders import latest, put, LESSONS, is_instruction_target
     from codex_hafiza import atomic
     if type(min_harm) is not int or min_harm<1:raise ValueError('min_harm_invalid')
     vault=Path(vault);current=latest(vault,'lesson');cutoffs={}
@@ -220,6 +233,7 @@ def lesson_utility(vault, apply=False, min_harm=2):
             entry['outcome_ids'].append(row['receipt_id'])
     for ident,entry in lessons.items():
         entry['outcome_ids']=sorted(set(entry['outcome_ids']));row=current[ident]
+        if any(is_instruction_target(vault,row.get(k)) for k in ('target_path','method_path')):entry['instruction_target']=True
         if ('review_required' in row or row['status'] not in ('verified','proposed')
             or entry['harm']<=entry['help'] or entry['harm']<min_harm):continue
         entry['action']='review_required'
