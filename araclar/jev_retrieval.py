@@ -80,14 +80,20 @@ def recall_settings(cfg):
     return settings
 
 
-def static_preferences(eligible, already, settings, rerank_active):
-    """Append bounded preferences from the caller's source-validated candidates."""
+def static_preferences(eligible, already, settings, rerank_active, query):
+    """Append bounded, query-matching preferences from source-validated candidates."""
     mode = settings['static_preferences']
     if mode == 'off' or (mode == 'rerank' and not rerank_active): return []
+    from gorev_baglam import rank_records
     seen = {row['memory_id'] for row in already}
+    candidates = [row for row in eligible
+                  if row.get('category') in ('preference', 'profile') and row['memory_id'] not in seen
+                  and rank_records([row], query)]
+    ranked = rank_records(candidates, query,
+                          tie_break=lambda row: (row['scope'] != 'user', row['memory_id']))
     selected = []; used = 0
-    for row in sorted(eligible, key=lambda row: (row['scope'] != 'user', row['memory_id'])):
-        if row.get('category') not in ('preference', 'profile') or row['memory_id'] in seen: continue
+    for row in ranked:
+        if row['memory_id'] in seen: continue
         cost = len(row['statement'])
         if used + cost > settings['static_preferences_chars']: continue
         selected.append(row)

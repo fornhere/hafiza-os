@@ -800,10 +800,10 @@ class RecallSafetyTests(unittest.TestCase):
 
     def test_gate_no_delivers_only_static_preference_and_profile(self):
         pref = self.memory()
-        profile = self.memory('profile', 'İstanbul şehrinde yaşıyorum.', category='profile')
+        profile = self.memory('profile', 'Türkçe ana dilim.', category='profile')
         self.memory('uncategorized', category=None)
         self.memory('entity', category='entity')
-        result = self.package()
+        result = self.package('Türkçe')
         self.assertEqual(memory_ids(result['selected_ids']), ['pref', 'profile'])
         for row in (pref, profile):
             self.assertIn(row['statement'], result['text'])
@@ -812,24 +812,51 @@ class RecallSafetyTests(unittest.TestCase):
         self.assertFalse(result['jev']['gate']['effective_needed'])
         self.assertEqual(self.evaluate.call_count, 1)
 
+    def test_static_preferences_unrelated_query_delivers_nothing(self):
+        self.memory()
+        self.memory('profile', 'İstanbul şehrinde yaşıyorum.', category='profile')
+        for query in ('', 'Explain addition', 'bunu da yapalım',
+                      'Türkçe matematik problemini adımlarla çöz'):
+            with self.subTest(query=query):
+                result = self.package(query)
+                self.assertEqual(memory_ids(result['selected_ids']), [])
+                self.assertEqual(result['text'], '')
+                self.assertEqual(result['source_versions'], {})
+
+    def test_static_preferences_related_query_delivers_only_matching_preference(self):
+        pref = self.memory()
+        self.memory('profile', 'İstanbul şehrinde yaşıyorum.', category='profile')
+        result = self.package('Türkçe')
+        self.assertEqual(memory_ids(result['selected_ids']), ['pref'])
+        self.assertIn(pref['statement'], result['text'])
+        self.assertEqual(set(result['source_versions']), {pref['source_path']})
+
+    def test_static_preferences_match_reviewed_search_keys_without_delivering_them(self):
+        pref = self.memory(arama_anahtarlari=['sunum tasarımı'])
+        self.memory('unrelated', 'Veritabanı sorguları hızlı olsun.')
+        result = self.package('Slaytlarını')
+        self.assertEqual(memory_ids(result['selected_ids']), ['pref'])
+        self.assertIn(pref['statement'], result['text'])
+        self.assertNotIn('sunum tasarımı', result['text'])
+
     def test_static_preferences_off_and_invalid_chars_deliver_nothing(self):
         self.memory()
         for settings in (dict(static_preferences='off'), dict(static_preferences_chars=0),
                          dict(static_preferences_chars='600')):
             with self.subTest(settings=settings):
                 self.recall_config(**settings)
-                self.assertEqual(memory_ids(self.package()['selected_ids']), [])
+                self.assertEqual(memory_ids(self.package('Türkçe')['selected_ids']), [])
 
     def test_static_character_budget_skips_oversized_and_keeps_later_fit(self):
         self.memory('a-long')
         short = self.memory('b-short', 'Kısa yaz.')
-        self.memory('c-extra', 'Sade yaz.')
+        self.memory('c-extra', 'Kısa tut.')
         self.recall_config(static_preferences_chars=len(short['statement']))
-        result = self.package()
+        result = self.package('Kısa')
         self.assertEqual(memory_ids(result['selected_ids']), ['b-short'])
         self.assertIn(short['statement'], result['text'])
 
-    def test_static_order_is_user_then_id_without_already_selected(self):
+    def test_static_order_breaks_relevance_ties_by_scope_then_id_without_duplicates(self):
         rows = [dict(memory_id=ident, scope=scope, category=category, statement='abc')
                 for ident, scope, category in [('a-project', 'project:one', 'preference'),
                                               ('z-user', 'user', 'profile'),
@@ -837,9 +864,29 @@ class RecallSafetyTests(unittest.TestCase):
                                               ('a-user', 'user', 'preference'),
                                               ('already', 'user', 'preference')]]
         settings = jev_retrieval.recall_settings({'erisim': {'static_preferences_chars': 12}})
-        for candidates in (rows, list(reversed(rows))):
-            added = jev_retrieval.static_preferences(candidates, [dict(rows[-1])], settings, True)
+        for candidates in (rows + [dict(rows[1])], list(reversed(rows))):
+            added = jev_retrieval.static_preferences(candidates, [dict(rows[-1])], settings, True, 'abc')
             self.assertEqual([r['memory_id'] for r in added], ['a-user', 'z-user', 'a-project', 'b-project'])
+
+    def test_static_order_prioritizes_relevance_before_scope_and_id_within_budget(self):
+        rows = [dict(memory_id='a-user', scope='user', category='preference', statement='Tipografi'),
+                dict(memory_id='z-project', scope='project:one', category='profile',
+                     statement='Tipografi kontrast')]
+        settings = jev_retrieval.recall_settings(
+            {'erisim': {'static_preferences_chars': len(rows[1]['statement'])}})
+        for candidates in (rows, list(reversed(rows))):
+            added = jev_retrieval.static_preferences(candidates, [], settings, True, 'Tipografi kontrast')
+            self.assertEqual([r['memory_id'] for r in added], ['z-project'])
+
+    def test_static_mode_activation_requires_rerank_or_always(self):
+        pref = self.memory()
+        for mode in ('off', 'rerank', 'always'):
+            for active in (False, True):
+                with self.subTest(mode=mode, rerank_active=active):
+                    settings = jev_retrieval.recall_settings({'erisim': {'static_preferences': mode}})
+                    added = jev_retrieval.static_preferences([pref], [], settings, active, 'Türkçe')
+                    expected = [pref] if mode == 'always' or (mode == 'rerank' and active) else []
+                    self.assertEqual(added, expected)
 
     def test_non_rerank_modes_keep_default_delivery_and_allow_always(self):
         self.memory()
@@ -848,8 +895,9 @@ class RecallSafetyTests(unittest.TestCase):
                 with self.subTest(mode=mode, static=static):
                     self.config(retrieval_mode=mode)
                     self.recall_config(**({'static_preferences': static} if static == 'always' else {}))
-                    result = self.package()
-                    self.assertEqual(memory_ids(result['selected_ids']), ['pref'] if static == 'always' else [])
+                    self.assertEqual(memory_ids(self.package()['selected_ids']), [])
+                    expected = [] if mode == 'on' and static == 'rerank' else ['pref']
+                    self.assertEqual(memory_ids(self.package('Türkçe')['selected_ids']), expected)
 
     def test_static_preferences_keep_source_scope_and_status_gates(self):
         stale = self.memory('stale')
@@ -860,12 +908,14 @@ class RecallSafetyTests(unittest.TestCase):
         self.memory('superseded', status='superseded')
         self.memory('invalid', source_hash='invalid')
         self.memory('valid')
-        self.assertEqual(memory_ids(self.package()['selected_ids']), ['valid'])
+        result = self.package('Türkçe')
+        self.assertEqual(memory_ids(result['selected_ids']), ['context-check', 'valid'])
+        self.assertEqual(set(result['source_versions']), {'valid.md'})
 
     def test_static_preferences_still_obey_final_package_budget(self):
         self.memory()
-        self.assertEqual(memory_ids(self.package(budget=1)['selected_ids']), [])
-        self.assertEqual(self.package(budget=1)['text'], '')
+        self.assertEqual(memory_ids(self.package('Türkçe', budget=1)['selected_ids']), [])
+        self.assertEqual(self.package('Türkçe', budget=1)['text'], '')
 
     def test_static_preferences_follow_rerank_limit_and_degraded_fallback(self):
         for i in range(4): self.memory(f'm{i}')
@@ -875,14 +925,16 @@ class RecallSafetyTests(unittest.TestCase):
                     if degraded: return dict(degraded=True, diagnostics=['request_failed'])
                     return RerankTests.high_answer(vault, query, cards, **kwargs)
                 self.evaluate.side_effect = answer
-                result = self.package('Hatırla')
+                result = self.package('Türkçe hatırla')
                 self.assertEqual(memory_ids(result['selected_ids']), ['m0', 'm1', 'm2', 'm3'])
                 self.assertEqual(len(set(memory_ids(result['selected_ids']))), 4)
+                if degraded:
+                    self.assertEqual(memory_ids(self.package('Hatırla')['selected_ids']), [])
 
     def test_gate_scope_all_still_suppresses_static_preferences(self):
         self.memory()
         self.config(rerank_gate_scope='all')
-        result = self.package()
+        result = self.package('Türkçe')
         self.assertEqual(result['text'], '')
         self.assertEqual(memory_ids(result['selected_ids']), [])
         self.assertFalse(result['jev']['gate']['effective_needed'])
