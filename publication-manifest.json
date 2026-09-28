@@ -204,6 +204,10 @@
     {
       "path": "araclar/test_akilli_yapi.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/test_capture_privacy_marker.py",
+      "mode": "shared"
     }
   ]
 }

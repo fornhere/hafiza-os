@@ -189,13 +189,13 @@ def read_completed_prefix(vault, session, source):
     return text
 
 
-def privacy_text(prompt):
+def privacy_text(prompt, retain_standalone_quote=True):
     """Remove clearly quoted examples, preserving actual surrounding instructions."""
     text = clean_user(prompt).casefold()
     unquoted = re.sub(r'```.*?```|`[^`]*`|"[^"\n]*"|“[^”\n]*”', ' ', text, flags=re.S)
     unquoted = re.sub(r'^\s*>[^\n]*', ' ', unquoted, flags=re.M)
     # A standalone quote may itself be an instruction: defer instead of ignoring it.
-    if not unquoted.strip(): return text
+    if retain_standalone_quote and not unquoted.strip(): return text
     return unquoted
 
 
@@ -254,6 +254,9 @@ def privacy_ambiguous(prompt):
     Instruction-vs-quotation and final scope still require reviewer judgment.
     """
     text = privacy_text(prompt)
+    # An unquoted line-leading marker is a reserved opt-out token, not a session policy.
+    if re.search(r'(?m)^\s*\[kaydetme\](?:\s|$)', privacy_text(prompt, retain_standalone_quote=False)):
+        return True
     # A whole-session instruction remains blocking inside a mixed request.
     if any(privacy_command(clause) for clause in re.split(r'[.!?;\n]+', text)):
         return True
