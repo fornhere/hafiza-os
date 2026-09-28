@@ -20,7 +20,7 @@ Kasada `komuta/jev.json` oluşturun:
 }
 ```
 
-`TYPESAFE_API_KEY` ortam değişkenini kullanın; isteğe bağlı `TYPESAFE_BASE_URL` endpoint'i değiştirir. Alternatif `env_file`, bu iki değişkeni içeren dosyanın mutlak yoludur; dosya shell olarak çalıştırılmaz. Anahtarı JSON'a veya Git'e yazmayın. Kişisel yapılandırma ve `.cache/jev/` Git dışında kalır. HTTPS veya yalnız loopback HTTP kabul edilir; yönlendirme takip edilmez.
+`TYPESAFE_API_KEY` ortam değişkenini kullanın; isteğe bağlı `TYPESAFE_BASE_URL` endpoint'i değiştirir. Alternatif `env_file`, bu iki değişkeni içeren dosyanın mutlak yoludur; dosya shell olarak çalıştırılmaz. Anahtarı JSON'a veya Git'e yazmayın. Kişisel yapılandırma ve `.cache/jev/` Git dışında kalır. Anahtar yalnız sağlayıcının resmi HTTPS host'una (`typesafe` → `api.typesafe.ai`, `vercel` → `ai-gateway.vercel.sh`) veya yerel bir gateway'e (`localhost`, `127.0.0.1`, `::1`; HTTP veya HTTPS, ortam proxy'si atlanır) gönderilir. `base_url` ya da `TYPESAFE_BASE_URL` başka bir host gösterirse çağrı `endpoint_invalid` ile yapılmaz; kendi HTTPS endpoint'in için `"allow_custom_endpoint": true` ayarını açıkça ekle. Yönlendirme takip edilmez.
 
 - `off`: mevcut yerel davranış; ağ çağrısı yok.
 - `shadow`: yerel sonuç teslim edilir, Jev adayları ve tanı bilgisi JSON'un `jev` alanına eklenir.

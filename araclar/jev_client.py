@@ -22,7 +22,11 @@ DEFAULTS = dict(mode='off', retrieval_mode='inherit', procedure_mode='off', task
                 max_input_chars=24000, cache_ttl=3600,
                 rerank_threshold=1.5, rerank_p2=0.75, rerank_gate_threshold=0.70,
                 rerank_gate_scope='memory', rerank_limit=3, rerank_candidates=24, rerank_facets=True,
-                claude_hook_mode='shadow')
+                claude_hook_mode='shadow', allow_custom_endpoint=False)
+# The key only travels to the provider's official HTTPS host or a local (loopback) gateway.
+# Any other HTTPS host needs an explicit allow_custom_endpoint: true in komuta/jev.json.
+PROVIDER_HOSTS = {'vercel': 'ai-gateway.vercel.sh', 'typesafe': 'api.typesafe.ai'}
+LOOPBACK_HOSTS = ('localhost', '127.0.0.1', '::1')
 CRITERIA = ['Unrelated or unsupported, including unsupported exact values or unapproved domain transfer.',
             'Related background, but not direct evidence for any requested part.',
             'Direct evidence for at least one requested part, including implicit paraphrases within its original domain.']
@@ -99,7 +103,7 @@ def _read_config(vault):
         raise ValueError('config_invalid')
     if config['claude_hook_mode'] not in ('off','shadow','on') or config['rerank_gate_scope'] not in ('memory','all'):
         raise ValueError('config_invalid')
-    if not isinstance(config['rerank_facets'], bool):
+    if not isinstance(config['rerank_facets'], bool) or not isinstance(config['allow_custom_endpoint'], bool):
         raise ValueError('config_invalid')
     for name in ('rerank_p2','rerank_gate_threshold'):
         if type(config[name]) not in (int,float) or not math.isfinite(config[name]) or not 0 <= config[name] <= 1:
@@ -193,28 +197,49 @@ def _environment(config):
     return values
 
 
-def _endpoint(base):
-    parsed = urllib.parse.urlsplit(base)
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+def _endpoint(base, provider, allow_custom=False):
+    """Bind the key to the provider's official HTTPS host, a loopback gateway, or an opted-in host."""
+    if not isinstance(base, str) or any(c.isspace() or ord(c) < 32 or c == '\\' for c in base):
         raise ValueError('endpoint_invalid')
-    if not parsed.hostname or not (parsed.scheme=='https' or
-            parsed.scheme=='http' and parsed.hostname in ('localhost','127.0.0.1','::1')):
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        # Validate malformed ports as well.
+        port = parsed.port
+    except ValueError:
+        raise ValueError('endpoint_invalid') from None
+    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
         raise ValueError('endpoint_invalid')
-    # Validate malformed ports as well.
-    parsed.port
+    host = parsed.hostname
+    if not host or parsed.scheme not in ('http', 'https'):
+        raise ValueError('endpoint_invalid')
+    if host not in LOOPBACK_HOSTS:
+        official = host == PROVIDER_HOSTS.get(provider) and port in (None, 443)
+        if parsed.scheme != 'https' or not (official or allow_custom is True):
+            raise ValueError('endpoint_invalid')
     base=base.rstrip('/')
     return base+'/systemone' if base.endswith('/v1') else base+'/v1/systemone'
 
 
+def _resolve_endpoint(config, env):
+    """The one endpoint policy shared by evaluate() and installer verification."""
+    return _endpoint(env.get('TYPESAFE_BASE_URL', config['base_url']), config.get('provider'),
+                     config.get('allow_custom_endpoint') is True)
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
         raise ValueError('redirect_rejected')
 
 
 def _transport(endpoint, body, key, timeout):
     request=urllib.request.Request(endpoint,data=json.dumps(body).encode(),
         headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},method='POST')
-    with urllib.request.build_opener(_NoRedirect()).open(request,timeout=timeout) as response:
+    handlers=[_NoRedirect()]
+    if urllib.parse.urlsplit(endpoint).hostname in LOOPBACK_HOSTS:
+        # A plain-HTTP local gateway must never be reached through an environment proxy.
+        handlers.append(urllib.request.ProxyHandler({}))
+    with urllib.request.build_opener(*handlers).open(request,timeout=timeout) as response:
         raw=response.read(1000001)
         if len(raw)>1000000: raise ValueError('response_too_large')
         return json.loads(raw)
@@ -343,7 +368,7 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
         question_types={key:body['questions'][key]['type'] for key in question_map}
         question_options={key:tuple(body['questions'][key]['criteria']) for key in question_map if question_types[key]=='choice'}
         if len(json.dumps(body,ensure_ascii=False))>config['max_input_chars']: raise ValueError('budget_exceeded')
-        env=_environment(config); endpoint=_endpoint(env.get('TYPESAFE_BASE_URL',config['base_url']))
+        env=_environment(config); endpoint=_resolve_endpoint(config,env)
         fingerprint=dict(body=body,scope=scope,sources=source_versions or {},endpoint=endpoint,
                          provider=config['provider'],rubric_version=config['rubric_version'],purpose=purpose,purpose_version=1,probability_adapter=4,schema=2)
         digest=hashlib.sha256(json.dumps(fingerprint,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
