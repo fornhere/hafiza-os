@@ -8,30 +8,10 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: main
-            revision: 698c7efa560dc0875ff5df2a4d03e2bb7e554998
-          - label: pr5
-            revision: ff1b6c0f663ebf9fb5b5e369e118e0566d525567
-          - label: pr6
-            revision: 9169ffe50d854a3b92f409ddeaf3534728df8e6e
-          - label: pr7
-            revision: 5ca6a5a12aa4828d5552fc4f36d88a99ef8b097d
-          - label: pr8
-            revision: 73f4fcbc230e25755cb7c210d6c22c6683c610b9
-          - label: pr9
-            revision: 5c50e1772c09c90e24d92216abe1012630b8cbec
-          - label: pr10
-            revision: 51d7be7758cbdfa1c56840db6658b03a889f68c8
-          - label: pr11
-            revision: 3c45021c1721e5005c836fa61670fd955fed87b4
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.revision }}
+          ref: 6bca1e12970722a724bead95b93e50eecfef0549
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -52,7 +32,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: audit-${{ matrix.label }}
+          name: audit-main-latest
           path: /tmp/audit-result/
           retention-days: 7
           if-no-files-found: error
