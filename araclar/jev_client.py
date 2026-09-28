@@ -310,6 +310,25 @@ def _scores(raw, ids, allow_quantized=False, quantized_counter=None, question_ty
     return result
 
 
+# Provider budget/credit exhaustion (HTTP 402) will not heal within a hook turn;
+# pause calls instead of paying a failed round trip on every message.
+BUDGET_COOLDOWN_SECONDS=900
+
+
+def _budget_marker(vault):
+    root=Path(vault)/'.cache'
+    if root.is_symlink(): raise ValueError('cache_unsafe')
+    return root/'jev-butce-doldu'
+
+
+def _budget_paused(vault):
+    try:
+        marker=_budget_marker(vault)
+        return marker.is_file() and not marker.is_symlink() and 0<=time.time()-marker.stat().st_mtime<BUDGET_COOLDOWN_SECONDS
+    except (OSError,ValueError):
+        return False
+
+
 def _cache_path(vault, digest):
     root=Path(vault)/'.cache'
     folder=root/'jev'
@@ -417,9 +436,12 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
                 result['diagnostics'].append('cache_unavailable')
             key=(env.get('AI_GATEWAY_API_KEY') or env.get('TYPESAFE_API_KEY')) if config['provider']=='vercel' else env.get('TYPESAFE_API_KEY')
             if not key: raise ValueError('credentials_missing')
+            if _budget_paused(vault): raise ValueError('provider_budget_paused')
             remaining=deadline-time.monotonic()
             if remaining<=0: raise ValueError('deadline_exceeded')
             raw=(transport or _transport)(endpoint,body,key,remaining)
+            try: _budget_marker(vault).unlink(missing_ok=True)
+            except (OSError,ValueError): pass
             if time.monotonic()>deadline: raise ValueError('deadline_exceeded')
             # Usage can be valid even when typed answers fail; retain bounded counters.
             usage=raw.get('usage',{}) if isinstance(raw,dict) else {}
@@ -462,15 +484,21 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
         from jev_runtime import run
         result = run(vault, digest, deadline-time.monotonic(), resolve)
     except Exception as exc:
-        safe_codes={'config_invalid','env_file_invalid','endpoint_invalid','payload_invalid','budget_exceeded','answers_invalid','credentials_missing','deadline_exceeded','purpose_invalid','capacity_exceeded','coordination_unavailable','private_input'}
+        safe_codes={'config_invalid','env_file_invalid','endpoint_invalid','payload_invalid','budget_exceeded','answers_invalid','credentials_missing','deadline_exceeded','purpose_invalid','capacity_exceeded','coordination_unavailable','private_input','provider_budget_paused'}
         code=str(exc) if isinstance(exc,ValueError) and str(exc) in safe_codes else 'request_failed'
         if isinstance(exc,_AnswerInvalid):
             result['answer_issue']=exc.issue
             result['usage']=getattr(exc,'usage',{})
         if isinstance(exc,urllib.error.HTTPError):
             result['http_status']=exc.code if type(exc.code) is int and 100<=exc.code<=599 else None
-            code=({401:'http_unauthorized',403:'http_forbidden',429:'http_rate_limited'}.get(exc.code)
+            code=({401:'http_unauthorized',402:'http_budget_exceeded',403:'http_forbidden',429:'http_rate_limited'}.get(exc.code)
                   or ('http_server_error' if 500<=exc.code<=599 else 'http_error'))
+            if exc.code==402:
+                try:
+                    marker=_budget_marker(vault)
+                    marker.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+                    if not marker.is_symlink(): marker.write_text(str(int(time.time()))+'\n')
+                except (OSError,ValueError): pass
         elif isinstance(exc,(TimeoutError,socket.timeout)) or (isinstance(exc,urllib.error.URLError) and isinstance(exc.reason,(TimeoutError,socket.timeout))):
             code='deadline_exceeded'
         result.update(scores={},facet_scores={},distributions={},facet_distributions={},choices={},degraded=True)
