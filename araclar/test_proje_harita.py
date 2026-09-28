@@ -72,6 +72,29 @@ class ProjectMap(unittest.TestCase):
         result = maps.build(self.vault, write=True, today=dt.date(2026, 11, 1))
         self.assertEqual(result['projects'][0]['status'], 'arşiv adayı')
 
+    def test_receipt_line_shows_summary_not_header(self):
+        receipt = self.vault / 'gelen-kutusu/codex-oturumları/example.md'
+        receipt.write_text('# Oturum — 2026-09-20\n\n<!-- codex-receipt:x -->\n\nDurum: görev özeti.\n\n'
+                           'atlas testleri düzeltildi\n', encoding='utf-8')
+        maps.build(self.vault, write=True, today=self.today)
+        page = (self.vault / 'projeler/atlas/DURUM.md').read_text()
+        self.assertIn('· atlas testleri düzeltildi', page)
+        self.assertNotIn('· # Oturum', page)
+
+    def test_archived_project_without_page_gets_no_folder(self):
+        self.projects[1]['status'] = 'archived'
+        (self.vault / 'komuta/gorev-baglam.json').write_text(
+            json.dumps(dict(projects=self.projects)), encoding='utf-8')
+        maps.build(self.vault, write=True, today=self.today)
+        self.assertFalse((self.vault / 'projeler/old').exists())
+        home = (self.vault / 'Ana Sayfa.md').read_text()
+        self.assertIn('- old · ', home)
+        self.assertNotIn('[[projeler/old/DURUM]]', home)
+        (self.vault / 'projeler/old').mkdir()
+        (self.vault / 'projeler/old/DURUM.md').write_text('# eski\n', encoding='utf-8')
+        maps.build(self.vault, write=True, today=self.today)
+        self.assertIn('[[projeler/old/DURUM]]', (self.vault / 'Ana Sayfa.md').read_text())
+
     def test_claude_cwd_and_project_note_are_linked(self):
         folder = self.vault / 'gelen-kutusu/ajan-oturumlari'
         (folder / 'sample.json').write_text(json.dumps(dict(

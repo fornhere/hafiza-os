@@ -41,6 +41,14 @@ def _safe_line(value, limit=100):
     return line[:limit].replace('[[', '[').replace(']]', ']')
 
 
+def _summary_line(body):
+    for line in body.splitlines():
+        line = line.strip()
+        if line and not line.startswith(('#', '<!--', 'Durum:', '[[')):
+            return line
+    return ''
+
+
 def _link(path):
     return f'[[{Path(path).with_suffix("").as_posix()}]]'
 
@@ -135,10 +143,11 @@ def _receipts(vault):
         body = path.read_text(encoding='utf-8')
         first = body.splitlines()[0] if body else ''
         match = re.search(r'\d{4}-\d\d-\d\d', first)
+        summary = _summary_line(body)
         relative = path.relative_to(vault)
         event_date = event_dates.get(relative.as_posix())
         rows.append(dict(client='codex', path=relative, text=body,
-                         first=_safe_line(first), date=event_date or _date(match.group() if match else None),
+                         first=_safe_line(summary), date=event_date or _date(match.group() if match else None),
                          date_uncertain=event_date is None, cwd=''))
     folder = vault / 'gelen-kutusu/ajan-oturumlari'
     for path in sorted(folder.glob('*.json')):
@@ -255,9 +264,11 @@ def build(vault, write=False, today=None):
         lines += [f'- {_link(r["path"])} · {r["date"].isoformat() if r["date"] else "tarih bilinmiyor"}{" (tarih belirsiz)" if r.get("date_uncertain") else ""} · {r["first"]}'
                   for r in matching_receipts[:5]] or ['- Yok']
         relative = Path('projeler') / ident / 'DURUM.md'
-        plan.append(_put(vault, relative, PROJECT_START, PROJECT_END, '\n'.join(lines), write,
-                         f'# {ident} · Durum\n\n'))
-        summaries.append(dict(id=ident, status=status,
+        page = (vault / relative).exists() or status != 'arşiv'
+        if page:
+            plan.append(_put(vault, relative, PROJECT_START, PROJECT_END, '\n'.join(lines), write,
+                             f'# {ident} · Durum\n\n'))
+        summaries.append(dict(id=ident, status=status, page=page,
                               last_activity=last.isoformat() if last else None,
                               open_tasks=len(matching_tasks), notes=len(matching_notes),
                               receipts=len(matching_receipts)))
@@ -266,7 +277,8 @@ def build(vault, write=False, today=None):
         lines += ['### ' + title]
         group = sorted((s for s in summaries if s['status'] == status),
                        key=lambda s: (s['last_activity'] or '', s['id']), reverse=True)
-        lines += [f'- [[projeler/{s["id"]}/DURUM]] · {s["last_activity"] or "bilinmiyor"}' for s in group] or ['- Yok']
+        lines += ['- ' + (f'[[projeler/{s["id"]}/DURUM]]' if s['page'] else s['id'])
+                  + f' · {s["last_activity"] or "bilinmiyor"}' for s in group] or ['- Yok']
         lines.append('')
     plan.append(_put(vault, Path('Ana Sayfa.md'), HOME_START, HOME_END, '\n'.join(lines), write))
     return dict(files=plan, projects=summaries, diagnostics=diagnostics)
