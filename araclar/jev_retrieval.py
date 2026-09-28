@@ -218,22 +218,69 @@ def expand_query(query: str) -> list[str]:
 
 def loose_candidates(query, catalog, notes, limit=8):
     """Shared lexical preselection without rank_records' delivery thresholds."""
-    from gorev_baglam import content_words, word_match
+    return [(kind, row) for _, kind, row in _lexical_ranking(query, catalog, notes)[:limit]]
+
+
+# Assist only adds reading pointers. On the 2026-09-24 development set every
+# assist suggestion outside a lexically touched pool was wrong (0/19 catalog,
+# 1/8 note), while the whole-catalog request exceeded per-request limits.
+ASSIST_POOL = 24
+
+
+def assist_pool(query, catalog, notes, limit=ASSIST_POOL):
+    """Rows sharing a query or expanded term, in loose_candidates order.
+
+    Jev ranks this pool; it does not search outside it. An empty pool means the
+    advisor is not called at all, so unrelated prompts pay no network latency.
+    """
+    return [(kind, row) for touched, kind, row in _lexical_ranking(query, catalog, notes) if touched][:limit]
+
+
+def _synonym_groups(word):
+    from gorev_baglam import _SYNONYMS, inflected
+    return {i for i, group in enumerate(_SYNONYMS) if any(inflected(term, word) for term in group)}
+
+
+def _matching_words(term, vocabulary):
+    """Exactly {w for w in vocabulary if word_match(term, w)}, with cheap rejection.
+
+    inflected(base, word) needs word to start with a stem variant of base, and
+    every variant keeps base[:-2]; the synonym branch is tested per group.
+    """
+    from gorev_baglam import inflected
+    groups = _synonym_groups(term)
+    found = set()
+    for word in vocabulary:
+        if word == term or (groups and groups & _synonym_groups(word)):
+            found.add(word)
+        elif ((len(term) >= 4 and word.startswith(term[:-2]) and inflected(term, word)) or
+              (len(word) >= 4 and term.startswith(word[:-2]) and inflected(word, term))):
+            found.add(word)
+    return found
+
+
+def _lexical_ranking(query, catalog, notes):
+    from gorev_baglam import content_words
     terms = content_words(query)
     expanded = expand_query(query)
-    pool = []
+    documents = []
     for kind, rows in (('memory', catalog), ('note', notes)):
         for row in rows:
-            ident = row['memory_id'] if kind == 'memory' else row['id']
             fields = ' '.join(str(row.get(k, '')) for k in
                               ('statement', 'subject_key', 'title', 'rationale', 'conditions', 'exceptions'))
             if isinstance(row.get('arama_anahtarlari'), list):
                 fields += ' ' + ' '.join(k for k in row['arama_anahtarlari'] if isinstance(k, str))
-            words = content_words(fields)
-            overlap = sum(any(word_match(term, word) for word in words) for term in terms)
-            expanded_overlap = sum(any(word_match(term, word) for word in words) for term in expanded)
-            pool.append((-overlap, -expanded_overlap, kind, ident, row))
-    return [(kind, row) for _, _, kind, _, row in sorted(pool)[:limit]]
+            documents.append((kind, row, set(content_words(fields))))
+    # word_match is the costly part; test each (term, distinct word) pair once.
+    vocabulary = set().union(*(words for _, _, words in documents))
+    matching = {term: _matching_words(term, vocabulary) for term in set(terms) | set(expanded)}
+    pool = []
+    for kind, row, words in documents:
+        ident = row['memory_id'] if kind == 'memory' else row['id']
+        overlap = sum(bool(matching[term] & words) for term in terms)
+        expanded_overlap = sum(bool(matching[term] & words) for term in expanded)
+        pool.append((-overlap, -expanded_overlap, kind, ident, row))
+    return [(bool(overlap or expanded_overlap), kind, row) for overlap, expanded_overlap, kind, _, row in sorted(pool)]
 
 
 def _rerank_body(config, query, facets, cards, state, purpose='retrieval_rerank'):
@@ -264,6 +311,73 @@ def _rerank_packages(config, query, facets, cards, state, purpose='retrieval_rer
         else: oversized_ids.append(card['id'])
     if pending: packages.append(pending)
     return packages, oversized_ids
+
+
+MAX_PACKAGES = 3
+
+
+def packaged_evaluate(vault, query, candidates, *, facets, source_versions=None, scope='user',
+                      purpose='retrieval', lexical_order=None):
+    """Evaluate a whole eligible pool within per-request limits.
+
+    One request carries at most max_candidates cards and max_input_chars of
+    payload. A larger pool used to fail as budget_exceeded before any request;
+    it is now split into at most MAX_PACKAGES parallel requests. Only when even
+    that cannot hold the pool is it cut, keeping lexical_order's leading IDs.
+    Unscored IDs are listed in fallback_ids; degraded only if nothing scored.
+    """
+    try: config = jev_client.load_config(vault)
+    except (ValueError, OSError): config = None
+    def call(package):
+        return jev_client.evaluate(vault, query, package, source_versions=source_versions,
+                                   scope=scope, facets=facets, purpose=purpose)
+    if (config is None or jev_client.purpose_mode(config, purpose) == 'off' or not candidates
+            or not isinstance(facets, list) or not facets):
+        return call(candidates)
+    packages, oversized = _rerank_packages(config, query, facets, candidates, {}, purpose)
+    if len(packages) == 1 and not oversized:
+        return call(candidates)
+    diagnostics = ['budget_exceeded'] if oversized else []
+    if len(packages) > MAX_PACKAGES:
+        rank = {ident: i for i, ident in enumerate(lexical_order or [])}
+        ordered = sorted((c for c in candidates if c['id'] not in oversized),
+                         key=lambda c: (rank.get(c['id'], len(rank)), c['id']))
+        packages, extra = _rerank_packages(config, query, facets, ordered, {}, purpose)
+        oversized += extra
+        packages = packages[:MAX_PACKAGES]
+        diagnostics.append('pool_truncated')
+    if not packages:
+        return dict(mode=jev_client.purpose_mode(config, purpose), purpose=purpose, scores={}, facet_scores={},
+                    distributions={}, facet_distributions={}, choices={}, diagnostics=diagnostics or ['budget_exceeded'],
+                    degraded=True, cache_hit=False, usage={}, latency_ms=0, packages=[],
+                    fallback_ids=[c['id'] for c in candidates])
+    with ThreadPoolExecutor(max_workers=min(3, len(packages))) as executor:
+        futures = [executor.submit(copy_context().run, call, package) for package in packages]
+        evaluations = [future.result() for future in futures]
+    scored = {c['id'] for package, e in zip(packages, evaluations) if not e.get('degraded') for c in package}
+    result = dict(evaluations[0])
+    result.update(scores={}, facet_scores={}, distributions={}, facet_distributions={}, choices={},
+                  diagnostics=list(diagnostics), usage={},
+                  degraded=all(e.get('degraded') for e in evaluations),
+                  cache_hit=all(e.get('cache_hit', False) for e in evaluations),
+                  latency_ms=max(e.get('latency_ms', 0) for e in evaluations),
+                  quantized_probability_count=sum(e.get('quantized_probability_count', 0) for e in evaluations),
+                  packages=[dict(size=len(p), degraded=bool(e.get('degraded')),
+                                 diagnostics=list(e.get('diagnostics', []))) for p, e in zip(packages, evaluations)],
+                  fallback_ids=[c['id'] for c in candidates if c['id'] not in scored])
+    for evaluation in evaluations:
+        result['diagnostics'].extend(d for d in evaluation.get('diagnostics', []) if d not in result['diagnostics'])
+        for key in ('input_tokens', 'output_tokens'):
+            if key in evaluation.get('usage', {}):
+                result['usage'][key] = result['usage'].get(key, 0) + evaluation['usage'][key]
+        if evaluation.get('degraded'): continue
+        for key in ('scores', 'distributions', 'choices'): result[key].update(evaluation.get(key, {}))
+        for key in ('facet_scores', 'facet_distributions'):
+            for facet, values in evaluation.get(key, {}).items():
+                result[key].setdefault(facet, {}).update(values)
+    if result['fallback_ids'] and not result['degraded'] and 'package_fallback' not in result['diagnostics']:
+        result['diagnostics'].append('package_fallback')
+    return result
 
 
 def rerank(vault, query, catalog, project_id, state, budget):
@@ -436,9 +550,24 @@ def _knowledge(vault, query, project_id, budget, local):
     try: before = versions(vault, rows)
     except (OSError, ValueError):
         out = local(); out['jev'] = dict(mode=active, degraded=True, diagnostics=['source_changed_before_evaluation']); return out
-    candidates = [{k: r[k] for k in ('id', 'title', 'statement', 'scope', 'domains')} for r in rows]
-    result = jev_client.evaluate(vault, query, candidates, source_versions=before,
-                                 scope=f'project:{project_id}' if project_id else 'user', facets=[f['text'] for f in plan])
+    pool = rows
+    if active == 'assist':
+        pool = [row for _, row in assist_pool(query, [], rows)]
+        if not pool:
+            out = local()
+            out['jev'] = dict(mode=active, purpose='retrieval', degraded=False, scores={}, diagnostics=['assist_pool_empty'],
+                              suggested_ids=[], pool_size=0, latency_ms=0, cache_hit=False)
+            out['suggested_ids'] = []
+            return out
+    candidates = [{k: r[k] for k in ('id', 'title', 'statement', 'scope', 'domains')} for r in pool]
+    order = [row['id'] for _, row in loose_candidates(query, [], pool, len(pool))]
+    result = packaged_evaluate(vault, query, candidates, source_versions=before,
+                               scope=f'project:{project_id}' if project_id else 'user',
+                               facets=[f['text'] for f in plan], lexical_order=order)
+    if active == 'on' and result.get('fallback_ids') and not result.get('degraded'):
+        # Delivery must not silently skip unscored notes; assist only suggests.
+        result = dict(result, degraded=True)
+    if active == 'assist': result = dict(result, pool_size=len(pool))
     # Reject a response if source revisions changed during the network call.
     fresh, _ = b._rows(vault)
     fresh = [r for r in fresh if r['id'] in {d['id'] for d in rows}]
@@ -521,10 +650,22 @@ def _catalog(vault, query, eligible, local_rank, scope):
     import hafiza as h
     active = mode(vault)
     if active in ('off', 'rerank') or not eligible: return local_rank(eligible, query), None
+    pool = eligible
+    if active == 'assist':
+        pool = [row for _, row in assist_pool(query, eligible, [])]
+        if not pool:
+            return local_rank(eligible, query), dict(mode=active, purpose='retrieval', degraded=False, scores={},
+                                                     diagnostics=['assist_pool_empty'], suggested_ids=[], pool_size=0,
+                                                     latency_ms=0, cache_hit=False)
     mapped = [{ 'id':r['memory_id'], 'title':r['subject_key'], 'statement':r['statement'],
-                'scope':r['scope'], 'domains':['all']} for r in eligible]
-    source_versions = {r['memory_id']: h.statement_hash(str(r)) for r in eligible}
-    result = jev_client.evaluate(vault, query, mapped, source_versions=source_versions, scope=scope, facets=facets(query))
+                'scope':r['scope'], 'domains':['all']} for r in pool]
+    source_versions = {r['memory_id']: h.statement_hash(str(r)) for r in pool}
+    order = [row['memory_id'] for _, row in loose_candidates(query, pool, [], len(pool))]
+    result = packaged_evaluate(vault, query, mapped, source_versions=source_versions, scope=scope,
+                               facets=facets(query), lexical_order=order)
+    if active == 'on' and result.get('fallback_ids') and not result.get('degraded'):
+        result = dict(result, degraded=True)
+    if active == 'assist': result = dict(result, pool_size=len(pool))
     still_valid = []
     # Reload catalog metadata too: an in-flight result cannot revive a record
     # that was revoked or superseded while the advisor was working.
