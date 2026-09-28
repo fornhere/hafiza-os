@@ -991,50 +991,77 @@ class SecurityRegressionTests(unittest.TestCase):
             self.assertEqual(b._jev_verification(vault)['status'], 'verification_failed:endpoint_invalid')
 
     # 4. private_json: önce ACL, sonra içerik; her hata yolunda dosya kalmaz.
-    def test_private_json_restricts_windows_acl_before_any_content(self):
+    def _windows(self, *, whoami='host\\user', fail_run=None, observe=None):
+        """Sahte Windows: whoami/icacls taklidi; fail_run=n -> n. icacls çağrısı hata verir."""
+        calls = []
+        def output(*args, **kwargs):
+            if isinstance(whoami, BaseException): raise whoami
+            return whoami
+        def run(command, **kwargs):
+            calls.append(command)
+            if observe: observe(Path(command[1]))
+            if fail_run == len(calls):
+                return b.subprocess.CompletedProcess(command, 5)
+            if fail_run == -len(calls):
+                raise FileNotFoundError('icacls')
+            return b.subprocess.CompletedProcess(command, 0)
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.object(b, '_is_windows', return_value=True))
+        stack.enter_context(patch.object(b.subprocess, 'check_output', side_effect=output))
+        stack.enter_context(patch.object(b.subprocess, 'run', side_effect=run))
+        return stack, calls
+
+    def test_private_json_windows_secret_born_in_private_staging_before_content(self):
         target = self.root / 'keys' / 'jev.json'
         seen = []
-        def restrict(path):
-            seen.append((path, path.stat().st_size))
-        with patch.object(b, '_is_windows', return_value=True), \
-             patch.object(b, '_restrict_windows_acl', side_effect=restrict):
+        stack, calls = self._windows(observe=lambda item: seen.append(
+            (item.is_dir(), item.stat().st_size if item.is_file() else None, target.exists())))
+        with stack:
             b.private_json(target, {'TYPESAFE_API_KEY': 'synthetic-secret'})
-        self.assertEqual(seen, [(target, 0)])
+        staging, file = Path(calls[0][1]), Path(calls[1][1])
+        self.assertEqual(calls[0][2:], ['/inheritance:r', '/grant:r', 'host\\user:(OI)(CI)F'])
+        self.assertEqual(calls[1][2:], ['/inheritance:r', '/grant:r', 'host\\user:F'])
+        self.assertEqual(file.parent, staging)
+        self.assertEqual(staging.parent, target.parent)
+        # Dizin boşken, dosya henüz 0 bayt iken ve hedef henüz yokken daraltılır.
+        self.assertEqual(seen, [(True, None, False), (False, 0, False)])
         self.assertEqual(json.loads(target.read_text(encoding='utf-8')), {'TYPESAFE_API_KEY': 'synthetic-secret'})
+        self.assertEqual(sorted(p.name for p in target.parent.iterdir()), ['jev.json'])
 
-    def test_private_json_windows_acl_failures_leave_no_file(self):
-        failures = {
-            'whoami_missing': dict(check_output=FileNotFoundError('whoami')),
-            'whoami_failed': dict(check_output=b.subprocess.CalledProcessError(1, 'whoami')),
-            'whoami_empty': dict(check_output=''),
-            'icacls_missing': dict(check_output='host\\user', run=FileNotFoundError('icacls')),
-            'icacls_failed': dict(check_output='host\\user', run=b.subprocess.CompletedProcess([], 5)),
+    def test_private_json_windows_failures_leave_no_file_or_staging(self):
+        cases = {
+            'whoami_missing': dict(whoami=FileNotFoundError('whoami')),
+            'whoami_failed': dict(whoami=b.subprocess.CalledProcessError(1, 'whoami')),
+            'whoami_empty': dict(whoami=''),
+            'whoami_bad': dict(whoami='host\\user:(OI)'),
+            'icacls_dir_failed': dict(fail_run=1),
+            'icacls_dir_missing': dict(fail_run=-1),
+            'icacls_file_failed': dict(fail_run=2),
+            'icacls_file_missing': dict(fail_run=-2),
         }
-        for name, behaviour in failures.items():
+        for name, options in cases.items():
             with self.subTest(name):
-                target = self.root / 'acl' / (name + '.json')
-                def output(*args, **kwargs):
-                    value = behaviour['check_output']
-                    if isinstance(value, BaseException): raise value
-                    return value
-                def run(*args, **kwargs):
-                    value = behaviour.get('run', b.subprocess.CompletedProcess([], 0))
-                    if isinstance(value, BaseException): raise value
-                    return value
-                with patch.object(b, '_is_windows', return_value=True), \
-                     patch.object(b.subprocess, 'check_output', side_effect=output), \
-                     patch.object(b.subprocess, 'run', side_effect=run), \
-                     self.assertRaisesRegex(ValueError, 'Windows erişimi sınırlandırılamadı'):
+                folder = self.root / ('acl-' + name); folder.mkdir()
+                target = folder / 'secret.json'
+                stack, _ = self._windows(**options)
+                with stack, self.assertRaisesRegex(ValueError, 'Windows erişimi sınırlandırılamadı'):
                     b.private_json(target, {'MEM0_API_KEY': 'synthetic-secret'})
-                self.assertFalse(target.exists())
+                self.assertEqual(list(folder.iterdir()), [])
+        for name, failure in (('fsync', patch.object(b.os, 'fsync', side_effect=OSError('disk'))),
+                              ('rename', patch.object(b.os, 'rename', side_effect=OSError('busy')))):
+            with self.subTest(name):
+                folder = self.root / ('io-' + name); folder.mkdir()
+                stack, _ = self._windows()
+                with stack, failure, self.assertRaises(OSError):
+                    b.private_json(folder / 'secret.json', {'MEM0_API_KEY': 'synthetic-secret'})
+                self.assertEqual(list(folder.iterdir()), [])
 
-    def test_private_json_icacls_grants_only_current_identity(self):
-        target = self.root / 'acl-ok.json'
-        with patch.object(b, '_is_windows', return_value=True), \
-             patch.object(b.subprocess, 'check_output', return_value='host\\user\r\n'), \
-             patch.object(b.subprocess, 'run', return_value=b.subprocess.CompletedProcess([], 0)) as run:
+    def test_private_json_windows_never_overwrites_existing_target(self):
+        target = self.root / 'existing.json'; target.write_text('keep')
+        stack, calls = self._windows()
+        with stack, self.assertRaises(FileExistsError):
             b.private_json(target, {'k': 'v'})
-        self.assertEqual(run.call_args.args[0], ['icacls', str(target), '/inheritance:r', '/grant:r', 'host\\user:F'])
+        self.assertEqual(target.read_text(), 'keep'); self.assertEqual(calls, [])
 
     def test_private_json_write_or_serialization_failure_leaves_no_file(self):
         target = self.root / 'fail' / 'secret.json'

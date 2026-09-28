@@ -160,30 +160,33 @@ def _is_windows():
     return os.name == 'nt'
 
 
-def _restrict_windows_acl(path):
-    """Limit a new, still-empty file to the current user; every failure is fatal."""
+def _windows_identity():
     try:
         identity = subprocess.check_output(['whoami'], text=True, stderr=subprocess.DEVNULL).strip()
-        if not identity or any(c in identity for c in '\r\n:'):
-            raise ValueError(WINDOWS_ACL_ERROR)
-        result = subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r', identity + ':F'],
-                                capture_output=True)
+    except (OSError, ValueError, UnicodeError, subprocess.SubprocessError):
+        raise ValueError(WINDOWS_ACL_ERROR) from None
+    if not identity or any(c in identity for c in '\r\n:'):
+        raise ValueError(WINDOWS_ACL_ERROR)
+    return identity
+
+
+def _restrict_windows_acl(path, identity, *, inherit=False):
+    """Protected DACL: only the current user, no inherited entries; every failure is fatal."""
+    grant = identity + (':(OI)(CI)F' if inherit else ':F')
+    try:
+        result = subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r', grant], capture_output=True)
     except (OSError, ValueError, UnicodeError, subprocess.SubprocessError):
         raise ValueError(WINDOWS_ACL_ERROR) from None
     if result.returncode:
         raise ValueError(WINDOWS_ACL_ERROR)
 
 
-def private_json(path, data):
-    """Create a new private JSON file: permissions first, content last, no residue on failure."""
-    path = safe_path(path)
-    payload = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+def _write_new(path, payload, before_write=None):
+    """O_EXCL create, write and fsync; a partial file never survives a failure."""
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, 'O_BINARY', 0), 0o600)
     try:
-        if _is_windows():
-            # chmod does not provide a private Windows ACL; narrow it before any secret byte.
-            _restrict_windows_acl(path)
+        if before_write is not None:
+            before_write(path)
         with os.fdopen(fd, 'wb') as stream:
             fd = None
             stream.write(payload)
@@ -192,11 +195,56 @@ def private_json(path, data):
     except BaseException:
         if fd is not None:
             os.close(fd)
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            print('Uyarı: yarım kalan gizli dosya silinemedi: ' + str(path), file=sys.stderr)
+        _discard(path)
         raise
+
+
+def _discard(path):
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        print('Uyarı: yarım kalan gizli dosya silinemedi: ' + str(path), file=sys.stderr)
+
+
+def _private_json_windows(path, payload):
+    """Write inside a user-only staging directory, then move into place.
+
+    A handle opened on an inherited-ACL file before icacls runs would keep its
+    access; a file born inside an already private directory never has one.
+    """
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(str(path))
+    identity = _windows_identity()
+    staging = path.parent / ('.' + path.name + '.acl-' + uuid.uuid4().hex)
+    staging.mkdir()
+    temporary = staging / 'veri.json'
+    try:
+        _restrict_windows_acl(staging, identity, inherit=True)
+        # Born user-only inside the staging directory; made explicit and protected
+        # before the first secret byte so the moved file never re-inherits.
+        _write_new(temporary, payload, lambda item: _restrict_windows_acl(item, identity))
+        # os.rename (not replace) keeps O_EXCL semantics: it fails if the target exists.
+        os.rename(temporary, path)
+    except BaseException:
+        _discard(temporary)
+        raise
+    finally:
+        try:
+            staging.rmdir()
+        except OSError:
+            print('Uyarı: geçici gizli dizin silinemedi: ' + str(staging), file=sys.stderr)
+
+
+def private_json(path, data):
+    """Create a new private JSON file: permissions first, content last, no residue on failure."""
+    path = safe_path(path)
+    payload = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if _is_windows():
+        # chmod does not provide a private Windows ACL.
+        _private_json_windows(path, payload)
+    else:
+        _write_new(path, payload)
 
 
 def secret(prompt):
