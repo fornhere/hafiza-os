@@ -1,5 +1,6 @@
 """Source-validated task context with optional bounded Jev advice; no memory writes."""
 import datetime as dt
+import functools
 import math
 import hashlib
 import json
@@ -69,6 +70,8 @@ _SYNONYMS = ({'kapak', 'thumbnail'}, {'sunum', 'slayt', 'slideshow'},
 def content_words(text):
     return set(query_words(text)) - _STOPWORDS
 
+# Pure function of two words; ranking calls it terms x words x records times.
+@functools.lru_cache(maxsize=65536)
 def word_match(left, right):
     if inflected(left, right) or inflected(right, left): return True
     return any(any(inflected(term, left) for term in group) and
@@ -79,27 +82,44 @@ def search_text(row):
     keys = row.get('arama_anahtarlari')
     return ' '.join([row.get('statement', '')] + ([k for k in keys if isinstance(k, str)] if isinstance(keys, list) else []))
 
-def rank_records(rows, query, *, tie_break=None):
-    """Query coverage weighted by corpus rarity; order cannot affect selection."""
+def rank_records(rows, query, *, tie_break=None, ignore=()):
+    """Query coverage weighted by corpus rarity; order cannot affect selection.
+
+    `ignore` words (e.g. the selected project's name) are scope, not topic
+    evidence: they still match, but never count as one of the two independent
+    words a long query needs.
+    """
     terms = content_words(query)
+    scoped = {t for t in terms if any(word_match(t, w) for w in ignore)}
     documents = [(row, content_words(search_text(row))) for row in rows]
     frequencies = {term: sum(any(word_match(term, word) for word in words)
                              for _, words in documents) for term in terms}
-    informative = {term for term in terms if 0 < frequencies[term] < max(2, len(rows)*0.5)}
+    def rare(term): return 0 < frequencies[term] < max(2, len(rows)*0.5)
+    def weight(term): return 1 + math.log((len(rows) + 1) / (frequencies[term] + 1))
+    informative = {term for term in terms if rare(term)}
     # Without a distinguishing term, a word shared by most records (e.g. the
     # user's name) selects only when it covers at least half of the query.
     ranked = []
     for row, words in documents:
         matched = {term for term in terms if any(word_match(term, word) for word in words)}
         if not matched or (informative and not matched.intersection(informative)): continue
-        if not informative and 2 * len(matched) < len(terms): continue
+        score = sum(weight(term) for term in matched)
         # Long prompts share incidental words with almost every record; measured on
         # real prompts with erisim_olc.py, one overlapping word selected mostly noise.
-        if len(terms) > 3 and len(matched & informative if informative else matched) < 2: continue
-        score = sum(1 + math.log((len(rows) + 1) / (frequencies[term] + 1)) for term in matched)
+        anchors = (matched & informative if informative else matched) - scoped
+        weak = ((not informative and 2 * len(matched) < len(terms)) or
+                (len(terms) > 3 and len(anchors) < 2))
+        if weak: continue
         ranked.append((score, len(matched), row))
     return [row for _, _, row in sorted(ranked, key=lambda item:
             (-item[0], -item[1], tie_break(item[2]) if tie_break else item[2].get('memory_id', '')))]
+
+
+def project_terms(project):
+    """Specific project name words; generic workflow aliases stay topical."""
+    names = [str(project.get('id', '')).replace('-', ' ')]
+    names += [a for a in project.get('aliases', []) if isinstance(a, str)]
+    return frozenset(content_words(' '.join(names)) - _GENERIC)
 
 def task_intent(text):
     """Exclude skill packaging from topic matching, preserving ordinary user paths.
@@ -412,7 +432,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         ranked_catalog, knowledge_data, catalog_evaluation = [], None, None
     elif rerank_state is None:
         from jev_retrieval import catalog as semantic_catalog
-        catalog_future = submit(semantic_catalog, vault, query, eligible, rank_records, scope)
+        # Local ranking only; a semantic advisor keeps its own inputs.
+        local_rank = functools.partial(rank_records, ignore=project_terms(project) if project else ())
+        catalog_future = submit(semantic_catalog, vault, query, eligible, local_rank, scope)
         ranked_catalog, catalog_evaluation = catalog_future.result()
     else:
         from jev_retrieval import rerank

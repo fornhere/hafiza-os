@@ -1622,17 +1622,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "context":
-        from gorev_baglam import hydrate_remote, rank_records
+        from gorev_baglam import config as project_config, hydrate_remote, project_terms, rank_records
         errors = validate_catalog(vault, records)
         scope = args.scope
         if scope is None:
             # Hook ile aynı kural: sorudaki proje adı, yoksa çalışma klasörü.
-            from gorev_baglam import config as project_config, select_projects
+            from gorev_baglam import select_projects
             chosen, _ = select_projects(project_config(vault).get("projects", []), args.query, args.cwd or os.getcwd())
             scope = f"project:{chosen[0]['id']}" if len(chosen) == 1 else "user"
         project_id = scope.split(":", 1)[1] if scope.startswith("project:") else None
         valid = [row for row in records if retrievable(row, scope) and not context_record_errors(vault, row)]
-        ranked = rank_records(valid, args.query)
+        project = next((p for p in project_config(vault).get("projects", []) if p.get("id") == project_id), None)
+        ranked = rank_records(valid, args.query, ignore=project_terms(project) if project else ())
         results = [{'memory':row['statement'], 'metadata':row} for row in ranked]
         mode = 'local'; fallback = None
         if not args.local and (args.remote or mem0_config(vault).get("enabled", False)):
