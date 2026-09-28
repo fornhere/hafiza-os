@@ -9,6 +9,11 @@ from unittest.mock import patch
 import proje_harita as maps
 
 
+def absolute(posix):
+    """Platform-absolute fixture path; unchanged on POSIX, drive-rooted on Windows."""
+    return str(Path(Path.cwd().anchor, *posix.strip('/').split('/')))
+
+
 class ProjectMap(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -19,8 +24,8 @@ class ProjectMap(unittest.TestCase):
         (self.vault / 'gelen-kutusu/codex-oturumları').mkdir(parents=True)
         (self.vault / 'gelen-kutusu/ajan-oturumlari/.state').mkdir(parents=True)
         self.today = dt.date(2026, 9, 24)
-        self.projects = [dict(id='atlas', aliases=['atlas'], roots=['/workspace/atlas']),
-                         dict(id='old', aliases=['old'], roots=['/workspace/old'])]
+        self.projects = [dict(id='atlas', aliases=['atlas'], roots=[absolute('/workspace/atlas')]),
+                         dict(id='old', aliases=['old'], roots=[absolute('/workspace/old')])]
         (self.vault / 'komuta/gorev-baglam.json').write_text(
             json.dumps(dict(projects=self.projects)), encoding='utf-8')
         (self.vault / 'Ana Sayfa.md').write_text('# İnsan ana sayfası\n\nKalıcı metin.\n', encoding='utf-8')
@@ -101,7 +106,8 @@ class ProjectMap(unittest.TestCase):
             summary='Work completed', reviewed_ns=1790157600000000000)), encoding='utf-8')
         (folder / '.state/sample.json').write_text(json.dumps(dict(
             client='claude', count=6,
-            path='/users/example/.claude/projects/-workspace-atlas/session.jsonl')),
+            path='/users/example/.claude/projects/' + maps._claude_encoded(absolute('/workspace/atlas'))
+                 + '/session.jsonl')),
             encoding='utf-8')
         with patch.object(maps.bilgi_agi, '_rows', return_value=([
                 dict(id='rule', title='Project rule', scope='project:atlas')], [])):
@@ -113,27 +119,29 @@ class ProjectMap(unittest.TestCase):
         self.assertIn('[[gelen-kutusu/ajan-oturumlari/sample]]', body)
 
     def test_claude_encoded_root_keeps_literal_hyphens(self):
-        project = dict(id='hyphen', aliases=['other'], roots=['/workspace/a-b'])
+        self.assertEqual(maps._claude_encoded('/workspace/a-b'), '-workspace-a-b')
+        project = dict(id='hyphen', aliases=['other'], roots=[absolute('/workspace/a-b')])
         self.assertTrue(maps._claude_root_score(
-            '/users/example/.claude/projects/-workspace-a-b/session.jsonl', project))
+            '/users/example/.claude/projects/' + maps._claude_encoded(absolute('/workspace/a-b'))
+            + '/session.jsonl', project))
 
     def test_detect_candidate_rejects_home_single_session_and_filters_secret(self):
         when = self.today
-        items = [dict(cwd='/workspace/new/a', date=when, first='Plan next work', source='a'),
-                 dict(cwd='/workspace/new/b', date=when, first='sk-' + 'x' * 30, source='b'),
+        items = [dict(cwd=absolute('/workspace/new/a'), date=when, first='Plan next work', source='a'),
+                 dict(cwd=absolute('/workspace/new/b'), date=when, first='sk-' + 'x' * 30, source='b'),
                  dict(cwd=str(Path.home()), date=when, first='Home work', source='home1'),
                  dict(cwd=str(Path.home()), date=when, first='Home work', source='home2'),
-                 dict(cwd='/workspace/solo', date=when, first='Only one', source='solo'),
-                 dict(cwd='/workspace/atlas', date=when, first='Registered', source='known1'),
-                 dict(cwd='/workspace/atlas', date=when, first='Registered', source='known2'),
-                 dict(cwd='/users/example/scratch/workspaces/build', date=when,
+                 dict(cwd=absolute('/workspace/solo'), date=when, first='Only one', source='solo'),
+                 dict(cwd=absolute('/workspace/atlas'), date=when, first='Registered', source='known1'),
+                 dict(cwd=absolute('/workspace/atlas'), date=when, first='Registered', source='known2'),
+                 dict(cwd=absolute('/users/example/scratch/workspaces/build'), date=when,
                       first='Temporary', source='tmp1'),
-                 dict(cwd='/users/example/scratch/workspaces/build', date=when,
+                 dict(cwd=absolute('/users/example/scratch/workspaces/build'), date=when,
                       first='Temporary', source='tmp2')]
         result = maps.detect(self.vault, write=True,
                              now=dt.datetime(2026, 9, 24, tzinfo=dt.timezone.utc), sessions=items)
         self.assertEqual(len(result['candidates']), 1)
-        self.assertEqual(result['candidates'][0]['root'], '/workspace/new')
+        self.assertEqual(result['candidates'][0]['root'], absolute('/workspace/new'))
         self.assertEqual(result['candidates'][0]['sessions'], 2)
         view = (self.vault / 'komuta/proje-adaylari.md').read_text()
         self.assertNotIn('sk-' + 'x' * 30, view)

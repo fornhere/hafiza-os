@@ -114,7 +114,10 @@ def invoke(argv, prompt, timeout):
         except (BrokenPipeError, OSError):
             pass
         finally:
-            process.stdin.close()
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
 
     workers = [threading.Thread(target=drain, args=(process.stdout, buffers[0]), daemon=True),
                threading.Thread(target=drain, args=(process.stderr, buffers[1]), daemon=True),

@@ -7,6 +7,7 @@ import re
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
+import tempfile
 
 import bilgi_agi
 import capture_source
@@ -296,7 +297,8 @@ def _candidate_root(cwd):
     if not path.is_absolute() or '..' in path.parts:
         return None
     home = Path.home()
-    if path == home or path == Path('/') or path.is_relative_to(Path('/tmp')) or path.is_relative_to(Path('/var/tmp')):
+    temporary = (Path('/tmp'), Path('/var/tmp'), Path(tempfile.gettempdir()))
+    if path == home or path == Path(path.anchor) or any(path.is_relative_to(t) for t in temporary):
         return None
     if any(part.casefold() in {'scratch', 'scratchpad', 'workspaces', '.cache'}
            or 'scratch-workspace' in part.casefold() for part in path.parts):

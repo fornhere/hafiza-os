@@ -47,9 +47,12 @@ class SmartStructure(unittest.TestCase):
         self.assertEqual('arşiv', next(p['status'] for p in result['projects'] if p['id'] == 'old'))
 
     def test_claude_encoding_and_temporary_roots(self):
-        project = dict(roots=['/users/example/Hafıza/ikinci beyin'])
+        self.assertEqual(proje_harita._claude_encoded('/users/example/Hafıza/ikinci beyin'),
+                         '-users-example-Haf-za-ikinci-beyin')
+        root = str(Path(Path.cwd().anchor, 'users', 'example', 'Hafıza', 'ikinci beyin'))
         self.assertGreater(proje_harita._claude_root_score(
-            '/u/.claude/projects/-users-example-Haf-za-ikinci-beyin/session.jsonl', project), 0)
+            '/u/.claude/projects/' + proje_harita._claude_encoded(root) + '/session.jsonl',
+            dict(roots=[root])), 0)
         home = self.vault / 'home user'
         actual = home / 'Hafıza' / 'ikinci beyin'
         actual.mkdir(parents=True)
@@ -57,9 +60,13 @@ class SmartStructure(unittest.TestCase):
         with patch.object(Path, 'home', return_value=home):
             self.assertEqual(str(actual), proje_harita._claude_cwd(
                 '/u/.claude/projects/' + encoded + '/session.jsonl'))
+        anchor = Path(Path.cwd().anchor)
         for path in ('/users/example/Documents/Codex/2026-09-24/kan', '/tmp/work',
                      '/users/example/scratchpad/project',
-                     '/users/example/.config/Claude/scratch-workspaces/session'):
+                     '/users/example/.config/Claude/scratch-workspaces/session',
+                     str(anchor), str(Path(tempfile.gettempdir()) / 'work'),
+                     str(anchor / 'users/example/Documents/Codex/2026-09-24/kan'),
+                     str(anchor / 'users/example/scratchpad/project')):
             self.assertIsNone(proje_harita._candidate_root(path))
 
     def test_generated_note_block_is_not_searched(self):

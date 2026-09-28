@@ -274,7 +274,7 @@ class Lessons(unittest.TestCase):
   from unittest.mock import patch
   for filename,reason in [('source.md','source_changed'),('method.md','method_changed')]:
    with self.subTest(filename=filename),tempfile.TemporaryDirectory() as tmp:
-    v=Path(tmp);self.lesson_fixture(v);read_text=Path.read_text
+    v=Path(tmp).resolve();self.lesson_fixture(v);read_text=Path.read_text
     def unreadable(path,*args,**kwargs):
      if path==v/filename: raise PermissionError('unreadable fixture')
      return read_text(path,*args,**kwargs)
