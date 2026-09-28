@@ -1339,19 +1339,36 @@ def bind_source(vault, data, apply=False):
     return {"result": "bound" if apply else "planned", "binding": record}
 
 
+MEM0_HOST = "api.mem0.ai"
+
+
+class _Mem0NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: urllib would carry the Authorization header along."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        fp.close()
+        raise ValueError("redirect_rejected")
+
+
 class Mem0HttpClient:
     def __init__(self, api_key: str, user_id: str | None = None, timeout: int = 30):
         self.api_key = api_key
         self.user_id = resolve_user_id(user_id)
         self.timeout = timeout
-        self.base_url = "https://api.mem0.ai"
+        self.base_url = "https://" + MEM0_HOST
 
     def _request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
     ) -> Any:
+        url = self.base_url + path
+        parsed = urllib.parse.urlsplit(url)
+        # The key is bound to the official HTTPS origin, whatever base_url was set to.
+        if (parsed.scheme != "https" or parsed.hostname != MEM0_HOST or parsed.port not in (None, 443)
+                or parsed.username is not None or parsed.password is not None):
+            raise ValueError("endpoint_invalid")
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            self.base_url + path,
+            url,
             data=data,
             method=method,
             headers={
@@ -1361,7 +1378,8 @@ class Mem0HttpClient:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            opener = urllib.request.build_opener(_Mem0NoRedirect())
+            with opener.open(request, timeout=self.timeout) as response:
                 body = response.read().decode("utf-8")
                 return json.loads(body) if body else {}
         except urllib.error.HTTPError as exc:

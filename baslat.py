@@ -153,22 +153,98 @@ def prepare_obsidian(app_dir, system=None, machine=None):
     return {'status': 'downloaded', 'path': str(target), 'system': system}
 
 
+WINDOWS_ACL_ERROR = 'Anahtar dosyasının Windows erişimi sınırlandırılamadı.'
+
+
+def _is_windows():
+    return os.name == 'nt'
+
+
+def _windows_identity():
+    try:
+        identity = subprocess.check_output(['whoami'], text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, ValueError, UnicodeError, subprocess.SubprocessError):
+        raise ValueError(WINDOWS_ACL_ERROR) from None
+    if not identity or any(c in identity for c in '\r\n:'):
+        raise ValueError(WINDOWS_ACL_ERROR)
+    return identity
+
+
+def _restrict_windows_acl(path, identity, *, inherit=False):
+    """Protected DACL: only the current user, no inherited entries; every failure is fatal."""
+    grant = identity + (':(OI)(CI)F' if inherit else ':F')
+    try:
+        result = subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r', grant], capture_output=True)
+    except (OSError, ValueError, UnicodeError, subprocess.SubprocessError):
+        raise ValueError(WINDOWS_ACL_ERROR) from None
+    if result.returncode:
+        raise ValueError(WINDOWS_ACL_ERROR)
+
+
+def _write_new(path, payload, before_write=None):
+    """O_EXCL create, write and fsync; a partial file never survives a failure."""
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, 'O_BINARY', 0), 0o600)
+    try:
+        if before_write is not None:
+            before_write(path)
+        with os.fdopen(fd, 'wb') as stream:
+            fd = None
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        _discard(path)
+        raise
+
+
+def _discard(path):
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        print('Uyarı: yarım kalan gizli dosya silinemedi: ' + str(path), file=sys.stderr)
+
+
+def _private_json_windows(path, payload):
+    """Write inside a user-only staging directory, then move into place.
+
+    A handle opened on an inherited-ACL file before icacls runs would keep its
+    access; a file born inside an already private directory never has one.
+    """
+    if path.exists() or path.is_symlink():
+        raise FileExistsError(str(path))
+    identity = _windows_identity()
+    staging = path.parent / ('.' + path.name + '.acl-' + uuid.uuid4().hex)
+    staging.mkdir()
+    temporary = staging / 'veri.json'
+    try:
+        _restrict_windows_acl(staging, identity, inherit=True)
+        # Born user-only inside the staging directory; made explicit and protected
+        # before the first secret byte so the moved file never re-inherits.
+        _write_new(temporary, payload, lambda item: _restrict_windows_acl(item, identity))
+        # os.rename (not replace) keeps O_EXCL semantics: it fails if the target exists.
+        os.rename(temporary, path)
+    except BaseException:
+        _discard(temporary)
+        raise
+    finally:
+        try:
+            staging.rmdir()
+        except OSError:
+            print('Uyarı: geçici gizli dizin silinemedi: ' + str(staging), file=sys.stderr)
+
+
 def private_json(path, data):
+    """Create a new private JSON file: permissions first, content last, no residue on failure."""
     path = safe_path(path)
+    payload = (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-        json.dump(data, stream, ensure_ascii=False, indent=2)
-        stream.write('\n')
-        stream.flush()
-        os.fsync(stream.fileno())
-    if os.name == 'nt':
+    if _is_windows():
         # chmod does not provide a private Windows ACL.
-        identity = subprocess.check_output(['whoami'], text=True).strip()
-        result = subprocess.run(['icacls', str(path), '/inheritance:r', '/grant:r', identity + ':F'], capture_output=True)
-        if result.returncode:
-            path.unlink()
-            raise ValueError('Anahtar dosyasının Windows erişimi sınırlandırılamadı.')
+        _private_json_windows(path, payload)
+    else:
+        _write_new(path, payload)
 
 
 def secret(prompt):
@@ -375,9 +451,34 @@ def _service_report(target, updates, verification=None):
     return path, report
 
 
+def _outside_vault(path, vault):
+    """Reject a credential target that resolves to the vault or anywhere inside it."""
+    resolved = Path(os.path.realpath(path))
+    root = Path(os.path.realpath(vault))
+    for left, right in ((resolved, root), (Path(str(resolved).casefold()), Path(str(root).casefold()))):
+        if left == right or right in left.parents:
+            raise ValueError('Anahtar dizini hafıza kasasının dışında olmalı.')
+    return path
+
+
+def _credential_dir(vault, config_home):
+    """Installer-owned key directory for this vault; always resolved outside the vault."""
+    vault, config_home = safe_path(vault), safe_path(config_home)
+    ident = hashlib.sha256(str(vault).encode()).hexdigest()[:16]
+    return _outside_vault(config_home / 'hafiza-os' / ident, vault)
+
+
+JEV_PROVIDER_DEFAULTS = {
+    'vercel': {'model': 'typesafe-ai/jev', 'base_url': 'https://ai-gateway.vercel.sh/typesafe'},
+    'typesafe': {'model': 'jev-latest', 'base_url': 'https://api.typesafe.ai'},
+}
+
+
 def optional_services(vault, config_home, overwrite=False):
     """Preserve preferences and commit credentials, references and report together."""
     vault, config_home = safe_path(vault), safe_path(config_home)
+    # Validate the resolved key directory before reading, prompting or staging anything.
+    keys_dir = _credential_dir(vault, config_home)
     refs = {name: _service_path(vault / ('komuta/' + name + '.json'), vault)
             for name in ('mem0', 'jev')}
     # Read all affected metadata before even creating a staging file.
@@ -402,15 +503,13 @@ def optional_services(vault, config_home, overwrite=False):
     jev, provider = ask_jev()
     if not mem0 and not jev:
         return {} if overwrite else {'mem0': 'skipped', 'jev': 'skipped'}
-    ident = hashlib.sha256(str(vault).encode()).hexdigest()[:16]
-    keys_dir = config_home / 'hafiza-os' / ident
     writes, old_paths, result = [], [], {}
     for name, key in (('mem0', mem0), ('jev', jev)):
         if not key:
             if not overwrite:
                 result[name] = 'skipped'
             continue
-        path = _service_path(keys_dir / (name + '-' + uuid.uuid4().hex + '.json'), keys_dir)
+        path = _outside_vault(_service_path(keys_dir / (name + '-' + uuid.uuid4().hex + '.json'), keys_dir), vault)
         old_path = _managed_old_credential(existing[name], config_home)
         if old_path:
             old_paths.append(old_path)
@@ -423,10 +522,16 @@ def optional_services(vault, config_home, overwrite=False):
             credential = {'MEM0_API_KEY': key}
         else:
             vercel = provider == 'vercel'
+            official = JEV_PROVIDER_DEFAULTS[provider]
             if not refs[name].exists():
-                settings.update(mode='shadow' if overwrite else 'on',
-                                model='typesafe-ai/jev' if vercel else 'jev-latest',
-                                base_url='https://ai-gateway.vercel.sh/typesafe' if vercel else 'https://api.typesafe.ai')
+                settings.update(mode='shadow' if overwrite else 'on', **official)
+            elif settings.get('provider', 'typesafe') != provider:
+                # A provider switch must not keep sending the new key to the old provider's
+                # host; only installer/runtime defaults move, custom values are preserved.
+                previous = JEV_PROVIDER_DEFAULTS.get(settings.get('provider', 'typesafe'), {})
+                for field, runtime_default in (('base_url', 'https://api.typesafe.ai'), ('model', 'jev-1.13.0')):
+                    if settings.get(field, runtime_default) in (runtime_default, previous.get(field)):
+                        settings[field] = official[field]
             settings['provider'] = provider
             credential = {'AI_GATEWAY_API_KEY' if vercel else 'TYPESAFE_API_KEY': key}
         writes.extend(((path, credential), (refs[name], settings)))
@@ -592,7 +697,10 @@ def _jev_verification(vault, *, prefer_file=False):
         key, base = _jev_verification_credential(jev_client, config, info, prefer_file)
         if not key:
             raise ValueError('credentials_missing')
-        endpoint = jev_client._endpoint(base)
+        if not hasattr(jev_client, 'PROVIDER_HOSTS'):
+            # An older vault client cannot bind the key to the provider host; fail closed.
+            raise ValueError('endpoint_invalid')
+        endpoint = jev_client._endpoint(base, config['provider'], config.get('allow_custom_endpoint') is True)
         # A fixed synthetic request: no notes, retrieval, shared runtime or cache.
         body = dict(model=config['model'], state={'probe': 'Hafiza OS service verification probe.'},
                     questions={'verify': {'type': 'score', 'instructions': 'Score whether the probe identifies a service verification.',
@@ -657,8 +765,8 @@ def run(args):
     target = safe_path(args.vault)
     home = safe_path(args.client_home or Path.home())
     config_home = safe_path(args.config_home or home / '.config')
-    if config_home == target or target in config_home.parents:
-        raise ValueError('Anahtar dizini hafıza kasasının dışında olmalı.')
+    # The computed key directory, not only its parent, must stay outside the vault.
+    _credential_dir(target, config_home)
     if args.configure_services or args.verify_services:
         if args.configure_services and not interactive:
             raise ValueError('--configure-services --non-interactive ile kullanılamaz; anahtar soruları etkileşim gerektirir.')
