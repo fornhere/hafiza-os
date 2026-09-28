@@ -1068,12 +1068,28 @@ def context_with_notes(vault: Path, package: dict[str, Any], *, scope: str | Non
     return attach_notes(package, notes, limit=limit, char_budget=char_budget)
 
 
+def knowledge_notes(vault: Path, query: str, project_id: str | None) -> list[dict[str, Any]]:
+    """İncelenmiş bilgi/ notlarını hook'un görev paketiyle aynı seçimle döndürür.
+
+    Kapsam, kaynak sürümü ve konu kapıları konu_sentezi/bilgi_agi'de uygulanır;
+    ham işletim belgeleri (DURUM, komuta) varsayılan bağlama girmez.
+    """
+    from konu_sentezi import retrieve
+    result = retrieve(vault, query, project_id=project_id, budget=1800)
+    return [{"path": f"bilgi/{row['id']}.md", "anchor": row["id"], "score": 1.0,
+             "excerpt": re.sub(r"\s+", " ", str(row.get("statement", ""))).strip()[:NOTE_EXCERPT_LIMIT],
+             "modified": note_modified(vault / "bilgi" / f"{row['id']}.md")}
+            for row in result.get("records", []) if row.get("id")]
+
+
 def context_package_with_notes(vault: Path, results: list[dict[str, Any]], *, query: str,
                                scope: str | None = None, uris: list[str] | None = None,
                                limit: int = 5, char_budget: int = 1200,
-                               records: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                               records: list[dict[str, Any]] | None = None,
+                               notes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Katalog ve not satırları ayrı paylarla; notlar tek havuzda ezilmez."""
-    notes = search_notes(vault, query, scope=scope, uris=uris)
+    if notes is None:
+        notes = search_notes(vault, query, scope=scope, uris=uris)
     package = context_from_results(results, query=query, scope=scope, limit=limit,
                                    char_budget=catalog_budget(char_budget, bool(notes)),
                                    records=records)
@@ -1526,9 +1542,12 @@ def _build_parser() -> argparse.ArgumentParser:
     context.add_argument("query")
     context.add_argument("--local", action="store_true", help="Bu çağrıda Mem0 erişimini kapat")
     context.add_argument("--remote", action="store_true", help="İsteğe bağlı Mem0 sıralaması; hata halinde yerel erişim")
-    context.add_argument("--scope", default="user")
+    context.add_argument("--scope", default=None,
+                         help="user veya project:<id>; verilmezse sorudaki proje adı ya da çalışma klasöründen bulunur")
+    context.add_argument("--cwd", help="Proje tespiti için çalışma klasörü (varsayılan: geçerli klasör)")
     context.add_argument("--uri", action="append", default=[],
-                         help="Not gövdesi taraması için kasa köküne göreli dizin (tekrarlanabilir)")
+                         help="Ham not gövdesi taraması için kasa köküne göreli dizin (tekrarlanabilir); "
+                              "verilmezse yalnız incelenmiş bilgi/ notları kullanılır")
     context.add_argument("--limit", type=int, default=5)
     context.add_argument("--char-budget", type=int, default=1200)
     context.add_argument("--threshold", type=float, default=0.1)
@@ -1605,7 +1624,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "context":
         from gorev_baglam import hydrate_remote, rank_records
         errors = validate_catalog(vault, records)
-        valid = [row for row in records if retrievable(row, args.scope) and not context_record_errors(vault, row)]
+        scope = args.scope
+        if scope is None:
+            # Hook ile aynı kural: sorudaki proje adı, yoksa çalışma klasörü.
+            from gorev_baglam import config as project_config, select_projects
+            chosen, _ = select_projects(project_config(vault).get("projects", []), args.query, args.cwd or os.getcwd())
+            scope = f"project:{chosen[0]['id']}" if len(chosen) == 1 else "user"
+        project_id = scope.split(":", 1)[1] if scope.startswith("project:") else None
+        valid = [row for row in records if retrievable(row, scope) and not context_record_errors(vault, row)]
         ranked = rank_records(valid, args.query)
         results = [{'memory':row['statement'], 'metadata':row} for row in ranked]
         mode = 'local'; fallback = None
@@ -1613,15 +1639,18 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 client = Mem0HttpClient(load_api_key(vault), user_id=resolve_user_id(args.user_id or mem0_config(vault).get("user_id")))
                 remote = client.search_memories(args.query, filters={'user_id':client.user_id}, top_k=max(args.limit*3,args.limit), threshold=args.threshold)
-                remote_results = hydrate_remote(vault, remote, args.scope)
+                remote_results = hydrate_remote(vault, remote, scope)
                 seen = {item['metadata']['memory_id'] for item in remote_results}
                 results = remote_results + [item for item in results if item['metadata']['memory_id'] not in seen]
                 mode = 'remote+local'
             except (Exception,) as exc:
                 fallback = type(exc).__name__
+        # Ham Markdown taraması yalnız --uri ile açıkça istenir; varsayılan not
+        # kanalı incelenmiş bilgi/ kayıtlarıdır (gerçek istemlerde ham tarama gürültüydü).
         result = context_package_with_notes(
-            vault, results, query=args.query, scope=args.scope, uris=args.uri,
+            vault, results, query=args.query, scope=scope, uris=args.uri,
             limit=args.limit, char_budget=args.char_budget, records=records,
+            notes=None if args.uri else knowledge_notes(vault, args.query, project_id),
         )
         result.update(mode=mode, fallback_reason=fallback, catalog_errors=errors)
         _json_print(result)

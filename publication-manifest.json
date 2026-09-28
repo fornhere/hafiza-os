@@ -37,8 +37,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Shared category, note-search, scope-aware duplicate/conflict and condition-safe context logic; public installer supports vault-scoped external Mem0 credentials and optional automatic remote lookup, while private runtime keeps its fixed identity and legacy credential source with explicit remote lookup.",
-      "local_sha256": "18b9fb4307b95b5279303b69a8f622e98c4259ed64f90369218c30e459b7ab6d",
-      "public_sha256": "77a8bdb50eed4097b149e4097cea332a1a75ff2c87b6ce391595767de2257274"
+      "local_sha256": "02d6e0a147f5cec60548901d8db183cf7a1b4fdfc9ce52cac4a2e7d04530fa66",
+      "public_sha256": "097ac2a6a328015075fd675dd11510bbc731a817a03bd2a792bb87ed5eee7188"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -207,6 +207,10 @@
     },
     {
       "path": "araclar/test_capture_privacy_marker.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_context_bilgi.py",
       "mode": "shared"
     }
   ]
