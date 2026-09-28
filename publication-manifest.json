@@ -212,6 +212,14 @@
     {
       "path": "araclar/test_context_bilgi.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/skill_esitlik.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_skill_esitlik.py",
+      "mode": "shared"
     }
   ]
 }
