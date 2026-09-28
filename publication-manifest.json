@@ -236,6 +236,10 @@
     {
       "path": "araclar/test_guvenlik_baglama.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/test_jev_procedures.py",
+      "mode": "shared"
     }
   ]
 }
