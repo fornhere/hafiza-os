@@ -11,9 +11,56 @@ Obsidian indirme ve ajan bağlantısı aynı akışta yapılır. Mem0 ve Jev sor
 Enter ile geçebilirsin. Başarı özeti `komuta/kurulum-sonucu.json` içindedir;
 `configured_unverified` bağlantı ayarının yazıldığı, API'nin henüz denenmediği
 anlamına gelir. Obsidian indirmesi başarısızsa hafıza kurulumu devam eder ve
-özette ayrı gösterilir. Anahtarı gerçekten test etmek istersen
-`python3 baslat.py --vault ~/Hafiza --verify-services` çalıştır; sonuç
-`verified` veya `verification_failed:<neden>` olarak aynı dosyaya işlenir.
+özette ayrı gösterilir.
+
+## Servisleri sonradan ayarla ve doğrula
+
+Mevcut kasada anahtar eklemek veya yenilemek için:
+
+```bash
+python3 baslat.py --vault ~/Hafiza --configure-services
+```
+
+Bu servis komutlarında güvendiğin kendi kasanı seç; kurucunun yanında istemci
+modülleri yoksa seçilen kasanın `araclar/` dizinindeki Python kodu çalıştırılır.
+
+Anahtar girmeden geçtiğin servis değişmez. Mevcut ayarlarda yalnız bağlantı
+bilgileri ve seçtiğin Mem0 kullanıcı kimliği güncellenir; Jev'in `mode`,
+`*_mode`, özel adres, zaman aşımı ve diğer tercihleri korunur. Mem0 kullanıcı
+kimliğinde Enter mevcut değeri korur. Anahtar yenilemek kapalı Jev modlarını
+açmaz; mevcut kasada henüz Jev ayarı yoksa `mode=shadow` ile oluşturur. Bu
+komut etkileşim gerektirir.
+
+Anahtar, ayar ve rapor dosyaları atomik dosya değişimleriyle güncellenir;
+yakalanan yazma hatasında eski durum geri yüklenir. Geri alma da başarısız
+olursa yedek dosyalar korunur ve hata bildirilir. Eski anahtar dosyası
+başarılı güncellemeden sonra yalnız kurucunun yönettiği
+`config_home/hafiza-os/<hash>/` yolundaysa kaldırılmaya çalışılır. Temizlik
+başarısızsa uyarı verilir ve eski dosya kalır; yönetilmeyen dosyalar korunur.
+
+Anahtarı canlı denemek için `--verify-services` çalıştır. Aynı komutta iki
+bayrağı kullanırsan devre dışı olmayan servislerde yeni yazılan dosyadaki
+anahtar doğrulanır; terminaldeki eski ortam anahtarı onun yerine kullanılmaz:
+
+```bash
+python3 baslat.py --vault ~/Hafiza --verify-services
+python3 baslat.py --vault ~/Hafiza --configure-services --verify-services
+```
+
+Doğrulama her servisi ayrı değerlendirir ve seçilen kaynağı `file`,
+`environment` veya `env_file` olarak, anahtar değerini veya dosya yolunu
+göstermeden bildirir. Kaynak terminalde ve raporun `service_verification`
+alanında görünür; tek başına doğrulamada ortam anahtarı önceliklidir. Jev
+önbelleği ve `retrieval_mode=assist` veya `off` bu denemeyi atlatamaz;
+`mode=shadow` da denenir. Mem0 kapalıysa veya Jev `mode=off` ise istek yapılmaz.
+İstek yalnız sabit deneme metni ve Mem0 için kullanıcı kimliğini kullanır;
+kişisel notları göndermez.
+
+`komuta/kurulum-sonucu.json` her servis için `not_configured` (ayar yok),
+`disabled` (kapalı), `config_invalid` (ayar bozuk),
+`verification_failed:<kod>` (anahtar yükleme veya canlı deneme başarısız) ya da
+`verified` (seçilen anahtarla gerçek istek ve geçerli yanıt) durumunu kaydeder.
+Bir servisin bozuk ayarı diğerinin denenmesini engellemez.
 
 ## 1. Kasayı hazırla ve ajanı bağla
 

@@ -101,7 +101,8 @@ Kurucu sırayla:
    Her iki soruda da **Enter** ile atlayabilirsin.
 6. Ajanın kasa yönerge bağlantısını kurar ve sıradaki adımı gösterir.
 
-API anahtarları gizli girişle alınır; kasanın ve Git'in dışında saklanır.
+API anahtarları gizli girişle alınır; varsayılan anahtar dizini
+`~/.config/hafiza-os/` altındadır.
 Mem0 girersen kullanıcı kimliği de sorulur ve uzak arama etkinleştirilir.
 Jev girersen seçtiğin sağlayıcının bağlantısı `on` olarak ayarlanır. Vercel
 anahtarı Vercel AI Gateway’e, TypeSafe anahtarı doğrudan TypeSafe’e gider.
@@ -135,22 +136,60 @@ kasayı veya ajan bağlantısını hiç etkilemeyen ayrı bir bayrak kullan:
 python3 baslat.py --vault ~/Hafiza --configure-services
 ```
 
-Yalnız seçtiğin servis(ler) güncellenir; diğerinin durumu değişmeden kalır.
-Var olan bir anahtarın üzerine yazarsan eskisi silinir. Bu bayrak etkileşim
-gerektirir, `--non-interactive` ile birlikte kullanılamaz.
+Bu servis komutlarında güvendiğin kendi kasanı seç; kurucunun yanında istemci
+modülleri yoksa seçilen kasanın `araclar/` dizinindeki Python kodu çalıştırılır.
+
+Yalnız anahtar girdiğin servisler güncellenir. Mevcut servis ayarları korunur;
+Jev'in `mode` ve `*_mode` tercihleri anahtar yenilenince açılmaz. Özel
+`base_url`, `env_file`, zaman aşımı, önbellek ve sıralama ayarları da korunur.
+Mem0 kullanıcı kimliği sorusunda Enter mevcut kimliği korur. Mevcut kasada
+henüz Jev ayarı yoksa `mode=shadow` ile oluşturulur.
+
+Yeni anahtar önce aynı dizindeki geçici dosyaya yazılır; anahtar dosyası,
+servis ayarı ve `komuta/kurulum-sonucu.json` atomik dosya değişimleriyle
+güncellenir. Yakalanan yazma hatasında önceki anahtar, ayar ve rapor geri
+yüklenir; geri alma da başarısız olursa yedek dosyalar korunur ve hata bildirilir.
+Eski anahtar dosyası, güncelleme tamamlandıktan sonra yalnız
+kurucunun yönettiği `config_home/hafiza-os/<hash>/` yolundaysa kaldırılmaya
+çalışılır. Temizlik başarısızsa uyarı verilir ve eski dosya kalır; diğer
+konumlardaki dosyalar da korunur. Bu bayrak etkileşim gerektirir,
+`--non-interactive` ile birlikte kullanılamaz.
 
 Anahtarın gerçekten çalışıp çalışmadığını görmek istersen (kurulum anahtarı
-canlı denemez, yalnız kaydeder), `--verify-services` ile Mem0/Jev'e gerçek,
-küçük bir istek gönder ve sonucu `komuta/kurulum-sonucu.json`'a `verified` /
-`verification_failed:<neden>` olarak işle:
+canlı denemez, yalnız kaydeder), `--verify-services` ile yapılandırılmış ve
+devre dışı olmayan Mem0/Jev bağlantılarına gerçek, küçük bir istek gönder:
 
 ```bash
 python3 baslat.py --vault ~/Hafiza --verify-services
 ```
 
-`--configure-services` ile birlikte de kullanılabilir; o zaman yeni girdiğin
-anahtar hemen ardından test edilir. Yapılandırılmamış bir servis atlanır,
-sorgu içeriği gönderilmez.
+Sonuçlar her servis için ayrı değerlendirilir; birinin bozuk ayarı diğerinin
+doğrulanmasını engellemez. `komuta/kurulum-sonucu.json` şu durumları kaydeder:
+
+| Durum | Anlamı |
+|---|---|
+| `not_configured` | Servis ayarı yok; istek yapılmadı. |
+| `disabled` | Mem0 kapalı veya Jev `mode=off`; istek yapılmadı. |
+| `config_invalid` | Ayar okunamadı veya geçersiz; istek yapılmadı. |
+| `verification_failed:<kod>` | Anahtar yüklenemedi veya canlı deneme başarısız oldu. |
+| `verified` | Seçilen anahtarla gerçek istek tamamlandı ve geçerli yanıt alındı. |
+
+Jev `mode=shadow` iken de doğrulanır; `retrieval_mode=assist` veya `off`
+doğrulamayı atlatmaz. Doğrulama önbelleği ve bu çalışma tercihlerini
+kullanmaz, tercihleri değiştirmez.
+İstekler sabit deneme metni kullanır; kişisel notlar gönderilmez. Mem0 ayrıca
+yapılandırılmış kullanıcı kimliğini gönderir. Anahtarın hangi kaynaktan
+(`file`, `environment` veya `env_file`) seçildiği sır değeri veya dosya yolu
+olmadan terminalde ve raporun `service_verification` alanında bildirilir.
+Tek başına doğrulamada ortam anahtarı önceliklidir.
+
+İki bayrağı birlikte kullanırsan devre dışı olmayan servislerde yeni kaydedilen
+anahtar dosyası hemen test edilir; `MEM0_API_KEY`, `TYPESAFE_API_KEY` veya
+`AI_GATEWAY_API_KEY` ortam değişkenleri yeni anahtarı gölgelemez:
+
+```bash
+python3 baslat.py --vault ~/Hafiza --configure-services --verify-services
+```
 
 Kurucu, mevcut Codex/Claude/Antigravity Hafıza OS yönerge bağlantısını veya
 kullanıcı klasöründeki `Hafiza` / `Hafıza` kasasını bulursa indirmeden durur.

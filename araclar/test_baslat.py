@@ -2,6 +2,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -207,6 +208,18 @@ class SetupTests(unittest.TestCase):
         self.args.agent=None
         with self.assertRaises(ValueError):self.install()
 
+class ServiceTests(unittest.TestCase):
+    """Service regressions use small local fixtures and fake carriers only."""
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.args = argparse.Namespace(agent='codex', vault=str(self.root / 'örnek kasa'),
+            client_home=str(self.root / 'client'), config_home=str(self.root / 'secrets'),
+            revision='a' * 40, non_interactive=True, skip_obsidian=True,
+            configure_services=False, verify_services=False)
+        self.environment = patch.dict(os.environ, {}, clear=True)
+        self.environment.start(); self.addCleanup(self.environment.stop)
+
     def _fixture_vault(self, name):
         vault = self.root / name
         (vault / 'araclar').mkdir(parents=True)
@@ -289,13 +302,13 @@ class SetupTests(unittest.TestCase):
             def __init__(self, key, user_id=None): self.user_id = user_id
             def search_memories(self, *a, **k): return []
         with patch.object(hafiza, 'Mem0HttpClient', OkClient):
-            self.assertEqual(b._mem0_verification(vault), {'status': 'ok'})
+            self.assertEqual(b._mem0_verification(vault), {'status': 'verified', 'credential_source': 'file'})
 
         class FailingClient:
             def __init__(self, key, user_id=None): self.user_id = user_id
             def search_memories(self, *a, **k): raise RuntimeError('Mem0 HTTP 401: {"detail":"Invalid API key."}')
         with patch.object(hafiza, 'Mem0HttpClient', FailingClient):
-            self.assertEqual(b._mem0_verification(vault), {'status': 'failed', 'diagnostic': 'http_401'})
+            self.assertEqual(b._mem0_verification(vault)['status'], 'verification_failed:http_401')
 
     def test_verify_jev_reports_success_and_failure_without_leaking_key(self):
         vault = self._fixture_vault('jevli')
@@ -306,14 +319,13 @@ class SetupTests(unittest.TestCase):
             self.assertNotIn('dummy-jev-key', json.dumps(body))
             return {'answers': {q: {'type': 'score', 'score': 1.0} for q in body['questions']}}
         with patch.object(jev_client, '_transport', side_effect=ok_transport):
-            self.assertEqual(b._jev_verification(vault), {'status': 'ok'})
-        shutil.rmtree(vault / '.cache' / 'jev')  # bypass the response cache to exercise the failure path
+            self.assertEqual(b._jev_verification(vault), {'status': 'verified', 'credential_source': 'file'})
 
         def failing_transport(url, body, key, timeout):
-            raise urllib.error.HTTPError(url, 401, 'Unauthorized', {}, None)
+            raise self._http_error(url, 401)
         with patch.object(jev_client, '_transport', side_effect=failing_transport):
             result = b._jev_verification(vault)
-        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['status'], 'verification_failed:http_unauthorized')
         self.assertNotIn('dummy-jev-key', json.dumps(result))
 
     def test_report_verification_updates_only_verified_services(self):
@@ -323,10 +335,10 @@ class SetupTests(unittest.TestCase):
         report.write_text(json.dumps({'services': {'mem0': 'configured_unverified', 'jev': 'skipped'}}))
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            b.report_verification(vault, {'mem0': {'status': 'ok'}, 'jev': {'status': 'not_configured'}})
+            b.report_verification(vault, {'mem0': {'status': 'verified', 'credential_source': 'file'}, 'jev': {'status': 'not_configured'}})
         updated = json.loads(report.read_text())['services']
         self.assertEqual(updated['mem0'], 'verified')
-        self.assertEqual(updated['jev'], 'skipped')  # untouched, not configured so nothing to verify
+        self.assertEqual(updated['jev'], 'not_configured')  # stale service state must not survive verification
         self.assertIn('canlı doğrulama başarılı', output.getvalue())
 
     def test_verify_services_flag_via_run_does_not_require_agent_or_download(self):
@@ -337,5 +349,529 @@ class SetupTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 b.run(self.args)
             download.assert_not_called(); get_json.assert_not_called()
+
+    def _write_json(self, path, value, mode=0o600):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        path.chmod(mode)
+        return path
+
+    def _managed_dir(self, vault, config_home=None):
+        ident = hashlib.sha256(str(vault).encode()).hexdigest()[:16]
+        return (config_home or self.root / 'secrets') / 'hafiza-os' / ident
+
+    def _configured_vault(self, name='configured', *, jev_mode='shadow', retrieval_mode='off'):
+        vault = self._fixture_vault(name)
+        keys = self._managed_dir(vault)
+        mem0_key = self._write_json(keys / 'mem0.json', {'MEM0_API_KEY': 'old-mem0'})
+        jev_key = self._write_json(keys / 'jev.json', {'TYPESAFE_API_KEY': 'old-jev'})
+        self._write_json(vault / 'komuta/mem0.json',
+                         {'enabled': True, 'user_id': 'existing-user', 'credentials_file': str(mem0_key)}, 0o640)
+        self._write_json(vault / 'komuta/jev.json',
+                         {'mode': jev_mode, 'retrieval_mode': retrieval_mode, 'provider': 'typesafe',
+                          'model': 'jev-latest', 'credentials_file': str(jev_key)}, 0o640)
+        self._write_json(vault / 'komuta/kurulum-sonucu.json',
+                         {'agent': 'codex', 'custom': {'preserve': [1, 'ı']},
+                          'services': {'mem0': 'verified', 'jev': 'verified'}}, 0o640)
+        return vault
+
+    def _configure(self, vault, *, mem0='new-mem0', jev='new-jev', provider='typesafe'):
+        with patch.object(b, 'ask_mem0', return_value=(mem0, 'existing-user')), \
+             patch.object(b, 'ask_jev', return_value=(jev, provider)), \
+             contextlib.redirect_stdout(io.StringIO()):
+            return b.configure_services(vault, self.root / 'secrets')
+
+    def _file_snapshot(self):
+        return {str(path.relative_to(self.root)): (path.read_bytes(), stat.S_IMODE(path.stat().st_mode))
+                for path in self.root.rglob('*') if path.is_file() and not path.is_symlink()}
+
+    @staticmethod
+    def _ok_jev_transport(url, body, key, timeout):
+        return {'answers': {question: {'type': 'score', 'score': 1.0} for question in body['questions']}}
+
+    @staticmethod
+    def _http_error(url, status, message='Unauthorized'):
+        error = urllib.error.HTTPError(url, status, message, {}, None)
+        error.close()
+        return error
+
+    def test_rotation_preserves_all_custom_jev_settings_and_existing_modes(self):
+        custom = dict(jev_client.DEFAULTS, mode='shadow', retrieval_mode='assist', procedure_mode='shadow',
+                      claude_hook_mode='off', task_mapping_mode='shadow', base_url='https://custom.invalid/jev',
+                      model='jev-custom-model', rubric_version='custom-v2', timeout=4.75, cache_ttl=7200,
+                      max_candidates=7, max_questions=21, max_input_chars=18000,
+                      rerank_threshold=1.2, rerank_p2=0.4, rerank_gate_threshold=0.3,
+                      rerank_gate_scope='all', rerank_limit=2, rerank_candidates=12, rerank_facets=False,
+                      env_file=str(self.root / 'user.env'))
+        for mode in ('off', 'shadow', 'on'):
+            with self.subTest(mode=mode):
+                vault = self._configured_vault('custom-' + mode)
+                path = vault / 'komuta/jev.json'
+                before = json.loads(path.read_text()) | custom | {'mode': mode}
+                self._write_json(path, before)
+                self._configure(vault, mem0='')
+                after = json.loads(path.read_text())
+                self.assertEqual({k: v for k, v in after.items() if k != 'credentials_file'},
+                                 {k: v for k, v in before.items() if k != 'credentials_file'})
+                self.assertEqual(json.loads(Path(after['credentials_file']).read_text()),
+                                 {'TYPESAFE_API_KEY': 'new-jev'})
+
+    def test_rotation_preserves_disabled_mem0_and_defaults_to_existing_user_id(self):
+        vault = self._configured_vault()
+        path = vault / 'komuta/mem0.json'
+        original = json.loads(path.read_text()) | {'enabled': False}
+        self._write_json(path, original)
+        output = io.StringIO()
+        with patch('builtins.input', side_effect=['1', '']) as ask, \
+             patch.object(b, 'secret', return_value='new-mem0'), \
+             patch.object(b, 'ask_jev', return_value=('', None)), contextlib.redirect_stdout(output):
+            b.configure_services(vault, self.root / 'secrets')
+        updated = json.loads(path.read_text())
+        self.assertEqual(updated['user_id'], 'existing-user')
+        self.assertFalse(updated['enabled'])
+        self.assertIn('existing-user', ask.call_args_list[-1].args[0])
+
+    def test_configure_new_jev_in_existing_vault_never_enables_on_mode(self):
+        vault = self._fixture_vault('no-existing-config')
+        self._configure(vault, mem0='')
+        config = json.loads((vault / 'komuta/jev.json').read_text())
+        self.assertNotEqual(config.get('mode'), 'on')
+        self.assertFalse(any(value == 'on' for key, value in config.items() if key.endswith('_mode')))
+
+    def test_rotation_preserves_missing_jev_settings_and_implicit_disabled_mode(self):
+        vault = self._configured_vault()
+        ref = vault / 'komuta/jev.json'
+        self._write_json(ref, {'retrieval_mode': 'off'})
+        self._configure(vault, mem0='')
+        config = json.loads(ref.read_text())
+        self.assertNotIn('mode', config)
+        self.assertNotIn('model', config)
+        self.assertNotIn('base_url', config)
+        self.assertEqual(config['retrieval_mode'], 'off')
+        self.assertEqual(b._jev_verification(vault)['status'], 'disabled')
+
+    def test_existing_unicode_mem0_user_id_is_accepted_on_enter(self):
+        vault = self._configured_vault()
+        ref = vault / 'komuta/mem0.json'
+        original = json.loads(ref.read_text()) | {'user_id': 'kullanıcı@example.com'}
+        self._write_json(ref, original)
+        with patch('builtins.input', side_effect=['1', '']), \
+             patch.object(b, 'secret', return_value='new-mem0'), \
+             patch.object(b, 'ask_jev', return_value=('', None)), contextlib.redirect_stdout(io.StringIO()):
+            b.configure_services(vault, self.root / 'secrets')
+        self.assertEqual(json.loads(ref.read_text())['user_id'], 'kullanıcı@example.com')
+
+    def test_every_private_json_stage_failure_preserves_old_files_and_modes(self):
+        self._assert_each_transaction_stage_rolls_back('private_json')
+
+    def test_every_replace_stage_failure_preserves_old_files_and_modes(self):
+        self._assert_each_transaction_stage_rolls_back('replace')
+
+    def test_every_backup_fsync_failure_preserves_old_files_and_modes(self):
+        vault = self._configured_vault('baseline-fsync')
+        original = os.fsync
+        with patch.object(b.os, 'fsync', wraps=original) as wrapped:
+            self._configure(vault)
+        self.assertGreaterEqual(wrapped.call_count, 3)
+        for ordinal in range(1, wrapped.call_count + 1):
+            with self.subTest(ordinal=ordinal):
+                vault = self._configured_vault('fsync-' + str(ordinal))
+                before = self._file_snapshot()
+                calls = 0
+                def injected(fd):
+                    nonlocal calls
+                    calls += 1
+                    if calls == ordinal:
+                        raise OSError('simulated backup flush failure')
+                    return original(fd)
+                with patch.object(b.os, 'fsync', side_effect=injected):
+                    with self.assertRaises(OSError):
+                        self._configure(vault)
+                self.assertEqual(self._file_snapshot(), before)
+
+    def _assert_each_transaction_stage_rolls_back(self, operation):
+        owner = b if operation == 'private_json' else b.os
+        original = getattr(owner, operation)
+        vault = self._configured_vault('baseline-' + operation)
+        with patch.object(owner, operation, wraps=original) as wrapped:
+            self._configure(vault)
+        count = wrapped.call_count
+        self.assertGreaterEqual(count, 5, 'both credential files, both references and report must be staged/replaced')
+        for ordinal in range(1, count + 1):
+            for after_partial_write in (False, True):
+                with self.subTest(operation=operation, ordinal=ordinal, partial=after_partial_write):
+                    vault = self._configured_vault(f'{operation}-{ordinal}-{after_partial_write}')
+                    before = self._file_snapshot()
+                    calls = 0
+                    def injected(*args, **kwargs):
+                        nonlocal calls
+                        calls += 1
+                        if calls == ordinal:
+                            if after_partial_write:
+                                original(*args, **kwargs)
+                            raise OSError('simulated disk failure')
+                        return original(*args, **kwargs)
+                    with patch.object(owner, operation, side_effect=injected):
+                        with self.assertRaises((OSError, ValueError, RuntimeError)) as raised:
+                            self._configure(vault)
+                    self.assertEqual(self._file_snapshot(), before)
+                    self.assertNotIn('new-mem0', str(raised.exception))
+                    self.assertNotIn('new-jev', str(raised.exception))
+
+    def test_failed_rollback_retains_original_backups_and_reports_recovery_needed(self):
+        vault = self._configured_vault()
+        ref = vault / 'komuta/jev.json'
+        original_bytes = ref.read_bytes()
+        old_key = Path(json.loads(original_bytes)['credentials_file'])
+        original_replace = os.replace
+        def disk_failure(source, destination):
+            if Path(destination).name == 'kurulum-sonucu.json' or '.backup-' in Path(source).name:
+                raise OSError('simulated commit and rollback failure')
+            return original_replace(source, destination)
+        with patch.object(b.os, 'replace', side_effect=disk_failure):
+            with self.assertRaisesRegex(ValueError, 'geri alma tamamlanamadı') as error:
+                self._configure(vault)
+        self.assertTrue(old_key.exists())
+        self.assertTrue(any(path.read_bytes() == original_bytes for path in ref.parent.glob('*.backup-*')))
+        self.assertNotIn('new-jev', str(error.exception))
+        self.assertNotIn('new-mem0', str(error.exception))
+
+    def test_credential_reference_and_report_are_replaced_from_same_directory(self):
+        vault = self._configured_vault()
+        old = [Path(json.loads((vault / f'komuta/{service}.json').read_text())['credentials_file'])
+               for service in ('mem0', 'jev')]
+        original_replace = os.replace
+        destinations = []
+        def observe(source, destination):
+            source, destination = Path(source), Path(destination)
+            self.assertEqual(source.parent, destination.parent)
+            if os.name != 'nt':
+                self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o600)
+            # Old credentials cannot be deleted until every replacement has committed.
+            self.assertTrue(all(path.exists() for path in old))
+            destinations.append(destination)
+            return original_replace(source, destination)
+        with patch.object(b.os, 'replace', side_effect=observe):
+            self._configure(vault)
+        self.assertTrue({vault / 'komuta/mem0.json', vault / 'komuta/jev.json',
+                         vault / 'komuta/kurulum-sonucu.json'}.issubset(destinations))
+        self.assertEqual(sum(path.parent == self._managed_dir(vault) for path in destinations), 2)
+        self.assertTrue(all(not path.exists() for path in old))
+
+    def test_invalid_existing_report_fails_before_any_write_or_delete(self):
+        for content in ('{broken', '[]', '{"services": []}'):
+            with self.subTest(content=content):
+                vault = self._configured_vault('report-' + str(len(content)))
+                (vault / 'komuta/kurulum-sonucu.json').write_text(content)
+                before = self._file_snapshot()
+                with patch.object(b, 'private_json') as write, patch.object(b.os, 'replace') as replace, \
+                     patch.object(Path, 'unlink') as unlink:
+                    with self.assertRaises((ValueError, OSError)):
+                        self._configure(vault)
+                    write.assert_not_called(); replace.assert_not_called(); unlink.assert_not_called()
+                self.assertEqual(self._file_snapshot(), before)
+
+    def test_invalid_existing_service_config_fails_before_other_service_write(self):
+        invalid = [('mem0', '{broken'), ('jev', '{broken'),
+                   ('mem0', '{"enabled": "yes", "user_id": "tester"}'), ('jev', '{"mode": "banana"}')]
+        for index, (service, content) in enumerate(invalid):
+            with self.subTest(service=service, content=content):
+                vault = self._configured_vault('invalid-' + str(index))
+                (vault / f'komuta/{service}.json').write_text(content)
+                before = self._file_snapshot()
+                with patch.object(b, 'private_json') as write:
+                    with self.assertRaises((ValueError, OSError)):
+                        self._configure(vault)
+                    write.assert_not_called()
+                self.assertEqual(self._file_snapshot(), before)
+
+    def test_old_managed_credentials_removed_only_after_success_unmanaged_retained(self):
+        for managed in (True, False):
+            with self.subTest(managed=managed):
+                vault = self._configured_vault('old-location-' + str(managed))
+                old_path = (self.root / 'secrets/hafiza-os/0123456789abcdef/legacy.json' if managed
+                            else self.root / 'user-managed/legacy.json')
+                self._write_json(old_path, {'TYPESAFE_API_KEY': 'old-other-key'})
+                ref_path = vault / 'komuta/jev.json'
+                self._write_json(ref_path, json.loads(ref_path.read_text()) | {'credentials_file': str(old_path)})
+                self._configure(vault, mem0='')
+                self.assertEqual(old_path.exists(), not managed)
+                if not managed:
+                    self.assertEqual(json.loads(old_path.read_text()), {'TYPESAFE_API_KEY': 'old-other-key'})
+
+    def test_postcommit_cleanup_failure_keeps_new_settings_and_reports_truthfully(self):
+        vault = self._configured_vault()
+        ref = vault / 'komuta/jev.json'
+        old = Path(json.loads(ref.read_text())['credentials_file'])
+        original_unlink = Path.unlink
+        def blocked_cleanup(path, *args, **kwargs):
+            if path == old:
+                raise PermissionError('old credential cannot be removed')
+            return original_unlink(path, *args, **kwargs)
+        output = io.StringIO()
+        with patch.object(Path, 'unlink', blocked_cleanup), contextlib.redirect_stderr(output):
+            self._configure(vault, mem0='')
+        self.assertTrue(old.exists())
+        self.assertEqual(json.loads(Path(json.loads(ref.read_text())['credentials_file']).read_text()),
+                         {'TYPESAFE_API_KEY': 'new-jev'})
+        self.assertEqual(json.loads((vault / 'komuta/kurulum-sonucu.json').read_text())['services']['jev'],
+                         'configured_unverified')
+        self.assertIn('güncellendi', output.getvalue())
+        self.assertIn('temizlenemedi', output.getvalue())
+        self.assertNotIn('new-jev', output.getvalue())
+
+    def test_symlink_preflight_prevents_all_writes_and_deletes(self):
+        for component in ('komuta', 'credential_dir', 'credential_file', 'reference', 'report', 'config_home'):
+            with self.subTest(component=component):
+                vault = self._configured_vault('link-' + component)
+                keys = self._managed_dir(vault)
+                target = {'komuta': vault / 'komuta', 'credential_dir': keys,
+                          'credential_file': keys / 'jev.json', 'reference': vault / 'komuta/jev.json',
+                          'report': vault / 'komuta/kurulum-sonucu.json', 'config_home': self.root / 'secrets'}[component]
+                outside = self.root / ('outside-' + component)
+                target.rename(outside)
+                try:
+                    target.symlink_to(outside, target_is_directory=outside.is_dir())
+                except OSError:
+                    outside.rename(target)
+                    self.skipTest('symlink creation is unavailable on this platform')
+                before = self._file_snapshot()
+                try:
+                    with patch.object(b, 'private_json') as write, patch.object(b.os, 'replace') as replace, \
+                         patch.object(Path, 'unlink') as unlink:
+                        with self.assertRaises((ValueError, OSError)):
+                            self._configure(vault)
+                        write.assert_not_called(); replace.assert_not_called(); unlink.assert_not_called()
+                    self.assertEqual(self._file_snapshot(), before)
+                finally:
+                    target.unlink()
+                    outside.rename(target)
+
+    def test_cached_success_cannot_verify_rotated_bad_key_and_carrier_is_called(self):
+        vault = self._configured_vault(jev_mode='on', retrieval_mode='inherit')
+        probe = [{'id': 'verify', 'title': 'verify', 'statement': 'Hafiza OS service verification probe.',
+                  'scope': 'user', 'domains': []}]
+        observed = []
+        def carrier(url, body, key, timeout):
+            observed.append(key)
+            if key == 'bad-new-key':
+                raise self._http_error(url, 401)
+            return self._ok_jev_transport(url, body, key, timeout)
+        with patch.object(jev_client, '_transport', side_effect=carrier):
+            cached = jev_client.evaluate(vault, 'hafiza-os configure-services verify', probe)
+            self.assertFalse(cached['degraded']); self.assertFalse(cached['cache_hit'])
+            self.assertTrue(list((vault / '.cache/jev').glob('*.json')))
+            self._configure(vault, mem0='', jev='bad-new-key')
+            still_cached = jev_client.evaluate(vault, 'hafiza-os configure-services verify', probe)
+            self.assertTrue(still_cached['cache_hit'])
+            result = b._jev_verification(vault)
+        self.assertEqual(observed, ['old-jev', 'bad-new-key'])
+        self.assertEqual(result['status'], 'verification_failed:http_unauthorized')
+
+    def test_shadow_and_assist_retrieval_modes_make_real_calls_without_cache(self):
+        for mode, retrieval in [('shadow', 'off'), ('on', 'off'), ('on', 'assist'), ('shadow', 'assist')]:
+            with self.subTest(mode=mode, retrieval=retrieval):
+                vault = self._configured_vault(mode + '-' + retrieval, jev_mode=mode, retrieval_mode=retrieval)
+                before = self._file_snapshot()
+                with patch.object(jev_client, '_transport', side_effect=self._ok_jev_transport) as carrier, \
+                     patch.object(jev_client, '_cache_path', side_effect=AssertionError('verification must not use cache')):
+                    result = b._jev_verification(vault)
+                self.assertEqual(result['status'], 'verified')
+                carrier.assert_called_once()
+                self.assertEqual(carrier.call_args.args[2], 'old-jev')
+                self.assertEqual(self._file_snapshot(), before)
+
+    def test_disabled_services_are_distinct_and_make_no_carrier_calls(self):
+        vault = self._configured_vault(jev_mode='off')
+        mem0 = vault / 'komuta/mem0.json'
+        self._write_json(mem0, json.loads(mem0.read_text()) | {'enabled': False})
+        with patch.object(hafiza, 'Mem0HttpClient') as mem0_carrier, \
+             patch.object(jev_client, '_transport') as jev_carrier:
+            result = b.verify_services(vault)
+        self.assertEqual(result['mem0']['status'], 'disabled')
+        self.assertEqual(result['jev']['status'], 'disabled')
+        mem0_carrier.assert_not_called(); jev_carrier.assert_not_called()
+
+    def test_broken_mem0_config_does_not_prevent_jev_verification(self):
+        for content in ('{broken', '[]', '{"enabled": "yes", "user_id": "test"}'):
+            with self.subTest(content=content):
+                vault = self._configured_vault('broken-mem0-' + str(len(content)))
+                (vault / 'komuta/mem0.json').write_text(content)
+                with patch.object(jev_client, '_transport', side_effect=self._ok_jev_transport) as carrier:
+                    result = b.verify_services(vault)
+                self.assertEqual(result['mem0']['status'], 'config_invalid')
+                self.assertEqual(result['jev']['status'], 'verified')
+                carrier.assert_called_once()
+
+    def test_invalid_and_missing_configs_replace_stale_verified_report(self):
+        vault = self._configured_vault()
+        (vault / 'komuta/mem0.json').unlink()
+        (vault / 'komuta/jev.json').write_text('{broken')
+        with contextlib.redirect_stdout(io.StringIO()):
+            b.report_verification(vault, b.verify_services(vault))
+        report = json.loads((vault / 'komuta/kurulum-sonucu.json').read_text())
+        self.assertEqual(report['services'], {'mem0': 'not_configured', 'jev': 'config_invalid'})
+        self.assertEqual(report['custom'], {'preserve': [1, 'ı']})
+
+    def test_configure_then_verify_uses_new_files_for_all_providers(self):
+        for provider, variable in [('typesafe', 'TYPESAFE_API_KEY'), ('vercel', 'AI_GATEWAY_API_KEY')]:
+            with self.subTest(provider=provider):
+                vault = self._configured_vault('new-file-' + provider)
+                self.args.vault = str(vault)
+                self.args.configure_services = self.args.verify_services = True
+                self.args.non_interactive = False
+                observed = []
+                class Mem0Client:
+                    def __init__(self, key, user_id=None):
+                        self.user_id = user_id; observed.append(('mem0', key))
+                    def search_memories(self, *args, **kwargs): return []
+                def jev_carrier(url, body, key, timeout):
+                    observed.append(('jev', key))
+                    return self._ok_jev_transport(url, body, key, timeout)
+                output = io.StringIO()
+                with patch.dict(os.environ, {'MEM0_API_KEY': 'stale-env-mem0', variable: 'stale-env-jev'}), \
+                     patch.object(b, 'ask_mem0', return_value=('new-file-mem0', 'existing-user')), \
+                     patch.object(b, 'ask_jev', return_value=('new-file-jev', provider)), \
+                     patch.object(b.sys.stdin, 'isatty', return_value=True), \
+                     patch.object(hafiza, 'Mem0HttpClient', Mem0Client), \
+                     patch.object(jev_client, '_transport', side_effect=jev_carrier), contextlib.redirect_stdout(output):
+                    b.run(self.args)
+                self.assertEqual(observed, [('mem0', 'new-file-mem0'), ('jev', 'new-file-jev')])
+                for secret in ('stale-env-mem0', 'stale-env-jev', 'new-file-mem0', 'new-file-jev'):
+                    self.assertNotIn(secret, output.getvalue())
+                    self.assertNotIn(secret, (vault / 'komuta/kurulum-sonucu.json').read_text())
+
+    def test_standalone_verify_reports_file_and_environment_sources_without_secrets(self):
+        for use_environment in (False, True):
+            with self.subTest(use_environment=use_environment):
+                vault = self._configured_vault('source-' + str(use_environment))
+                observed = []
+                class Mem0Client:
+                    def __init__(self, key, user_id=None):
+                        self.user_id = user_id; observed.append(key)
+                    def search_memories(self, *args, **kwargs): return []
+                def carrier(url, body, key, timeout):
+                    observed.append(key)
+                    return self._ok_jev_transport(url, body, key, timeout)
+                values = {'MEM0_API_KEY': 'env-mem0-secret', 'TYPESAFE_API_KEY': 'env-jev-secret'} if use_environment else {}
+                output = io.StringIO()
+                with patch.dict(os.environ, values, clear=True), patch.object(hafiza, 'Mem0HttpClient', Mem0Client), \
+                     patch.object(jev_client, '_transport', side_effect=carrier), contextlib.redirect_stdout(output):
+                    result = b.verify_services(vault)
+                    b.report_verification(vault, result)
+                source = 'environment' if use_environment else 'file'
+                self.assertEqual([result[s]['credential_source'] for s in ('mem0', 'jev')], [source, source])
+                self.assertEqual(observed, ['env-mem0-secret', 'env-jev-secret'] if use_environment else ['old-mem0', 'old-jev'])
+                self.assertIn('ortam' if use_environment else 'dosya', output.getvalue().lower())
+                for secret in observed:
+                    self.assertNotIn(secret, json.dumps(result) + output.getvalue() +
+                                     (vault / 'komuta/kurulum-sonucu.json').read_text())
+
+    def test_actual_jev_failure_code_is_not_an_informational_cache_diagnostic(self):
+        vault = self._configured_vault()
+        # Legacy evaluate would add cache_unavailable before its actual HTTP error.
+        cache = vault / '.cache'; cache.mkdir(); (cache / 'jev').write_text('blocked-cache-directory')
+        def fail(url, body, key, timeout):
+            raise self._http_error(url, 429, 'credential value must never be echoed: ' + key)
+        with patch.object(jev_client, '_transport', side_effect=fail) as carrier:
+            result = b._jev_verification(vault)
+        carrier.assert_called_once()
+        self.assertEqual(result['status'], 'verification_failed:http_rate_limited')
+        self.assertNotIn('cache_unavailable', json.dumps(result))
+        self.assertNotIn('quantized_probability', json.dumps(result))
+        self.assertNotIn('old-jev', json.dumps(result))
+
+    def test_standalone_jev_source_tracks_actual_key_in_env_file(self):
+        for includes_key in (False, True):
+            with self.subTest(includes_key=includes_key):
+                vault = self._configured_vault('env-file-' + str(includes_key))
+                env_file = self.root / ('key-' + str(includes_key) + '.env')
+                env_file.write_text('TYPESAFE_BASE_URL=https://api.typesafe.ai\n' +
+                                    ('TYPESAFE_API_KEY=dotenv-key\n' if includes_key else ''))
+                ref = vault / 'komuta/jev.json'
+                self._write_json(ref, json.loads(ref.read_text()) | {'env_file': str(env_file)})
+                with patch.object(jev_client, '_transport', side_effect=self._ok_jev_transport) as carrier:
+                    result = b._jev_verification(vault)
+                self.assertEqual(result['status'], 'verified')
+                self.assertEqual(result['credential_source'], 'env_file' if includes_key else 'file')
+                self.assertEqual(carrier.call_args.args[2], 'dotenv-key' if includes_key else 'old-jev')
+
+    def test_vercel_provider_with_legacy_env_file_key_matches_runtime_client(self):
+        # Runtime evaluate() accepts TYPESAFE_API_KEY from env_file for provider=vercel;
+        # verification must resolve the same key and base URL instead of reporting it missing.
+        vault = self._fixture_vault('vercel-env-file')
+        env_file = self.root / 'gateway.env'
+        env_file.write_text('TYPESAFE_API_KEY=gateway-key\nTYPESAFE_BASE_URL=http://127.0.0.1:18760\n')
+        self._write_json(vault / 'komuta/jev.json',
+                         {'mode': 'shadow', 'retrieval_mode': 'assist', 'provider': 'vercel',
+                          'model': 'jev-latest', 'base_url': 'http://127.0.0.1:18760', 'env_file': str(env_file)}, 0o640)
+        with patch.dict(os.environ, {}, clear=True), \
+             patch.object(jev_client, '_transport', side_effect=self._ok_jev_transport) as carrier:
+            result = b._jev_verification(vault)
+        self.assertEqual(result['status'], 'verified')
+        self.assertEqual(result['credential_source'], 'env_file')
+        self.assertEqual(carrier.call_args.args[0], 'http://127.0.0.1:18760/v1/systemone')
+        self.assertEqual(carrier.call_args.args[2], 'gateway-key')
+        self.assertNotIn('gateway-key', json.dumps(result))
+
+    def test_cached_evaluation_context_does_not_hide_new_jev_configuration(self):
+        vault = self._configured_vault(jev_mode='off')
+        with jev_client.evaluation_context(vault), jev_client.disabled():
+            ref = vault / 'komuta/jev.json'
+            self._write_json(ref, json.loads(ref.read_text()) | {'mode': 'shadow'})
+            with patch.object(jev_client, '_transport', side_effect=self._ok_jev_transport) as carrier:
+                result = b._jev_verification(vault)
+        self.assertEqual(result['status'], 'verified')
+        carrier.assert_called_once()
+
+    def test_client_loader_prefers_bundled_code_and_supports_standalone_installer(self):
+        for bundled in (False, True):
+            with self.subTest(bundled=bundled):
+                vault = self._fixture_vault('loader-' + str(bundled))
+                installer = self.root / ('installer-' + str(bundled))
+                installer.mkdir()
+                for name in ('hafiza.py', 'jev_client.py'):
+                    (vault / 'araclar' / name).write_text("ORIGIN = 'selected-vault'\n")
+                if bundled:
+                    (installer / 'araclar').mkdir()
+                    for name in ('hafiza.py', 'jev_client.py'):
+                        (installer / 'araclar' / name).write_text("ORIGIN = 'bundled'\n")
+                with patch.object(b, '__file__', str(installer / 'baslat.py')), \
+                     patch.object(b.sys, 'path', list(b.sys.path)), patch.dict(b.sys.modules):
+                    # Cached test imports must not conceal the standalone import path.
+                    b.sys.modules.pop('hafiza', None)
+                    b.sys.modules.pop('jev_client', None)
+                    clients = b._service_clients(vault)
+                    expected = installer / 'araclar' if bundled else vault / 'araclar'
+                    self.assertTrue(all(Path(client.__file__).parent == expected for client in clients))
+                    self.assertEqual([client.ORIGIN for client in clients],
+                                     ['bundled', 'bundled'] if bundled else ['selected-vault', 'selected-vault'])
+
+    def test_invalid_jev_response_is_not_verified_after_carrier_completes(self):
+        vault = self._configured_vault()
+        with patch.object(jev_client, '_transport', return_value={'answers': {}}) as carrier:
+            result = b._jev_verification(vault)
+        carrier.assert_called_once()
+        self.assertEqual(result['status'], 'verification_failed:answers_invalid')
+
+    def test_missing_service_config_does_not_import_vault_code(self):
+        vault = self._fixture_vault('missing-configs')
+        with patch.object(b, '_service_clients', side_effect=AssertionError('no client needed')) as clients:
+            result = b.verify_services(vault)
+        self.assertEqual(result, {'mem0': {'status': 'not_configured'},
+                                  'jev': {'status': 'not_configured'}})
+        clients.assert_not_called()
+
+    def test_mem0_verification_preserves_existing_inside_vault_credential_rejection(self):
+        vault = self._configured_vault()
+        credential = self._write_json(vault / 'key.json', {'MEM0_API_KEY': 'local-key'})
+        ref = vault / 'komuta/mem0.json'
+        self._write_json(ref, json.loads(ref.read_text()) | {'credentials_file': str(credential)})
+        for prefer_file in (False, True):
+            with self.subTest(prefer_file=prefer_file), patch.object(hafiza, 'Mem0HttpClient') as carrier:
+                result = b._mem0_verification(vault, prefer_file=prefer_file)
+            self.assertEqual(result, {'status': 'verification_failed:env_file_invalid',
+                                      'credential_source': 'file'})
+            carrier.assert_not_called()
 
 if __name__=='__main__':unittest.main()

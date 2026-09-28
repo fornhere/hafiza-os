@@ -13,8 +13,11 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
+import urllib.error
 import urllib.request
+import uuid
 import warnings
 import webbrowser
 import zipfile
@@ -157,6 +160,8 @@ def private_json(path, data):
     with os.fdopen(fd, 'w', encoding='utf-8') as stream:
         json.dump(data, stream, ensure_ascii=False, indent=2)
         stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
     if os.name == 'nt':
         # chmod does not provide a private Windows ACL.
         identity = subprocess.check_output(['whoami'], text=True).strip()
@@ -204,7 +209,7 @@ def open_site(url):
         print('Tarayıcı açılamadı; yukarıdaki bağlantıyı kendin açabilirsin.')
 
 
-def ask_mem0():
+def ask_mem0(default_user_id='ben'):
     print('\n[3/5] Mem0 — isteğe bağlı hafıza araması')
     action = choose('Mem0 API anahtarın var mı?',
                     {'1': 'Var, gireceğim', '2': 'Yok, birlikte alalım', '3': 'Şimdilik atla'}, '3')
@@ -219,8 +224,8 @@ def ask_mem0():
     if not key:
         return '', None
     while True:
-        uid = input('Mem0 kullanıcı kimliği [ben]: ').strip() or 'ben'
-        if re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', uid):
+        uid = input(f'Mem0 kullanıcı kimliği [{default_user_id}]: ').strip() or default_user_id
+        if uid == default_user_id or re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', uid):
             return key, uid
         print('Kimlikte yalnız harf, rakam, nokta, tire ve alt çizgi kullan.')
 
@@ -249,55 +254,201 @@ def ask_jev():
     return key, provider if key else None
 
 
-def optional_services(vault, config_home, overwrite=False):
-    """Ask for Mem0/Jev keys and persist them.
+def _service_path(path, root):
+    """Validate a file and every parent before any service mutation."""
+    root = safe_path(root)
+    path = safe_path(path)
+    if not path.is_relative_to(root) or path == root:
+        raise ValueError('Servis dosyası izin verilen dizinin dışında.')
+    if path.exists() and not path.is_file():
+        raise ValueError('Servis dosyasının yolu geçersiz.')
+    for parent in path.parents:
+        if parent.exists() and not parent.is_dir():
+            raise ValueError('Servis üst dizini geçersiz.')
+    return path
 
-    With overwrite=False (first install) both services are always reported,
-    'skipped' included, matching the historical contract. With overwrite=True
-    (reconfiguring an existing vault) only services the user actually entered
-    a key for are touched or reported, so an unrelated already-configured
-    service is never silently downgraded to 'skipped'; any previous key file
-    for a re-entered service is removed first since private_json refuses to
-    overwrite an existing file.
+
+def _read_service_json(path):
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise ValueError('Mevcut servis ayarı veya kurulum kaydı okunamadı; değişiklik yapılmadı.') from None
+    if not isinstance(value, dict):
+        raise ValueError('Mevcut servis ayarı veya kurulum kaydı geçersiz; değişiklik yapılmadı.')
+    return value
+
+
+def _service_transaction(writes):
+    """Stage all JSON and byte-exact backups, then replace; undo caught failures.
+
+    Replacements are atomic per file. This is not a crash-recovery journal:
+    an interrupted process or a filesystem that also rejects rollback needs
+    manual recovery from the retained backup files.
     """
+    for path, _ in writes:
+        safe_path(path)
+    staged, backups, temporary, installed = {}, {}, [], []
+    rollback_failed = False
+    try:
+        for path, data in writes:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if path.exists():
+                old_bytes, old_mode = path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+                backup = path.with_name('.' + path.name + '.backup-' + uuid.uuid4().hex)
+                temporary.append(backup)
+                private_json(backup, {})
+                with backup.open('wb') as stream:
+                    stream.write(old_bytes)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if os.name != 'nt':
+                    backup.chmod(old_mode)
+                backups[path] = backup
+            stage = path.with_name('.' + path.name + '.stage-' + uuid.uuid4().hex)
+            temporary.append(stage)
+            private_json(stage, data)
+            staged[path] = stage
+        for path, _ in writes:
+            safe_path(path)
+            installed.append(path)
+            os.replace(staged[path], path)
+    except BaseException:
+        rollback_failed = False
+        for path in reversed(installed):
+            try:
+                safe_path(path)
+                if path in backups:
+                    os.replace(backups[path], path)
+                else:
+                    path.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                rollback_failed = True
+        if rollback_failed:
+            # Do not destroy the only remaining original when recovery failed.
+            raise ValueError('Servis güncellemesi ve geri alma tamamlanamadı; .backup dosyaları korundu. Ayarları kontrol et.') from None
+        raise
+    finally:
+        # On failed rollback, leave backups for recovery, never claim success.
+        for path in temporary:
+            if rollback_failed and path in backups.values():
+                continue
+            try:
+                safe_path(path)
+                path.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                print('Uyarı: bir geçici servis dosyası temizlenemedi; dosya izinlerini kontrol et.', file=sys.stderr)
+
+
+def _managed_old_credential(config, config_home):
+    """Only installer-owned hash directories qualify for post-commit cleanup."""
+    value = config.get('credentials_file')
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        return None
+    root = safe_path(config_home) / 'hafiza-os'
+    path = Path(os.path.abspath(value))
+    if not path.is_relative_to(root):
+        return None
+    parts = path.relative_to(root).parts
+    if len(parts) < 2 or not re.fullmatch(r'[a-f0-9]{16}', parts[0]):
+        return None
+    return _service_path(path, root)
+
+
+def _service_report(target, updates, verification=None):
+    path = _service_path(target / 'komuta/kurulum-sonucu.json', target)
+    report = _read_service_json(path)
+    services = report.get('services', {})
+    if not isinstance(services, dict):
+        raise ValueError('Mevcut kurulum kaydının services alanı geçersiz; değişiklik yapılmadı.')
+    report['services'] = {**services, **updates}
+    if verification is not None:
+        previous = report.get('service_verification', {})
+        if not isinstance(previous, dict):
+            raise ValueError('Mevcut doğrulama kaydı geçersiz; değişiklik yapılmadı.')
+        report['service_verification'] = {**previous, **verification}
+    elif isinstance(report.get('service_verification'), dict):
+        # A new key invalidates provenance from an older verification.
+        report['service_verification'] = {key: value for key, value in report['service_verification'].items()
+                                          if key not in updates}
+    return path, report
+
+
+def optional_services(vault, config_home, overwrite=False):
+    """Preserve preferences and commit credentials, references and report together."""
+    vault, config_home = safe_path(vault), safe_path(config_home)
+    refs = {name: _service_path(vault / ('komuta/' + name + '.json'), vault)
+            for name in ('mem0', 'jev')}
+    # Read all affected metadata before even creating a staging file.
+    existing = {name: _read_service_json(path) for name, path in refs.items()}
+    if any(path.exists() for path in refs.values()):
+        try:
+            hafiza, jev_client = _service_clients(vault)
+            if refs['mem0'].exists():
+                hafiza.mem0_config(vault)
+            if refs['jev'].exists():
+                jev_client._read_config(vault)
+        except (ImportError, OSError, ValueError):
+            raise ValueError('Mevcut servis ayarı geçersiz; değişiklik yapılmadı.') from None
+    if overwrite:
+        _service_report(vault, {})
+    default_uid = existing['mem0'].get('user_id', 'ben')
+    if not isinstance(default_uid, str) or not default_uid:
+        raise ValueError('Mevcut Mem0 kullanıcı kimliği geçersiz; değişiklik yapılmadı.')
     print('\nİki bağlantı da isteğe bağlı. Anahtarlar ekranda görünmez.')
     print('Etkinleştirdiğin hizmete sorgu içeriği gönderilebilir.')
-    mem0, uid = ask_mem0()
+    mem0, uid = ask_mem0(default_uid)
     jev, provider = ask_jev()
     if not mem0 and not jev:
         return {} if overwrite else {'mem0': 'skipped', 'jev': 'skipped'}
     ident = hashlib.sha256(str(vault).encode()).hexdigest()[:16]
-    keys_dir = safe_path(config_home) / 'hafiza-os' / ident
-    result = {}
-    if mem0:
-        path = keys_dir / 'mem0.json'
-        vault_ref = vault / 'komuta/mem0.json'
-        if overwrite:
+    keys_dir = config_home / 'hafiza-os' / ident
+    writes, old_paths, result = [], [], {}
+    for name, key in (('mem0', mem0), ('jev', jev)):
+        if not key:
+            if not overwrite:
+                result[name] = 'skipped'
+            continue
+        path = _service_path(keys_dir / (name + '-' + uuid.uuid4().hex + '.json'), keys_dir)
+        old_path = _managed_old_credential(existing[name], config_home)
+        if old_path:
+            old_paths.append(old_path)
+        settings = dict(existing[name])
+        settings['credentials_file'] = str(path)
+        if name == 'mem0':
+            if not refs[name].exists():
+                settings['enabled'] = True
+            settings['user_id'] = uid
+            credential = {'MEM0_API_KEY': key}
+        else:
+            vercel = provider == 'vercel'
+            if not refs[name].exists():
+                settings.update(mode='shadow' if overwrite else 'on',
+                                model='typesafe-ai/jev' if vercel else 'jev-latest',
+                                base_url='https://ai-gateway.vercel.sh/typesafe' if vercel else 'https://api.typesafe.ai')
+            settings['provider'] = provider
+            credential = {'AI_GATEWAY_API_KEY' if vercel else 'TYPESAFE_API_KEY': key}
+        writes.extend(((path, credential), (refs[name], settings)))
+        result[name] = 'configured_unverified'
+    if overwrite:
+        writes.append(_service_report(vault, result))
+    _service_transaction(writes)
+    # Deletion is housekeeping after commit; a cleanup failure is not a failed update.
+    retained_paths = {existing[name].get('credentials_file') for name in existing if name not in result}
+    for path in set(old_paths):
+        if str(path) in retained_paths:
+            continue
+        try:
+            _service_path(path, config_home / 'hafiza-os')
             path.unlink(missing_ok=True)
-            vault_ref.unlink(missing_ok=True)
-        private_json(path, {'MEM0_API_KEY': mem0})
-        private_json(vault_ref, {'enabled': True, 'user_id': uid, 'credentials_file': str(path)})
-        result['mem0'] = 'configured_unverified'
-    elif not overwrite:
-        result['mem0'] = 'skipped'
-    if jev:
-        path = keys_dir / 'jev.json'
-        vault_ref = vault / 'komuta/jev.json'
-        vercel = provider == 'vercel'
-        if overwrite:
-            path.unlink(missing_ok=True)
-            vault_ref.unlink(missing_ok=True)
-        private_json(path, {'AI_GATEWAY_API_KEY' if vercel else 'TYPESAFE_API_KEY': jev})
-        private_json(vault_ref, {'mode': 'on', 'model': 'typesafe-ai/jev' if vercel else 'jev-latest',
-                     'provider': provider, 'base_url': 'https://ai-gateway.vercel.sh/typesafe' if vercel else 'https://api.typesafe.ai',
-                     'credentials_file': str(path)})
-        result['jev'] = 'configured_unverified'
-    elif not overwrite:
-        result['jev'] = 'skipped'
+        except (OSError, ValueError):
+            print('Uyarı: ayarlar güncellendi, eski yönetilen anahtar dosyası temizlenemedi.', file=sys.stderr)
     return result
 
 
 def _require_existing_vault(target, flag):
+    target = safe_path(target)
     if not (target / 'agents.md').is_file() or not (target / 'araclar/hafiza.py').is_file():
         raise ValueError(
             f'Geçerli bir Hafıza OS kasası bulunamadı: {target}. '
@@ -305,20 +456,8 @@ def _require_existing_vault(target, flag):
             'ilk kurulum için bu bayrağı kullanma.')
 
 
-def _merge_service_report(target, updates):
-    """Merge into komuta/kurulum-sonucu.json's services object, keeping every other field."""
-    report_path = target / 'komuta/kurulum-sonucu.json'
-    if report_path.is_file():
-        report = json.loads(report_path.read_text(encoding='utf-8'))
-        if not isinstance(report, dict):
-            raise ValueError('Mevcut kurulum kaydı geçersiz.')
-    else:
-        report = {}
-    services = report.get('services')
-    report['services'] = {**services, **updates} if isinstance(services, dict) else dict(updates)
-    if report_path.is_file():
-        report_path.unlink()
-    private_json(report_path, report)
+def _merge_service_report(target, updates, verification=None):
+    _service_transaction([_service_report(target, updates, verification)])
 
 
 def configure_services(target, config_home):
@@ -328,71 +467,166 @@ def configure_services(target, config_home):
     if not updates:
         print('\nDeğişiklik yapılmadı; ikisi de atlandı.')
         return target
-    _merge_service_report(target, updates)
     for service in updates:
         print(service + ': ayarlandı; API anahtarı henüz canlı doğrulanmadı')
     print('\nServis ayarları güncellendi: ' + str(target))
     return target
 
 
-def _mem0_verification(vault):
-    araclar = str(safe_path(vault) / 'araclar')
-    if araclar not in sys.path:
-        sys.path.insert(0, araclar)
+def _service_clients(vault):
+    # Repository installs use their own clients. A standalone installer needs
+    # the selected, trusted vault's executable tools (documented in the CLI).
+    directory = safe_path(Path(__file__).resolve().parent / 'araclar')
+    if not all((directory / name).is_file() for name in ('hafiza.py', 'jev_client.py')):
+        directory = safe_path(Path(vault) / 'araclar')
+        for path in directory.rglob('*.py'):
+            safe_path(path)
+    for name in ('hafiza.py', 'jev_client.py'):
+        safe_path(directory / name)
+    araclar = str(directory)
+    if araclar in sys.path:
+        sys.path.remove(araclar)
+    sys.path.insert(0, araclar)
     import hafiza
-    config = hafiza.mem0_config(vault)
-    if not config.get('enabled'):
-        return {'status': 'not_configured'}
+    import jev_client
+    return hafiza, jev_client
+
+
+def _credential_file(value, name, *, vault=None):
+    if not isinstance(value, str) or not Path(value).is_absolute():
+        raise ValueError('env_file_invalid')
     try:
-        key = hafiza.load_api_key(vault)
+        path = safe_path(value)
+        if vault is not None and path.is_relative_to(safe_path(vault)):
+            raise ValueError('env_file_invalid')
+        data = json.loads(path.read_text(encoding='utf-8'))
+        key = data.get(name) if isinstance(data, dict) else None
+        if not isinstance(key, str) or not key or len(key) > 4096 or any(c.isspace() or ord(c) < 32 for c in key):
+            raise ValueError('env_file_invalid')
+        return key
+    except (OSError, ValueError):
+        raise ValueError('env_file_invalid') from None
+
+
+def _verification_failure(error, *, mem0=False):
+    """Bounded diagnostics only: exception messages may contain server secrets."""
+    safe_codes = {'env_file_invalid', 'endpoint_invalid', 'answers_invalid', 'credentials_missing',
+                  'deadline_exceeded', 'redirect_rejected', 'response_too_large'}
+    code = str(error) if isinstance(error, ValueError) and str(error) in safe_codes else 'request_failed'
+    if isinstance(error, urllib.error.HTTPError):
+        code = ({401: 'http_unauthorized', 403: 'http_forbidden', 429: 'http_rate_limited'}.get(error.code)
+                or ('http_server_error' if 500 <= error.code <= 599 else 'http_error'))
+    elif mem0 and (match := re.match(r'Mem0 HTTP ([1-5][0-9]{2})(?::|$)', str(error))):
+        code = 'http_' + match[1]
+    elif isinstance(error, TimeoutError) or (isinstance(error, urllib.error.URLError) and isinstance(error.reason, TimeoutError)):
+        code = 'deadline_exceeded'
+    return 'verification_failed:' + code
+
+
+def _jev_verification_credential(jev_client, config, info, prefer_file):
+    """Resolve the key exactly like jev_client.evaluate, retaining its source without its value."""
+    vercel = config['provider'] == 'vercel'
+    key_name = 'AI_GATEWAY_API_KEY' if vercel else 'TYPESAFE_API_KEY'
+    if prefer_file and config.get('credentials_file'):
+        info['credential_source'] = 'file'
+        return _credential_file(config['credentials_file'], key_name), config['base_url']
+    env = jev_client._environment(config)
+    key = (env.get('AI_GATEWAY_API_KEY') or env.get('TYPESAFE_API_KEY')) if vercel else env.get('TYPESAFE_API_KEY')
+    base = env.get('TYPESAFE_BASE_URL', config['base_url'])
+    if not key:
+        return None, base
+    if any(name in os.environ and os.environ[name] == key for name in ('AI_GATEWAY_API_KEY', 'TYPESAFE_API_KEY')):
+        info['credential_source'] = 'environment'
+    elif config.get('credentials_file') and _credential_file(config['credentials_file'], key_name) == key:
+        info['credential_source'] = 'file'
+    else:
+        info['credential_source'] = 'env_file'
+    return key, base
+
+
+def _mem0_verification(vault, *, prefer_file=False):
+    info = {}
+    try:
+        path = _service_path(Path(vault) / 'komuta/mem0.json', vault)
+        if not path.exists():
+            return {'status': 'not_configured'}
+        hafiza, _ = _service_clients(vault)
+        config = hafiza.mem0_config(vault)
+    except Exception:
+        return {'status': 'config_invalid'}
+    if not config['enabled']:
+        return {'status': 'disabled'}
+    try:
+        if prefer_file and config.get('credentials_file'):
+            info['credential_source'] = 'file'
+            key = _credential_file(config['credentials_file'], 'MEM0_API_KEY', vault=vault)
+        elif os.environ.get('MEM0_API_KEY'):
+            info['credential_source'] = 'environment'
+            key = os.environ['MEM0_API_KEY']
+        elif config.get('credentials_file'):
+            info['credential_source'] = 'file'
+            key = _credential_file(config['credentials_file'], 'MEM0_API_KEY', vault=vault)
+        else:
+            raise ValueError('credentials_missing')
         client = hafiza.Mem0HttpClient(key, user_id=config.get('user_id'))
         client.search_memories('hafiza-os configure-services verify', filters={'user_id': client.user_id}, top_k=1)
-        return {'status': 'ok'}
+        return dict(info, status='verified')
     except Exception as error:
-        match = re.match(r'Mem0 HTTP (\d{3})', str(error))
-        return {'status': 'failed', 'diagnostic': 'http_' + match[1] if match else type(error).__name__}
+        return dict(info, status=_verification_failure(error, mem0=True))
 
 
-def _jev_verification(vault):
-    araclar = str(safe_path(vault) / 'araclar')
-    if araclar not in sys.path:
-        sys.path.insert(0, araclar)
-    import jev_client
+def _jev_verification(vault, *, prefer_file=False):
+    info = {}
     try:
-        config = jev_client.load_config(vault)
-    except (ValueError, OSError):
-        return {'status': 'not_configured'}
-    if config.get('mode') != 'on':
-        return {'status': 'not_configured'}
-    probe = [{'id': 'verify', 'title': 'verify', 'statement': 'Hafiza OS service verification probe.',
-              'scope': 'user', 'domains': []}]
-    result = jev_client.evaluate(vault, 'hafiza-os configure-services verify', probe)
-    if result['degraded']:
-        return {'status': 'failed', 'diagnostic': result['diagnostics'][0] if result['diagnostics'] else 'unknown_error'}
-    return {'status': 'ok'}
+        path = _service_path(Path(vault) / 'komuta/jev.json', vault)
+        if not path.exists():
+            return {'status': 'not_configured'}
+        _, jev_client = _service_clients(vault)
+        # Deliberately bypass evaluation_context snapshots and purpose modes.
+        config = jev_client._read_config(vault)
+    except Exception:
+        return {'status': 'config_invalid'}
+    if config['mode'] == 'off':
+        return {'status': 'disabled'}
+    try:
+        key, base = _jev_verification_credential(jev_client, config, info, prefer_file)
+        if not key:
+            raise ValueError('credentials_missing')
+        endpoint = jev_client._endpoint(base)
+        # A fixed synthetic request: no notes, retrieval, shared runtime or cache.
+        body = dict(model=config['model'], state={'probe': 'Hafiza OS service verification probe.'},
+                    questions={'verify': {'type': 'score', 'instructions': 'Score whether the probe identifies a service verification.',
+                                          'criteria': ['No.', 'Uncertain.', 'Yes.']}})
+        started = time.monotonic()
+        raw = jev_client._transport(endpoint, body, key, config['timeout'])
+        if time.monotonic() - started > config['timeout']:
+            raise ValueError('deadline_exceeded')
+        jev_client._scores(raw, ['verify'], allow_quantized=config['provider'] == 'vercel')
+        return dict(info, status='verified')
+    except Exception as error:
+        return dict(info, status=_verification_failure(error))
 
 
-def verify_services(target):
-    """Make one real, minimal API call per configured service; never touch or print credentials."""
+def verify_services(target, *, prefer_files=False):
+    """Complete one live synthetic call for each enabled service, independently."""
     _require_existing_vault(target, '--verify-services')
-    return {'mem0': _mem0_verification(target), 'jev': _jev_verification(target)}
+    return {'mem0': _mem0_verification(target, prefer_file=prefer_files),
+            'jev': _jev_verification(target, prefer_file=prefer_files)}
 
 
 def report_verification(target, results):
-    labels = {'ok': 'canlı doğrulama başarılı', 'not_configured': 'yapılandırılmamış, doğrulama atlandı'}
-    updates = {}
+    labels = {'verified': 'canlı doğrulama başarılı',
+              'not_configured': 'yapılandırılmamış, doğrulama atlandı',
+              'disabled': 'devre dışı, doğrulama atlandı',
+              'config_invalid': 'ayar geçersiz, doğrulama yapılamadı'}
+    sources = {'file': 'dosya', 'environment': 'ortam', 'env_file': 'ortam dosyası'}
     for service, info in results.items():
         status = info['status']
-        if status == 'ok':
-            updates[service] = 'verified'
-            print(service + ': ' + labels['ok'])
-        elif status == 'not_configured':
-            print(service + ': ' + labels['not_configured'])
-        else:
-            updates[service] = 'verification_failed:' + info.get('diagnostic', 'unknown_error')
-            print(service + ': canlı doğrulama başarısız (' + info.get('diagnostic', 'unknown_error') + ')')
-    if updates:
-        _merge_service_report(target, updates)
+        label = labels.get(status, 'canlı doğrulama başarısız (' + status.split(':', 1)[-1] + ')')
+        source = sources.get(info.get('credential_source'))
+        print(service + ': ' + label + (('; anahtar kaynağı: ' + source) if source else ''))
+    # Store every state so an earlier verified result cannot survive bad config.
+    _merge_service_report(target, {name: info['status'] for name, info in results.items()}, results)
 
 
 def check_existing_installation(home, *, isolated=False):
@@ -432,7 +666,7 @@ def run(args):
             configure_services(target, config_home)
         if args.verify_services:
             print('\nMem0/Jev bağlantısı gerçek bir API isteğiyle kontrol ediliyor…')
-            report_verification(target, verify_services(target))
+            report_verification(target, verify_services(target, prefer_files=args.configure_services))
         return target
     check_existing_installation(home, isolated=bool(args.client_home))
     if target.exists():
@@ -506,7 +740,7 @@ def main():
     except (ValueError, OSError, subprocess.CalledProcessError, EOFError, KeyboardInterrupt, zipfile.BadZipFile) as error:
         # Anahtarlar ve sunucu cevapları hata çıktısına yazılmaz.
         print('Kurulum tamamlanmadı: ' + (str(error) if isinstance(error, ValueError) else type(error).__name__), file=sys.stderr)
-        print('Mevcut dosyalar silinmedi. Yukarıdaki nedeni kontrol et.', file=sys.stderr)
+        print('İşlem tamamlanmadı; yukarıdaki nedeni ve varsa geri alma uyarısını kontrol et.', file=sys.stderr)
         return 1
     return 0
 
