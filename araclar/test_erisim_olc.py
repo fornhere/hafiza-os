@@ -219,6 +219,38 @@ class AccessMeasure(unittest.TestCase):
                 self.assertIn('## Havuz kapsaması\n\nhavuz ölçülmedi (rerank modu değil)', md)
                 self.assertIn('## Kapı yanlış negatifi\n\nkapı ölçülmedi', md)
 
+    def test_assist_suggestions_diagnostics_and_live_requests_are_separate(self):
+        labels = [dict(id='a', relevant_memory_ids=['m1', 'm2'], relevant_notes=['n1']), dict(id='b')]
+        def package(jev, selected):
+            return dict(selected_ids=selected, text='x', jev=jev)
+        packages = [package(dict(catalog=dict(suggested_ids=['m2', 'unknown'], diagnostics=['quantized_probability'], degraded=False),
+                                 knowledge=dict(suggested_ids=['n1'], diagnostics=[], degraded=False)), ['m1']),
+                    package(dict(catalog=dict(diagnostics=['budget_exceeded'], degraded=True),
+                                 knowledge=dict(suggested_ids=[], diagnostics=['assist_pool_empty'], degraded=False)), [])]
+        def build(*args, **kwargs):
+            measure.jev_client._transport('http://127.0.0.1:1/v1/systemone', {}, 'k', 1)
+            return packages.pop(0)
+        (self.vault / 'zihin').mkdir(exist_ok=True)
+        (self.vault / 'bilgi').mkdir(exist_ok=True)
+        self.write_rows(self.vault / 'zihin/hafıza-kataloğu.jsonl',
+                        [dict(memory_id=ident, status='active') for ident in ('m1', 'm2')])
+        (self.vault / 'bilgi/n1.md').write_text('synthetic', encoding='utf-8')
+        self.write_rows(self.root / 'set.jsonl', [dict(id=l['id'], client='codex', prompt='Synthetic task') for l in labels])
+        self.write_rows(self.root / 'labels.jsonl', labels)
+        with patch.object(measure.jev_client, '_transport', return_value={}), \
+             patch.object(measure.gorev_baglam, 'build_task_package', side_effect=build):
+            report = measure.evaluate(self.vault, self.root / 'set.jsonl', self.root / 'labels.jsonl',
+                                      self.root, jev_mode='assist')
+        metrics = report['metrics']
+        # Suggestions are never counted as delivered TP.
+        self.assertEqual((metrics['tp'], metrics['fn']), (1, 2))
+        self.assertEqual(metrics['suggestions'], dict(tp=2, fp=0, precision=1.0, prompts=1, recall_with_suggestions=1.0))
+        self.assertEqual(report['results'][0]['suggested'], ['memory:m2', 'note:n1'])
+        self.assertEqual(metrics['degraded_count'], 1)
+        self.assertEqual(metrics['degraded_diagnostics'], {'catalog:budget_exceeded': 1})
+        self.assertEqual(metrics['diagnostic_counts']['knowledge:assist_pool_empty'], 1)
+        self.assertEqual((metrics['live_requests'], metrics['live_request_failures']), (2, 0))
+
     def test_seeded_halves_are_disjoint(self):
         (self.vault / 'zihin').mkdir()
         (self.vault / 'bilgi').mkdir()
