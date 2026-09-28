@@ -82,24 +82,30 @@ def search_text(row):
     keys = row.get('arama_anahtarlari')
     return ' '.join([row.get('statement', '')] + ([k for k in keys if isinstance(k, str)] if isinstance(keys, list) else []))
 
-def rank_records(rows, query, *, tie_break=None, ignore=()):
+def rank_records(rows, query, *, tie_break=None, ignore=(), context=None):
     """Query coverage weighted by corpus rarity; order cannot affect selection.
 
     `ignore` words (e.g. the selected project's name) are scope, not topic
     evidence: they still match, but never count as one of the two independent
-    words a long query needs.
+    words a long query needs. `context` (the previous user turn) never selects
+    on its own: it can only complete a record the current query already
+    anchors with an informative word, where the query alone was too weak, and
+    it adds at most one such record (measured: more added mostly noise).
     """
     terms = content_words(query)
     scoped = {t for t in terms if any(word_match(t, w) for w in ignore)}
+    extra = {t for t in content_words(context) - terms
+             if not any(word_match(t, u) for u in terms) and not any(word_match(t, w) for w in ignore)} if context else set()
     documents = [(row, content_words(search_text(row))) for row in rows]
     frequencies = {term: sum(any(word_match(term, word) for word in words)
-                             for _, words in documents) for term in terms}
+                             for _, words in documents) for term in terms | extra}
     def rare(term): return 0 < frequencies[term] < max(2, len(rows)*0.5)
     def weight(term): return 1 + math.log((len(rows) + 1) / (frequencies[term] + 1))
     informative = {term for term in terms if rare(term)}
+    extra = {term for term in extra if rare(term)}
     # Without a distinguishing term, a word shared by most records (e.g. the
     # user's name) selects only when it covers at least half of the query.
-    ranked = []
+    ranked = []; completions = []
     for row, words in documents:
         matched = {term for term in terms if any(word_match(term, word) for word in words)}
         if not matched or (informative and not matched.intersection(informative)): continue
@@ -109,10 +115,16 @@ def rank_records(rows, query, *, tie_break=None, ignore=()):
         anchors = (matched & informative if informative else matched) - scoped
         weak = ((not informative and 2 * len(matched) < len(terms)) or
                 (len(terms) > 3 and len(anchors) < 2))
-        if weak: continue
+        if weak:
+            completed = {term for term in extra if any(word_match(term, word) for word in words)}
+            if not (anchors & informative and completed): continue
+            completions.append((score + sum(weight(term) / 2 for term in completed), len(matched), row))
+            continue
         ranked.append((score, len(matched), row))
-    return [row for _, _, row in sorted(ranked, key=lambda item:
-            (-item[0], -item[1], tie_break(item[2]) if tie_break else item[2].get('memory_id', '')))]
+    def order(item):
+        return (-item[0], -item[1], tie_break(item[2]) if tie_break else item[2].get('memory_id', ''))
+    ranked.extend(sorted(completions, key=order)[:1])
+    return [row for _, _, row in sorted(ranked, key=order)]
 
 
 def project_terms(project):
@@ -297,7 +309,11 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                 result.setdefault('jev', {})['rerank'] = dict(gate or {}, mode='rerank', degraded=True,
                     diagnostics=(gate or {}).get('diagnostics', []) + (['private_input'] if private_fallback else []))
             else:
-                result = _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state, skip_memory)
+                if previous_user:
+                    from client_transcripts import private
+                    if h.contains_secret(previous_user) or private(previous_user): previous_user = None
+                result = _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state, skip_memory,
+                                             previous_user=(previous_user or '')[:800] or None)
                 if gate: result.setdefault('jev', {})['gate'] = gate
     changed = before != revisions() or getattr(result.get('source_versions'), 'conflict', False)
     for name, version in result.get('source_versions', {}).items():
@@ -325,7 +341,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     return result
 
 
-def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state=None, skip_memory=False):
+def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state=None, skip_memory=False, previous_user=None):
     if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
     if view not in ("auto", "standard", "resume"): raise ValueError("invalid view")
     query = task_intent(query)
@@ -366,7 +382,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     procedure_future = submit(route_procedures, vault, query, budget=min(1000,budget))
     if rerank_state is None and (vault / 'bilgi').is_dir() and len(projects)<=1:
         from konu_sentezi import retrieve as read_knowledge
-        knowledge_future=submit(read_knowledge,vault,query,project_id=project['id'] if project else None,budget=min(1800,budget))
+        knowledge_future=submit(read_knowledge,vault,query,project_id=project['id'] if project else None,budget=min(1800,budget),
+                                context=previous_user)
     decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
     if wants_decisions and len(projects)<=1:
         from karar_gecmisi import history as read_decisions
@@ -433,7 +450,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     elif rerank_state is None:
         from jev_retrieval import catalog as semantic_catalog
         # Local ranking only; a semantic advisor keeps its own inputs.
-        local_rank = functools.partial(rank_records, ignore=project_terms(project) if project else ())
+        local_rank = functools.partial(rank_records, ignore=project_terms(project) if project else (),
+                                       context=previous_user)
         catalog_future = submit(semantic_catalog, vault, query, eligible, local_rank, scope)
         ranked_catalog, catalog_evaluation = catalog_future.result()
     else:

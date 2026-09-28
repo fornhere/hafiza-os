@@ -1068,14 +1068,15 @@ def context_with_notes(vault: Path, package: dict[str, Any], *, scope: str | Non
     return attach_notes(package, notes, limit=limit, char_budget=char_budget)
 
 
-def knowledge_notes(vault: Path, query: str, project_id: str | None) -> list[dict[str, Any]]:
+def knowledge_notes(vault: Path, query: str, project_id: str | None,
+                    context: str | None = None) -> list[dict[str, Any]]:
     """İncelenmiş bilgi/ notlarını hook'un görev paketiyle aynı seçimle döndürür.
 
     Kapsam, kaynak sürümü ve konu kapıları konu_sentezi/bilgi_agi'de uygulanır;
     ham işletim belgeleri (DURUM, komuta) varsayılan bağlama girmez.
     """
     from konu_sentezi import retrieve
-    result = retrieve(vault, query, project_id=project_id, budget=1800)
+    result = retrieve(vault, query, project_id=project_id, budget=1800, context=context)
     return [{"path": f"bilgi/{row['id']}.md", "anchor": row["id"], "score": 1.0,
              "excerpt": re.sub(r"\s+", " ", str(row.get("statement", ""))).strip()[:NOTE_EXCERPT_LIMIT],
              "modified": note_modified(vault / "bilgi" / f"{row['id']}.md")}
@@ -1545,6 +1546,7 @@ def _build_parser() -> argparse.ArgumentParser:
     context.add_argument("--scope", default=None,
                          help="user veya project:<id>; verilmezse sorudaki proje adı ya da çalışma klasöründen bulunur")
     context.add_argument("--cwd", help="Proje tespiti için çalışma klasörü (varsayılan: geçerli klasör)")
+    context.add_argument("--previous", help="Önceki kullanıcı mesajı; sorgunun zayıf eşleşmesini tamamlar, tek başına kayıt seçmez")
     context.add_argument("--uri", action="append", default=[],
                          help="Ham not gövdesi taraması için kasa köküne göreli dizin (tekrarlanabilir); "
                               "verilmezse yalnız incelenmiş bilgi/ notları kullanılır")
@@ -1633,7 +1635,8 @@ def main(argv: list[str] | None = None) -> int:
         project_id = scope.split(":", 1)[1] if scope.startswith("project:") else None
         valid = [row for row in records if retrievable(row, scope) and not context_record_errors(vault, row)]
         project = next((p for p in project_config(vault).get("projects", []) if p.get("id") == project_id), None)
-        ranked = rank_records(valid, args.query, ignore=project_terms(project) if project else ())
+        previous = args.previous if args.previous and not contains_secret(args.previous) else None
+        ranked = rank_records(valid, args.query, ignore=project_terms(project) if project else (), context=previous)
         results = [{'memory':row['statement'], 'metadata':row} for row in ranked]
         mode = 'local'; fallback = None
         if not args.local and (args.remote or mem0_config(vault).get("enabled", False)):
@@ -1651,7 +1654,7 @@ def main(argv: list[str] | None = None) -> int:
         result = context_package_with_notes(
             vault, results, query=args.query, scope=scope, uris=args.uri,
             limit=args.limit, char_budget=args.char_budget, records=records,
-            notes=None if args.uri else knowledge_notes(vault, args.query, project_id),
+            notes=None if args.uri else knowledge_notes(vault, args.query, project_id, context=previous),
         )
         result.update(mode=mode, fallback_reason=fallback, catalog_errors=errors)
         _json_print(result)

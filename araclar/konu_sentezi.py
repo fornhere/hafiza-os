@@ -84,13 +84,13 @@ def render_markdown(result):
     return '\n'.join(lines) + '\n'
 
 
-def retrieve(vault, query, project_id=None, budget=1800):
+def retrieve(vault, query, project_id=None, budget=1800, context=None):
     from jev_retrieval import knowledge as semantic_knowledge
     return semantic_knowledge(vault, query, project_id, budget,
-                              lambda: _retrieve_local(vault, query, project_id, budget))
+                              lambda: _retrieve_local(vault, query, project_id, budget, context=context))
 
 
-def _retrieve_local(vault, query, project_id=None, budget=1800):
+def _retrieve_local(vault, query, project_id=None, budget=1800, context=None):
     """For explicit synthesis queries, expand evidence within matched topics.
 
     Return only fully delivered records and their versions. This is contextual
@@ -101,9 +101,9 @@ def _retrieve_local(vault, query, project_id=None, budget=1800):
     terms = content_words(query)
     intent = content_words('tercih özet sentez birlikte yöntem')
     if not any(word_match(t, w) for t in intent for w in terms):
-        return knowledge._retrieve_local(vault, query, project_id, budget)
+        return knowledge._retrieve_local(vault, query, project_id, budget, context=context)
     if any(word_match(t, w) for t in ('site', 'web', 'website') for w in terms):
-        return knowledge._retrieve_local(vault, query, project_id, budget)
+        return knowledge._retrieve_local(vault, query, project_id, budget, context=context)
     result = build(vault, project_id)
     ranked = []
     for topic in result['topics']:
@@ -112,7 +112,7 @@ def _retrieve_local(vault, query, project_id=None, budget=1800):
         if score:
             ranked.append((-score, topic['id'], topic))
     if not ranked:
-        return knowledge._retrieve_local(vault, query, project_id, budget)
+        return knowledge._retrieve_local(vault, query, project_id, budget, context=context)
     ranked.sort(key=lambda item: item[:2])
     cards, records, topics, versions, omitted = [], [], [], {}, []
     seen = set()
