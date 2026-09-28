@@ -37,8 +37,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Shared category, note-search, scope-aware duplicate/conflict and condition-safe context logic; public installer supports vault-scoped external Mem0 credentials and optional automatic remote lookup, while private runtime keeps its fixed identity and legacy credential source with explicit remote lookup.",
-      "local_sha256": "02d6e0a147f5cec60548901d8db183cf7a1b4fdfc9ce52cac4a2e7d04530fa66",
-      "public_sha256": "097ac2a6a328015075fd675dd11510bbc731a817a03bd2a792bb87ed5eee7188"
+      "local_sha256": "2a477353e600028595f03a6d5ffd803e67d2fe59e7af69393b9e450b62af6cc9",
+      "public_sha256": "e58139aa3b7ea7a63a3ad2cbff23d93bf4c6f36d202de54ce1e6174ca0b7d37b"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -114,8 +114,8 @@
       "path": "araclar/jev_client.py",
       "mode": "reviewed-variant",
       "reason": "Public credential file and provider-specific environment routing versus installed legacy credential reader; choice, noul, probability, rerank, and purpose behavior is otherwise identical.",
-      "local_sha256": "b9a71f6b8704fdb5a8aa036d5a8d869161418f65b4f23b55dc0fdc91d2ed0e68",
-      "public_sha256": "dd734666055655b407ea043d16ae2b8efdec5173048e8ea206fbdc215456a0ef"
+      "local_sha256": "894941ce33e2f6a54b8418fe980b76368ed5942d108bb1e3ad8f179c56a6447b",
+      "public_sha256": "18d0e64bd57b6e321a088af20487db50ff0f39929f4d9c889d5807aafd7036a5"
     },
     {
       "path": "araclar/jev_retrieval.py",
@@ -219,6 +219,22 @@
     },
     {
       "path": "araclar/test_skill_esitlik.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_erisim_baglam_tamamlama.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_erisim_proje_kaniti.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_jev_assist_pool.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_guvenlik_baglama.py",
       "mode": "shared"
     }
   ]
