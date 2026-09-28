@@ -101,11 +101,24 @@ class RetrievalTests(unittest.TestCase):
         config.update(mode='shadow',retrieval_mode='assist')
         (self.v/'komuta/jev.json').write_text(json.dumps(config))
         with patch.object(jev_client, 'evaluate', side_effect=self.high):
-            result=b.retrieve(self.v,'İfadelerin bağlantısını hatırlat')
+            result=b.retrieve(self.v,'Kısa ifadelerin bağlantısını hatırlat')
         self.assertEqual(result['records'],[])
         self.assertIn('short',result['suggested_ids'])
         self.assertIn('okumadan tercih/onay sayma',result['text'])
         self.assertLessEqual(len(result['text']),1800)
+
+    def test_assist_without_lexical_pool_skips_network(self):
+        config=dict(mode='shadow',retrieval_mode='assist')
+        (self.v/'komuta/jev.json').write_text(json.dumps(config))
+        query='İfadelerin bağlantısını hatırlat'
+        with patch.object(jev_client, 'evaluate') as call:
+            result=b.retrieve(self.v,query)
+        call.assert_not_called()
+        self.assertEqual(result['suggested_ids'],[])
+        self.assertEqual(result['jev']['diagnostics'],['assist_pool_empty'])
+        self.assertFalse(result['jev']['degraded'])
+        self.assertEqual({k:v for k,v in result.items() if k not in ('jev','suggested_ids')},
+                         b._retrieve_local(self.v,query))
 
     def test_scope_proposed_and_stale_rows_never_sent(self):
         self.add(id='private', scope='project:other')
