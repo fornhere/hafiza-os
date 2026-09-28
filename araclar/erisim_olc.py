@@ -181,22 +181,66 @@ def _gate_false_negative(results):
                                           and r['gate']['needed'] is True for r in not_needed))
 
 
+def _reading_candidates(package, catalog, note_ids):
+    """Reading hints count separately from claims whose text was delivered."""
+    selected = set(package.get('selected_ids', []))
+    segments = package.get('delivered_segments') or {}
+    memories = {ident.removeprefix('jev-reading:') for ident in selected & segments.keys()
+                if ident.startswith('jev-reading:')} & catalog
+    knowledge = package.get('knowledge') or {}
+    notes = (set(knowledge.get('suggested_ids', [])) & note_ids
+             if 'knowledge' in selected and 'knowledge' in segments else set())
+    return {'memory:' + ident for ident in memories} | {'note:' + ident for ident in notes}
+
+
+def _cache_observations(evaluations):
+    """Channel observations, not request counts: rerank may aggregate packages."""
+    observations = {}
+    for channel, evaluation in evaluations.items():
+        if not isinstance(evaluation, dict) or 'cache_hit' not in evaluation:
+            continue
+        if evaluation.get('packages'):
+            status = 'all_hit' if evaluation['cache_hit'] else 'not_all_hit'
+        else:
+            # A missing request hash means evaluation ended before cache lookup.
+            if not evaluation.get('request_hash'):
+                continue
+            status = 'hit' if evaluation['cache_hit'] else 'miss'
+        observations[channel] = status
+    return observations
+
+
+def _reading_metrics(results):
+    gold = sum(len(row['tp']) + len(row['fn']) for row in results)
+    hits = sum(len(row['reading_candidate_hits']) for row in results)
+    new_hits = sum(len(set(row['reading_candidate_hits']) - set(row['tp'])) for row in results)
+    count = sum(len(row['reading_candidates']) for row in results)
+    return dict(prompts=sum(bool(row['reading_candidates']) for row in results),
+                candidates=count, gold_hits=hits, non_gold=count - hits,
+                additional_gold=new_hits,
+                delivered_or_hint_recall=(sum(len(row['tp']) for row in results) + new_hits) / gold if gold else None)
+
+
 def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_seed=None,
              split_half='all', threshold=None, gate_scope='memory', write=True):
     if jev_mode not in ('local', 'assist', 'on', 'rerank') or split_half not in ('all', 'first', 'second'):
         raise ValueError('invalid evaluation mode or split')
     if gate_scope not in ('memory','all'): raise ValueError('invalid gate scope')
-    prompts = _jsonl(set_path)
+    generated_at = datetime.now(timezone.utc)
+    input_bytes = {name: Path(path).read_bytes() for name, path in (('set', set_path), ('labels', labels_path))}
+    all_prompts = [json.loads(line) for line in input_bytes['set'].decode('utf-8').splitlines() if line.strip()]
+    label_rows = [json.loads(line) for line in input_bytes['labels'].decode('utf-8').splitlines() if line.strip()]
+    labels = {row['id']: row for row in label_rows}
+    if (len(labels) != len(label_rows) or len(labels) != len(all_prompts) or
+            set(labels) != {row['id'] for row in all_prompts}):
+        raise ValueError('labels must cover each prompt exactly once')
+    prompts = all_prompts
     if split_half != 'all':
         ids = sorted(row['id'] for row in prompts)
         random.Random(7 if split_seed is None else split_seed).shuffle(ids)
         midpoint = len(ids) // 2
         keep = set(ids[:midpoint] if split_half == 'first' else ids[midpoint:])
         prompts = [row for row in prompts if row['id'] in keep]
-    labels = {row['id']: row for row in _jsonl(labels_path)}
-    if (len(labels) != len(_jsonl(set_path)) or
-            set(labels) != {row['id'] for row in _jsonl(set_path)}):
-        raise ValueError('labels must cover each prompt exactly once')
     catalog = {row['memory_id'] for row in hafiza.load_catalog(Path(vault)) if row.get('status') == 'active'}
     note_ids = {p.stem for p in (Path(vault) / 'bilgi').glob('*.md') if p.name != 'README.md'}
     results = []
@@ -239,6 +283,8 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
                            'project' if ident == package.get('project_id') or ident in (package.get('summary') or {}).get('task_ids', []) else 'other')
                 channels[channel] += len(text)
             evaluations = package.get('jev') or {}
+            reading_candidates = _reading_candidates(package, catalog, note_ids)
+            cache_observations = _cache_observations(evaluations)
             catalog_evaluation = evaluations.get('catalog')
             pool = (set(catalog_evaluation['pool_ids'])
                     if isinstance(catalog_evaluation, dict) and isinstance(catalog_evaluation.get('pool_ids'), list)
@@ -253,6 +299,9 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
                                 pool_hits=sorted(gold & pool) if pool is not None else None,
                                 pool_misses=sorted(gold - pool) if pool is not None else None,
                                 needs_memory=needs_memory, gate=_gate_summary(evaluations),
+                                reading_candidates=sorted(reading_candidates),
+                                reading_candidate_hits=sorted(reading_candidates & gold),
+                                cache_observations=cache_observations,
                                 injected_chars=len(package['text']), channel_chars=channels, latency_ms=latency_ms,
                                 requested_mode=jev_mode, effective_mode='local' if degraded else jev_mode,
                                 degraded=degraded, abstain=abstain,
@@ -274,6 +323,11 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
                    requested_mode_counts=dict(Counter(r['requested_mode'] for r in results)),
                    effective_mode_counts=dict(Counter(r['effective_mode'] for r in results)),
                    channel_chars={name:sum(r['channel_chars'][name] for r in results) for name in ('catalog','note','procedure','project','other')})
+    metrics['reading_candidates'] = _reading_metrics(results)
+    metrics['cache'] = dict(
+        prompts_observed=sum(bool(row['cache_observations']) for row in results),
+        prompts_with_hits=sum(any(value in ('hit', 'all_hit') for value in row['cache_observations'].values()) for row in results),
+        prompts_with_misses=sum(any(value in ('miss', 'not_all_hit') for value in row['cache_observations'].values()) for row in results))
     metrics['pool_coverage'] = _pool_coverage(results)
     metrics['gate_false_negative'] = _gate_false_negative(results)
     latencies=sorted(r['latency_ms'] for r in results)
@@ -284,14 +338,18 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
     metrics['certain_only'] = dict(prompts=len(certain), tp=ctp, fp=cfp, fn=cfn,
                                    precision=ctp / (ctp + cfp) if ctp + cfp else None,
                                    recall=ctp / (ctp + cfn) if ctp + cfn else None,
+                                   reading_candidates=_reading_metrics(certain),
                                    pool_coverage=_pool_coverage(certain),
                                    gate_false_negative=_gate_false_negative(certain))
     report = dict(mode=jev_mode, split_half=split_half, split_seed=split_seed, gate_scope=gate_scope,
-                  threshold=threshold, metrics=metrics, results=results)
+                  threshold=threshold, generated_at=generated_at.isoformat(),
+                  input_sha256={name: hashlib.sha256(data).hexdigest() for name, data in input_bytes.items()},
+                  metrics=metrics, results=results)
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    report_stem = 'erisim-degerlendirme-' + generated_at.date().isoformat()
     if write:
-        (out_dir / 'erisim-degerlendirme-2026-09-24.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / (report_stem + '.json')).write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     def examples(kind):
         ranked = sorted((r for r in results if r[kind]), key=lambda r: (-len(r[kind]), r['id']))[:10]
         return '\n'.join(f"- `{r['id']}` {r['prompt'][:80].replace(chr(10), ' ')} — {', '.join(r[kind])}" for r in ranked) or '- Yok'
@@ -313,6 +371,10 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
           f"Ortalama enjekte karakter: {metrics['average_injected_chars']:.1f}; belirsiz etiket: {metrics['uncertain_labels']}.\n\n"
           f"Kesin etiketli {len(certain)} istemde precision: {metrics['certain_only']['precision']}; recall: {metrics['certain_only']['recall']} (TP {ctp}, FP {cfp}, FN {cfn}).\n\n"
           f"TP/FP/FN yalnız aktif katalog ve teslim edilmiş bilgi notu kimlikleri içindir; karakter ve boş dönme tüm paket metnini kapsar. Belirsiz etiketler metriklere dahildir.\n\n"
+          f"## Okuma adayları (teslim edilmiş kayıt değildir)\n\n{json.dumps(metrics['reading_candidates'], ensure_ascii=False)}\n\n"
+          f"Aday + teslim kapsaması, kaynağın okunduğunu veya bilginin uygulandığını göstermez; TP/FP/FN'ye eklenmez.\n\n"
+          f"## Önbellek gözlemleri\n\n{json.dumps(metrics['cache'], ensure_ascii=False)}\n\n"
+          f"Bunlar istem sayılarıdır, ağ çağrısı sayısı değildir. Aynı istem hem hit hem miss içerebilir; not_all_hit karma veya tamamen önbelleksiz pakettir. Önbellekli ve önbelleksiz gecikmeleri doğrudan karşılaştırma.\n\n"
           f"## Havuz kapsaması\n\n{pool_summary}\n\n"
           f"## Kapı yanlış negatifi\n\n{gate_summary}\n\n"
           f"## En kötü 10 FP\n\n{examples('fp')}\n\n## En kötü 10 FN\n\n{examples('fn')}\n\n"
@@ -326,7 +388,7 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
           f"- Kaçan bilgi notları için gerçek istemlerden eşanlamlı ifade ve alan kapsamı örnekleriyle erişim adaylarını incelemek; notu yalnız teslim edildiyse başarılı saymak.\n"
           f"- Belirsiz etiketleri ikinci bir gözden geçirmeden sonra kesin metrikten ayrı raporlamak.\n")
     if write:
-        (out_dir / 'erisim-degerlendirme-2026-09-24.md').write_text(md, encoding='utf-8')
+        (out_dir / (report_stem + '.md')).write_text(md, encoding='utf-8')
     return report
 
 
