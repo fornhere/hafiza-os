@@ -12,7 +12,6 @@ from pathlib import Path
 import sys
 import time
 from datetime import datetime, timezone
-from unittest.mock import patch
 
 from client_transcripts import CLIENTS, SourceError, private, sha, source_path, strict_json
 from client_sessions import atomic, enforce_policy, locked, load, recall, register, source_with_policy
@@ -40,14 +39,9 @@ def claude_task_package(vault, query, cwd=None, previous_user=None):
     if mode == 'on':
         return build_task_package(vault, query, cwd=cwd, budget=2000, previous_user=previous_user)
     local = local_task_package(vault, query, cwd, previous_user)
-    original = jev_client.load_config
-    def shadow_config(path):
-        config = original(path)
-        config.update(mode='on', retrieval_mode='rerank', procedure_mode='off')
-        return config
     started = time.monotonic()
     try:
-        with patch.object(jev_client, 'load_config', side_effect=shadow_config):
+        with jev_client.shadow_retrieval(vault):
             shadow = build_task_package(vault, query, cwd=cwd, budget=2000, previous_user=previous_user)
         evaluations = shadow.get('jev') or {}
         row = dict(request_hash=hashlib.sha256(query.encode()).hexdigest(),
