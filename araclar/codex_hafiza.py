@@ -98,6 +98,8 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
         if not isinstance(candidate, dict) or not all(isinstance(candidate.get(k), str) for k in
                 ('statement', 'subject_key', 'evidence')):
             raise ValueError('aday statement, subject_key ve evidence içermeli')
+        if not candidate['subject_key'].strip() or not candidate['statement'].strip():
+            raise ValueError('aday subject_key ve statement boş olamaz')
         if not valid_candidate_scope(vault, candidate.get('scope', 'user')):
             raise ValueError('invalid_scope')
         if not 10 <= len(candidate['evidence']) <= 1500 or candidate['evidence'] not in summary:
