@@ -2,7 +2,10 @@
 
 Aynı kasa paylaşılır; tam sohbet geçmişi istemciler arasında senkronize edilmez.
 Yönerge köprüsü kayıt değildir. Hook yakalaması incelenmiş hafıza değildir.
-Reviewer sağlayıcısı ayrıca ve açıkça yapılandırılır; hook model çağırmaz.
+Reviewer sağlayıcısı ayrıca ve açıkça yapılandırılır; hook bu inceleyiciyi çalıştırmaz.
+Görev bağlamında etkin Jev erişimi model çağrısı yapabilir; Claude'un `shadow`
+modu da çağrıyı hook sırasında yapar ve yalnız yerel metni teslim eder.
+Genel `mode: off` tüm Jev erişimini kapatır; ayrıntılar [Jev rehberinde](JEV.md).
 
 | İstemci | Yönerge | `--with-hooks` |
 |---|---|---|

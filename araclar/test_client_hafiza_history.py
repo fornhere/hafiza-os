@@ -34,7 +34,7 @@ class HistoryTests(unittest.TestCase):
             shadow={'text':'remote context','selected_ids':['memory:m1'],
                     'jev':{'gate':{'scores':{},'diagnostics':[]},
                            'catalog':{'scores':{'memory:m1':1.8},'diagnostics':[]}}}
-            with (patch.object(jev_client,'load_config',return_value=dict(jev_client.DEFAULTS,claude_hook_mode='shadow')),
+            with (patch.object(jev_client,'load_config',return_value=dict(jev_client.DEFAULTS,mode='shadow',claude_hook_mode='shadow')),
                   patch.object(client_hafiza,'local_task_package',return_value=local),
                   patch.object(gorev_baglam,'build_task_package',return_value=shadow) as build):
                 result=client_hafiza.claude_task_package(vault,'Synthetic writing request',previous_user='Earlier synthetic task')
@@ -46,6 +46,35 @@ class HistoryTests(unittest.TestCase):
             self.assertNotIn('Synthetic writing request',raw)
             self.assertNotIn('Earlier synthetic task',raw)
             self.assertEqual(json.loads(raw)['selected_ids'],['memory:m1'])
+
+    def test_global_off_prevents_claude_shadow_and_on_evaluation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Path(directory)
+            local = {'text': 'Local task context'}
+            for hook_mode in ('shadow', 'on'):
+                with self.subTest(hook_mode=hook_mode):
+                    with (patch.object(jev_client, 'load_config', return_value=dict(
+                              jev_client.DEFAULTS, mode='off', claude_hook_mode=hook_mode)),
+                          patch.object(client_hafiza, 'local_task_package', return_value=local),
+                          patch.object(gorev_baglam, 'build_task_package') as build):
+                        self.assertIs(client_hafiza.claude_task_package(vault, 'Synthetic task'), local)
+                    build.assert_not_called()
+            self.assertFalse((vault / '.cache/jev-golge').exists())
+
+    def test_claude_shadow_does_not_reenable_global_off_during_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Path(directory)
+            seen_modes = []
+            def build(path, *args, **kwargs):
+                seen_modes.append(jev_client.load_config(path)['mode'])
+                return {'text': ''}
+            enabled = dict(jev_client.DEFAULTS, mode='shadow', claude_hook_mode='shadow')
+            disabled = dict(enabled, mode='off')
+            with (patch.object(jev_client, 'load_config', side_effect=[enabled, disabled]),
+                  patch.object(client_hafiza, 'local_task_package', return_value={'text': 'local'}),
+                  patch.object(gorev_baglam, 'build_task_package', side_effect=build)):
+                client_hafiza.claude_task_package(vault, 'Synthetic task')
+            self.assertEqual(seen_modes, ['off'])
 
 
 if __name__ == '__main__':
