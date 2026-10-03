@@ -546,6 +546,51 @@ class NativeSessions(NativeFixture):
         path.write_text(json.dumps(receipt), encoding='utf-8')
         self.assertEqual(sessions.recall(self.vault), '')
 
+    def test_worker_prompt_skips_opening_and_later_stop_without_state(self):
+        payload = dict(self.payload(), prompt='İŞÇİ KOŞUSU — yalnız bu görevi tamamla.')
+        output, result = hooks.hook(self.vault, self.client, 'UserPromptSubmit', payload)
+        self.assertEqual((output, result['status']), ({}, 'worker_skipped'))
+        self.assertEqual(list(self.vault.iterdir()), [])
+        self.rows[0]['message']['content'] = payload['prompt']
+        self.write()
+        for event in ('SessionStart', 'Stop'):
+            with self.subTest(event=event):
+                output, result = hooks.hook(self.vault, self.client, event, self.payload())
+                self.assertEqual((output, result['status']), ({}, 'worker_skipped'))
+                self.assertEqual(list(self.vault.iterdir()), [])
+
+    def test_antigravity_worker_transcript_skips_context_and_stop(self):
+        self.agy()
+        self.rows[0]['content'] = '<USER_REQUEST>İŞÇİ KOŞUSU — yalnız bu görevi tamamla.</USER_REQUEST>'
+        self.write()
+        for event in ('PreInvocation', 'Stop'):
+            with self.subTest(event=event):
+                output, result = hooks.hook(self.vault, self.client, event, self.payload())
+                self.assertEqual((output, result['status']), ({}, 'worker_skipped'))
+                self.assertEqual(list(self.vault.iterdir()), [])
+
+    def test_worker_environment_skips_before_source_or_state(self):
+        for variable in ('HAFIZA_ISCI', 'CODEX_WORKER'):
+            with self.subTest(variable=variable), patch.dict(os.environ, {variable: '1'}):
+                with patch.object(hooks, 'identity', side_effect=AssertionError('source forbidden')):
+                    output, result = hooks.hook(self.vault, self.client, 'Stop', self.payload())
+                self.assertEqual((output, result['status']), ({}, 'worker_skipped'))
+                self.assertEqual(list(self.vault.iterdir()), [])
+
+    def test_worker_transcript_is_rejected_by_direct_registration(self):
+        self.rows[0]['message']['content'] = 'İŞÇİ KOŞUSU — yalnız bu görevi tamamla.'
+        self.write()
+        with self.assertRaisesRegex(SourceError, '^worker_source$'):
+            self.register()
+        self.assertEqual(sessions.pending(self.vault), [])
+
+    def test_worker_phrase_inside_normal_request_does_not_exclude_session(self):
+        self.rows[0]['message']['content'] = 'Lütfen işçi koşusu terimini açıkla.'
+        self.write()
+        output, result = hooks.hook(self.vault, self.client, 'Stop', self.payload())
+        self.assertEqual(output, {})
+        self.assertEqual(result['status'], 'pending')
+
     def test_private_prompt_lag_blocks_existing_pending_without_persisting_prompt(self):
         ident = self.register()['id']; decision = self.judgment(ident)
         output, diagnostic = self.cli('UserPromptSubmit', dict(self.payload(), prompt='bunu hafızaya kaydetme'))
