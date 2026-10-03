@@ -63,6 +63,21 @@ class Package(unittest.TestCase):
   self.assertEqual(build_task_package(self.v,'OBS nasıl açılır')['text'],'')
   self.assertNotIn('Son teslim',build_task_package(self.v,'kapak üret')['text'])
   self.assertIn('Son teslim',build_task_package(self.v,'kapak devam')['text'])
+ def test_repeated_segment_ids_preserve_all_delivered_text(self):
+  self.project['roots']=[str(self.v/'first'),str(self.v/'second')]
+  self.project['working_sources']=[dict(path=str(self.source),role=role,evidence_source='approval.md') for role in ('brief','reference')]
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project]}))
+  package=build_task_package(self.v,'kapak',budget=10000)
+  for ident,prefix in [('working-root','Çalışma kökü: '),('working-source','brief: ')]:
+   segment=package['delivered_segments'][ident]
+   if ident=='working-root':
+    self.assertEqual(2,segment.count(prefix))
+   else:
+    self.assertIn('brief: ',segment);self.assertIn('reference: ',segment)
+   self.assertIn(segment,package['text'])
+  delivered=package['delivered_segments']
+  self.assertEqual(len(package['text']),sum(map(len,delivered.values()))+len(delivered)-1)
+
  def test_budget_and_ambiguous_projects(self):
   self.assertEqual(build_task_package(self.v,'kapak',budget=1)['text'],'')
   (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project,dict(self.project,id='other')]}))
