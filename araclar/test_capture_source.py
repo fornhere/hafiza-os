@@ -68,6 +68,35 @@ class Capture(unittest.TestCase):
         self.rows += [dict(type='response_item',timestamp=str(i),payload=dict(type='message',role='user',content=[dict(text='Gerçek istek '+str(i))])) for i in range(6)]
     def save(self): self.p.write_text('\n'.join(map(json.dumps,self.rows)))
     def event(self,typ,turn='t6'): self.rows.append(dict(type='event_msg',payload=dict(type=typ,turn_id=turn)))
+    def category_candidate(self, category):
+        quote='Sunumlarda kısa ve açık başlıklar tercih ediyorum.'
+        self.rows[6]['payload']['content'][0]['text']=quote
+        self.event('task_complete');self.save();snap=c.snapshot(self.p,completed_prefix=True)
+        candidate=dict(statement=quote,subject_key='slides.titles',evidence=quote,
+                       evidence_source=dict(snap,line=7,message_hash=c.digest(quote),quote=quote))
+        if category is not None: candidate['category']=category
+        return snap,candidate
+
+    def test_record_preserves_optional_candidate_category(self):
+        import hafiza
+        for category in ('preference',None):
+            with self.subTest(category=category):
+                snap,candidate=self.category_candidate(category)
+                vault=self.v/('categorized' if category else 'legacy')
+                hook.record(vault,'s','recovery-v2-'+snap['source_hash'],candidate['evidence'],[candidate],snap)
+                queued=hafiza.load_jsonl(vault/hafiza.CANDIDATE_PATH)
+                self.assertEqual(1,len(queued))
+                self.assertEqual(category,queued[0].get('category'))
+                self.assertEqual(category is not None,'category' in queued[0])
+
+    def test_record_rejects_invalid_category_before_writing_receipt(self):
+        for category in ('unknown','case',[],{},1):
+            with self.subTest(category=category):
+                snap,candidate=self.category_candidate(category)
+                with self.assertRaisesRegex(ValueError,'category'):
+                    hook.record(self.v,'s','recovery-v2-'+snap['source_hash'],candidate['evidence'],[candidate],snap)
+                self.assertFalse((self.v/hook.INBOX).exists())
+
     def test_wrapper(self):
         self.assertEqual('kapak yap',c.clean_user('<in-app-browser-context source="ambient">OBS</in-app-browser-context>\n## My request:\nkapak yap'))
         self.assertEqual('',c.clean_user('<task-notification>\n<task-id>x</task-id>\n<output-file>/tmp/-home-u-ikinci-beyin/x.output</output-file>\n</task-notification>'))
