@@ -95,6 +95,10 @@
       "mode": "shared"
     },
     {
+      "path": "araclar/oturum_gorunumu.py",
+      "mode": "shared"
+    },
+    {
       "path": "araclar/ogrenme_pilotu.py",
       "mode": "shared"
     },
