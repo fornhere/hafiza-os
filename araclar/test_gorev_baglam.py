@@ -482,7 +482,7 @@ class ProjectStatusTests(unittest.TestCase):
 
     def task(self, ident='work', days=0, **extra):
         from is_ve_ders import put
-        data = dict(id=ident, title='Orvant iş kartı', status='active', project_id='alpha',
+        data = dict(id=ident, title='Alpha iş kartı', status='active', project_id='alpha',
                     source_path='source.md', evidence=(self.vault/'source.md').read_text(),
                     actor='test', next_step='Testleri doğrula', goal='Durumu görünür yap',
                     last_result='Düzeltme uygulandı', open_work='Regresyon kontrolü',
@@ -541,13 +541,13 @@ class ProjectStatusTests(unittest.TestCase):
         for phrase in ('ne durumda','nerede kaldık','son durum','kaldığımız yer','devam'):
             self.assertTrue(continuation_request('alpha '+phrase))
             self.assertTrue(build_task_package(self.vault,'alpha '+phrase)['capsule']['enabled'])
-        projects=[dict(id='serai',aliases=['Serai']),dict(id='orvant',aliases=['Orvant'])]
+        projects=[dict(id='beta',aliases=['Beta']),dict(id='gamma',aliases=['Gamma'])]
         (self.vault/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':projects}))
-        for query in ("Serai'yi bırakıp Orvant", 'Serai yerine Orvant', 'Serai’yi bırak Orvant ne durumda'):
+        for query in ("Beta'yı bırakıp Gamma", 'Beta yerine Gamma', 'Beta’yı bırak Gamma ne durumda'):
             with self.subTest(query=query):
-                self.assertEqual(['orvant'],[p['id'] for p in select_projects(projects,query)[0]])
+                self.assertEqual(['gamma'],[p['id'] for p in select_projects(projects,query)[0]])
                 result=build_task_package(self.vault,query)
-                self.assertEqual('orvant',result['project_id'])
+                self.assertEqual('gamma',result['project_id'])
                 self.assertNotIn('ambiguous_project',result['omitted_reasons'])
 
     def test_session_close_report_card_reaches_short_status_prompt(self):
