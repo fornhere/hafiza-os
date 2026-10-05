@@ -526,13 +526,14 @@ class ProjectStatusTests(unittest.TestCase):
         self.task('fresh')
         result=build_task_package(self.vault,'alpha ne durumda',budget=500)
         self.assertIn('fresh',result['selected_ids'])
-        self.assertNotIn('work',result['selected_ids'])
+        self.assertIn('work',result['selected_ids'])
+        self.assertIn('teyit gerekli',result['text'])
 
     def test_newest_active_task_and_remaining_count(self):
         self.task('first');self.task('second')
         result=build_task_package(self.vault,'alpha devam')
-        self.assertEqual(['second'],[t['id'] for t in result['capsule']['tasks']])
-        self.assertIn('1 aktif iş daha',result['text'])
+        self.assertEqual(['second','first'],[t['id'] for t in result['capsule']['tasks']])
+        self.assertNotIn('aktif iş daha',result['text'])
         self.assertTrue(result['capsule']['selection_required'])
         self.assertIsNone(result['capsule']['suggested_next_step'])
 
@@ -562,4 +563,89 @@ class ProjectStatusTests(unittest.TestCase):
         for label in ('oturum kapanış bildirimi (', 'doğrulanmış sonuç değil', 'Son sonuç: Kök satırları teke indi',
                       'Açık iş/engel: Ölçüm setini koş', 'Sonraki adım: Taban ölçümle karşılaştır'):
             self.assertIn(label, result['text'])
+        self.assertIsNone(result['capsule']['suggested_next_step'])
+
+
+class BoundedStatusRegressionTests(unittest.TestCase):
+    setUp = ScopeContextPackageTests.setUp
+    task = ProjectStatusTests.task
+    def test_three_cards_and_actual_remaining_count(self):
+        for ident in ('one', 'two', 'three', 'four'):
+            self.task(ident)
+        full = build_task_package(self.vault, 'alpha devam', history='never')
+        self.assertEqual(['four', 'three', 'two'], [t['id'] for t in full['capsule']['tasks']])
+        self.assertIn('1 aktif iş daha', full['text'])
+        self.assertIn('one:card_limit', full['omitted_reasons'])
+        self.assertIsNone(full['capsule']['suggested_next_step'])
+        short = build_task_package(self.vault, 'alpha devam', budget=370, history='never')
+        self.assertLessEqual(len(short['text']), 370)
+        self.assertEqual(1, len(short['capsule']['tasks']))
+        self.assertIn('3 aktif iş daha', short['text'])
+
+    def test_unique_legacy_title_restores_scope_without_overriding_explicit_scope(self):
+        from gorev_baglam import digest
+        path=self.vault/'komuta/gorev-baglam.json'
+        path.write_text(json.dumps({'projects':[dict(id='alpha',aliases=['alpha']),dict(id='beta',aliases=['beta'])]}))
+        self.task('legacy', project_id=None, title='Alpha CI kontrolü')
+        self.task('foreign', project_id='beta', title='Alpha entegrasyonu')
+        self.task('generic', project_id=None, title='İş kontrolü')
+        result = build_task_package(self.vault, 'alpha devam', history='never')
+        self.assertIn('legacy', result['selected_ids'])
+        self.assertNotIn('foreign', result['selected_ids'])
+        self.assertNotIn('generic', result['selected_ids'])
+        self.assertEqual(digest(self.vault/'source.md'), result['source_versions']['source.md'])
+        (self.vault/'source.md').write_text('İncelenmemiş değişiklik')
+        self.assertNotIn('legacy', build_task_package(self.vault, 'alpha devam')['selected_ids'])
+
+    def test_ambiguous_legacy_title_does_not_restore_scope(self):
+        path=self.vault/'komuta/gorev-baglam.json'
+        path.write_text(json.dumps({'projects':[dict(id='alpha',aliases=['alpha']),dict(id='beta',aliases=['beta'])]}))
+        self.task('mixed', project_id=None, title='Alpha beta entegrasyonu')
+        self.assertNotIn('mixed', build_task_package(self.vault, 'alpha devam')['selected_ids'])
+
+    def test_previous_scope_only_for_safe_unambiguous_continuation(self):
+        from gorev_baglam import select_projects
+        projects=[dict(id='alpha',aliases=['alpha']),dict(id='beta',aliases=['beta'],roots=[str(self.vault/'beta')])]
+        (self.vault/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':projects}))
+        inherited = build_task_package(self.vault, 'devam et döngüye', previous_user='alpha üzerinde çalış')
+        self.assertEqual('alpha', inherited['project_id'])
+        self.assertEqual('previous_user', inherited['match_reason'])
+        self.assertIsNone(build_task_package(self.vault, 'devam et döngüye')['project_id'])
+        self.assertIsNone(build_task_package(self.vault, 'devam', previous_user='alpha ve beta')['project_id'])
+        self.assertIsNone(build_task_package(self.vault, 'hava nasıl', previous_user='alpha')['project_id'])
+        self.assertEqual('beta', build_task_package(self.vault, 'beta devam', previous_user='alpha')['project_id'])
+        self.assertEqual('beta', build_task_package(self.vault, 'devam', cwd=str(self.vault/'beta'), previous_user='alpha')['project_id'])
+        with patch('client_transcripts.private', return_value=True):
+            self.assertIsNone(build_task_package(self.vault, 'devam', previous_user='alpha')['project_id'])
+
+    def test_notes_survive_status_card_and_partial_delivery_metadata_is_exact(self):
+        from gorev_baglam import digest
+        self.task()
+        (self.vault/'bilgi').mkdir()
+        records=[]; versions={}; cards=[]
+        for ident, statement in (('a', 'Alpha için incelenmiş kısa bilgi.\n\nAynı kaydın kapsam koşulu.'), ('b', 'İkinci bağımsız bilgi. '*50)):
+            path='bilgi/'+ident+'.md'
+            (self.vault/path).write_text(statement)
+            records.append(dict(id=ident,statement=statement,sources=[],examples=[]))
+            versions[path]=digest(self.vault/path)
+            cards.append('Bilgi [decision; all; project:alpha]: '+statement+'\nKaynak: '+path)
+        notes=dict(text='\n\n'.join(cards),records=records,transfers=[],source_versions=versions,diagnostics=[])
+        with patch('konu_sentezi.retrieve', return_value=notes):
+            result=build_task_package(self.vault, 'alpha ne durumda', budget=650, history='never')
+        self.assertIn('work', result['selected_ids'])
+        self.assertIn(records[0]['statement'], result['delivered_segments']['knowledge'])
+        self.assertNotIn(records[1]['statement'], result['text'])
+        self.assertEqual(['a'], [r['id'] for r in result['knowledge']['records']])
+        self.assertIn('b', result['knowledge']['omitted_record_ids'])
+        self.assertIn('bilgi/a.md', result['source_versions'])
+        self.assertNotIn('bilgi/b.md', result['source_versions'])
+        self.assertEqual(result['delivered_segments']['knowledge'], result['knowledge']['text'])
+        self.assertLessEqual(len(result['text']),650)
+
+    def test_task_topic_precedes_unrelated_newer_card(self):
+        self.task('build', title='Alpha derleme hatası', next_step='Derleme hatasını doğrula')
+        self.task('newer', title='Alpha tasarım incelemesi', next_step='Renk seçimini incele')
+        result=build_task_package(self.vault, 'alpha derleme devam', history='never')
+        self.assertEqual('build', result['capsule']['tasks'][0]['id'])
+        self.assertTrue(result['capsule']['selection_required'])
         self.assertIsNone(result['capsule']['suggested_next_step'])

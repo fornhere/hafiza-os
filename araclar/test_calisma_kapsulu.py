@@ -40,8 +40,8 @@ class Capsule(unittest.TestCase):
     def test_limits_and_dropped_tasks_do_not_create_single_choice(self):
         for i in range(5):self.task(str(i))
         for i in range(7):self.fact(str(i))
-        p=self.package();c=p['capsule'];self.assertEqual(len(c['tasks']),1);self.assertEqual(len(c['facts']),5)
-        self.assertEqual(c['available_task_count'],5);self.assertEqual(c['omitted_task_count'],4)
+        p=self.package();c=p['capsule'];self.assertEqual(len(c['tasks']),3);self.assertEqual(len(c['facts']),5)
+        self.assertEqual(c['available_task_count'],5);self.assertEqual(c['omitted_task_count'],2)
         self.assertIsNone(c['suggested_next_step']);self.assertIn('birden fazla',p['text'])
         self.assertNotIn('Bağlam kontrolü:',p['text'])
     def test_budget_never_returns_unselected_or_partial_cards(self):
