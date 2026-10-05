@@ -1,4 +1,5 @@
 import json
+import time
 import os
 import tempfile
 import threading
@@ -220,6 +221,23 @@ class ClientTests(unittest.TestCase):
             result=j.evaluate(self.vault,'q',self.cards,transport=fail)
             self.assertIn(expected,result['diagnostics'])
             self.assertNotIn('PRIVATE',json.dumps(result))
+    def test_budget_exhaustion_pauses_calls_then_recovers(self):
+        import urllib.error
+        self.config()
+        calls=[]
+        def broke(*args):
+            calls.append(1); raise urllib.error.HTTPError('https://example.com',402,'PRIVATE budget',{},None)
+        first=j.evaluate(self.vault,'q1',self.cards,transport=broke)
+        self.assertIn('http_budget_exceeded',first['diagnostics'])
+        self.assertNotIn('PRIVATE',json.dumps(first))
+        second=j.evaluate(self.vault,'q2',self.cards,transport=broke)
+        self.assertTrue(second['degraded']);self.assertIn('provider_budget_paused',second['diagnostics'])
+        self.assertEqual(len(calls),1)
+        marker=j._budget_marker(self.vault)
+        old=time.time()-j.BUDGET_COOLDOWN_SECONDS-5;os.utime(marker,(old,old))
+        ok=j.evaluate(self.vault,'q3',self.cards,transport=lambda *a:dict(answers={
+            'f0_c0':dict(type='score',score=1,probabilities=[0.2,0.6,0.2])}))
+        self.assertFalse(ok['degraded']);self.assertFalse(marker.exists())
     def test_metadata_and_config(self):
         self.config()
         result=j.evaluate(self.vault,'q',self.cards,transport=lambda *a:dict(model='jev-1.13.0',answers={

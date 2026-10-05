@@ -37,8 +37,8 @@
       "path": "araclar/hafiza.py",
       "mode": "reviewed-variant",
       "reason": "Shared category, note-search, scope-aware duplicate/conflict and condition-safe context logic; public installer supports vault-scoped external Mem0 credentials and optional automatic remote lookup, while private runtime keeps its fixed identity and legacy credential source with explicit remote lookup.",
-      "local_sha256": "18b9fb4307b95b5279303b69a8f622e98c4259ed64f90369218c30e459b7ab6d",
-      "public_sha256": "77a8bdb50eed4097b149e4097cea332a1a75ff2c87b6ce391595767de2257274"
+      "local_sha256": "2a477353e600028595f03a6d5ffd803e67d2fe59e7af69393b9e450b62af6cc9",
+      "public_sha256": "e58139aa3b7ea7a63a3ad2cbff23d93bf4c6f36d202de54ce1e6174ca0b7d37b"
     },
     {
       "path": "araclar/hafiza_git.py",
@@ -95,6 +95,10 @@
       "mode": "shared"
     },
     {
+      "path": "araclar/oturum_gorunumu.py",
+      "mode": "shared"
+    },
+    {
       "path": "araclar/ogrenme_pilotu.py",
       "mode": "shared"
     },
@@ -114,8 +118,8 @@
       "path": "araclar/jev_client.py",
       "mode": "reviewed-variant",
       "reason": "Public credential file and provider-specific environment routing versus installed legacy credential reader; choice, noul, probability, rerank, and purpose behavior is otherwise identical.",
-      "local_sha256": "b9a71f6b8704fdb5a8aa036d5a8d869161418f65b4f23b55dc0fdc91d2ed0e68",
-      "public_sha256": "dd734666055655b407ea043d16ae2b8efdec5173048e8ea206fbdc215456a0ef"
+      "local_sha256": "5dc28a522665b253fa34149def6ff8515ba36f960d67bdc1d07021731543e144",
+      "public_sha256": "94239aa63d2c6eb9222444f833163359bfe63ac494b673ac49cc1b092000dcd4"
     },
     {
       "path": "araclar/jev_retrieval.py",
@@ -207,6 +211,38 @@
     },
     {
       "path": "araclar/test_capture_privacy_marker.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_context_bilgi.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/skill_esitlik.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_skill_esitlik.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_erisim_baglam_tamamlama.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_erisim_proje_kaniti.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_jev_assist_pool.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_guvenlik_baglama.py",
+      "mode": "shared"
+    },
+    {
+      "path": "araclar/test_jev_procedures.py",
       "mode": "shared"
     }
   ]

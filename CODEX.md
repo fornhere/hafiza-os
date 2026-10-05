@@ -151,6 +151,25 @@ ayrıntılı status/health görünümünde kalır. Tarama, zamanlayıcı ve uzak
 arızalarının açılış bildirimleri sürer. Kaynak uyarısını çözmek için gerçek
 inceleme gerekir; hash'i körlemesine yenilemek onay değildir.
 
+## Claude/Codex skill eşitliği
+
+"Codex'te bu skill yok" veya "iki ajan aynı skill'le çalışıyor" demeden önce
+ölçün; tahmin kanıt değildir:
+
+```sh
+python3 -X utf8 araclar/skill_esitlik.py --skill 'hyperframes*'
+```
+
+Araç yalnız okur. `~/.claude/skills` ile Codex'in okuduğu `~/.agents/skills` ve
+`~/.codex/skills` klasörlerini içerik hash'iyle karşılaştırır; son 20 Codex
+oturumunun başındaki skill listesinden gerçekte neyin yüklendiğini sayar.
+Oturumlardan yalnız skill bölümü okunur, konuşma metni çıktıya girmez.
+`problem` (çıkış kodu 1): Codex'te eksik skill, içeriği ayrışmış kopya veya aynı
+skill'in farklı içerikli sürümlerinin birlikte yüklenmesi (ör. `config.toml`'da
+kapalı olduğu hâlde yüklenen eski eklenti önbelleği). `warning`: aynı içeriğin
+iki kez yüklenmesi veya bağlantı yerine kopya. Temizlik veya yeniden bağlama bu
+aracın işi değildir; kullanıcı onayıyla ayrıca yapılır.
+
 
 ## Yerel çalışma kapsülü ve bilgi kartları
 

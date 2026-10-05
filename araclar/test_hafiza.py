@@ -907,7 +907,7 @@ class NotAramaTesti(unittest.TestCase):
         self.assertEqual(1200, hafiza.catalog_budget(1200, False))
         self.assertEqual(720, hafiza.catalog_budget(1200, True))
 
-    def test_context_komutu_not_satirlarini_ekler(self):
+    def test_context_komutu_uri_ile_ham_not_satirlarini_ekler(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault = self._vault(tmp)
             (vault / "projeler" / "hermes" / "DURUM.md").write_text(
@@ -917,7 +917,7 @@ class NotAramaTesti(unittest.TestCase):
             with contextlib.redirect_stdout(buffer):
                 exit_code = hafiza.main([
                     "--vault", str(vault), "context", "hermes AWS", "--limit", "5",
-                    "--char-budget", "1200",
+                    "--char-budget", "1200", "--uri", "projeler",
                 ])
 
             paket = json.loads(buffer.getvalue())
