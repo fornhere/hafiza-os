@@ -151,7 +151,7 @@ def task_intent(text):
                   lambda match: match.group(1), text, flags=re.I)
 
 
-def select_projects(projects, query, cwd=None):
+def select_projects(projects, query, cwd=None, previous_user=None):
     intent = task_intent(query)
     # Explicit replacement names the destination; the abandoned project is not scope.
     replacement = re.search(r'\b(?:bırak(?:ıp)?|yerine)\b(.+)', intent, re.I)
@@ -173,8 +173,14 @@ def select_projects(projects, query, cwd=None):
     if len(located)>1:
         depths={p['id']:max(len(Path(r).resolve().parts) for r in p.get('roots',[]) if Path(cwd).resolve().is_relative_to(Path(r).resolve())) for p in located}
         located=[p for p in located if depths[p['id']]==max(depths.values())]
-    chosen=explicit or located
-    reason='explicit' if explicit else ('cwd' if located else 'unresolved')
+    # A short continuation may inherit one unambiguous previous scope.
+    # Explicit current names, ambiguous matches and cwd always take precedence.
+    prior=[]
+    if not explicit and not located and previous_user and continuation_request(query):
+        prior, _ = select_projects(active, previous_user)
+        if len(prior) != 1: prior=[]
+    chosen=explicit or located or prior
+    reason='explicit' if explicit else ('cwd' if located else 'previous_user' if prior else 'unresolved')
     return chosen, reason
 
 def config(vault):
@@ -267,7 +273,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                 private_fallback = True
             else:
                 private_fallback = False
-                projects, _ = select_projects(config(vault).get('projects', []), query, cwd)
+                projects, _ = select_projects(config(vault).get('projects', []), query, cwd, previous_user)
                 project = projects[0] if len(projects) == 1 else None
                 project_context = (str(project.get('id', '')) + ': ' + str(project.get('summary', ''))) if project else ''
                 if h.contains_secret(project_context) or private(project_context): project_context = ''
@@ -357,7 +363,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     projects=[]
     cfg=config(vault)
     if cfg.get('invalid'): omitted.append('config_invalid')
-    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd)
+    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd, previous_user)
     project = projects[0] if len(projects)==1 else None
     workflows=[]
     if project:
@@ -403,7 +409,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     def add(ident, text):
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
-                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'suppressed-history':6, 'decision-history':4, 'knowledge':2, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
+                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'suppressed-history':6, 'decision-history':4, 'knowledge':-1, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
         if ident in task_ids: priority=-2
         if ident.startswith('output:'): priority=5
@@ -518,8 +524,26 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             working_root = max(matching, key=lambda r: len(Path(r).resolve().parts)) if matching else roots[0]
             add('working-root','Çalışma kökü: '+working_root+'; dosyada işlem yapmadan canlı Git HEAD/status ve ilgili testleri doğrula.')
             if len(roots)>1: add('alternative-roots',f'+{len(roots)-1} alternatif kök: komuta/gorev-baglam.json')
-        project_tasks = [t for t in brief(vault,limit=10000,include_stale=True)
-                         if t.get('project_id')==project['id'] or t['id'] in project.get('task_ids',[])]
+        project_tasks = []
+        for task in brief(vault,limit=10000,include_stale=True):
+            belongs = task.get('project_id')==project['id'] or task['id'] in project.get('task_ids',[])
+            if not task.get('project_id') and not belongs:
+                # Legacy cards have no project_id. Only a unique specific title
+                # alias can restore scope; generic video/thumbnail aliases cannot.
+                title_projects = [p for p in cfg.get('projects', [])
+                                  if any(not set(query_words(a)) <= _GENERIC and alias_match(a, query_words(task['title']))
+                                         for a in p.get('aliases', []) if query_words(a))]
+                belongs = len(title_projects)==1 and title_projects[0]['id']==project['id']
+            if belongs: project_tasks.append(task)
+        topical_tasks = rank_records([dict(t, statement=t['title']+' '+t['next_step'], memory_id=t['id'])
+                                      for t in project_tasks], query, ignore=project_terms(project), context=previous_user)
+        topical_ids = [t['id'] for t in topical_tasks]
+        # A topic that matches every card distinguishes none; keep recency.
+        if len(topical_ids) == len(project_tasks): topical_ids = []
+        # A matching topic beats recency. Generic status requests keep the
+        # verified recency order and expose several alternatives, never guess one.
+        project_tasks.sort(key=lambda t: (t['id'] not in topical_ids,
+                                         topical_ids.index(t['id']) if t['id'] in topical_ids else 0))
         visible_count = 0
         for task in project_tasks:
             task_ids.add(task['id'])
@@ -529,7 +553,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 omitted.append(task['id']+':source_changed'); continue
             stale = task.get('confirmation_required', False)
             if pinned and not stale: resume_tasks.append(task)
-            if visible_count:
+            if visible_count >= 3:
                 omitted.append(task['id']+':card_limit'); continue
             visible_count += 1
             if pinned and not stale: current_tasks.append(task)
@@ -546,17 +570,20 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             def field(name, fallback):
                 value = task.get(name) or report_fields.get(name)
                 return value if isinstance(value, str) and value and not h.contains_secret(value) else fallback
-            text = (prefix+' ['+state_label+']: '+task['title']+
-                    '; Hedef: '+field('goal', task['title'])+
-                    '; Son sonuç: '+field('last_result', 'kaydedilmemiş')+
-                    '; Açık iş/engel: '+field('blocker', field('open_work', task['status']))+
-                    '; Sonraki adım: '+task['next_step']+'; Tarih: '+date+
-                    ' (kaynak: '+task['source_path']+')')
+            text = prefix+' ['+state_label+']: '+task['title']
+            # Preserve recorded facts; repeated title and absent fields add no evidence.
+            for label, value in (('Hedef', field('goal', '')),
+                                 ('Son sonuç', field('last_result', '')),
+                                 ('Açık iş/engel', field('blocker', field('open_work', '')))):
+                if value: text += '; '+label+': '+value
+            text += ('; Sonraki adım: '+task['next_step']+'; Tarih: '+date+
+                     ' (kaynak: '+task['source_path']+')')
             add(task['id'],text)
-        if len(resume_tasks)>1:
-            add('other-active-tasks',f'{len(resume_tasks)-1} aktif iş daha; hedef işi seçmek için iş defterini aç.')
+            # One relevant primary card comes first; notes precede additional
+            # cards and unrelated recency hints, so a long card cannot starve notes.
+            primary = visible_count==1 and (resume or bool(topical_ids) or not knowledge_data or not knowledge_data['text'])
             priority,sequence,ident,text=candidates[-1]
-            candidates[-1]=(-1,sequence,ident,text)
+            candidates[-1]=(-2 if primary else 2,sequence,ident,text)
         for asset in project.get('assets',[]):
             try: path=validate_asset(asset)
             except (ValueError,OSError,KeyError) as e: omitted.append(asset.get('id','asset')+':'+str(e)); continue
@@ -565,7 +592,13 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         add('decision-history',decision_data['text'])
         source_versions.update(decision_data['source_versions'])
     if knowledge_data and knowledge_data['text']:
-        add('knowledge',knowledge_data['text'])
+        # Local notes are independently source-backed paragraphs. Admit complete
+        # cards individually rather than dropping the whole dossier when one
+        # task consumes part of the budget. Transfers/syntheses keep their notices.
+        separate_notes = (knowledge_data['text'].startswith('Bilgi [') and
+                          not knowledge_data.get('transfers') and not knowledge_data.get('topics'))
+        for card in re.split(r'\n\n(?=Bilgi \[)', knowledge_data['text']) if separate_notes else [knowledge_data['text']]:
+            add('knowledge',card)
     if reuse_data and reuse_data['text']:
         add('reuse',reuse_data['text'])
     for output in output_data['outputs'][:3]:
@@ -657,6 +690,14 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             delivered_segments[ident] += '\n' + text
         else:
             delivered_segments[ident] = text
+    remaining_active = sum(t['id'] not in selected for t in resume_tasks)
+    if remaining_active:
+        text = f'{remaining_active} aktif iş daha; hedef işi seçmek için iş defterini aç.'
+        if used+len(text)+(1 if lines else 0)<=budget:
+            lines.append(text); selected.append('other-active-tasks')
+            delivered_segments['other-active-tasks']=text
+            used+=len(text)+(1 if len(lines)>1 else 0)
+        else: omitted.append('other-active-tasks:budget')
     if 'suppressed-history' in selected or any(row['memory_id'] in selected for row in current_facts):
         header = h.context_scope_header(scope, ['project:'+w['id'] for w in workflows])
         if used + len(header) + 1 <= budget:
@@ -671,6 +712,17 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     result['suppressed_count']=suppressed_count
     result['lessons']=dict(applied=[dict(id=r['id'],version=r['version']) for r in lesson_details['lessons']] if 'methods' in selected else [],diagnostics=lesson_diagnostics)
     if knowledge_data and 'knowledge' in selected:
+        delivered = delivered_segments['knowledge']
+        if separate_notes:
+            records = [r for r in knowledge_data['records'] if r['statement'] in delivered
+                       and 'Kaynak: bilgi/'+r['id']+'.md' in delivered]
+            paths = {'bilgi/'+r['id']+'.md' for r in records}
+            paths.update(s['path'] for r in records for s in r['sources'])
+            paths.update(e['path'] for r in records for e in r.get('examples', []))
+            knowledge_data = dict(knowledge_data, records=records, text=delivered,
+                                  source_versions={p:v for p,v in knowledge_data['source_versions'].items() if p in paths},
+                                  omitted_record_ids=sorted(set(knowledge_data.get('omitted_record_ids', [])) |
+                                      {r['id'] for r in knowledge_data['records'] if r not in records}))
         source_versions.update(knowledge_data.get('source_versions',{}))
     if 'procedure-reading' in selected:
         source_versions.update(procedure_data['source_versions'])
