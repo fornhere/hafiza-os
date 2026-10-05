@@ -152,7 +152,11 @@ def task_intent(text):
 
 
 def select_projects(projects, query, cwd=None):
-    words=query_words(task_intent(query))
+    intent = task_intent(query)
+    # Explicit replacement names the destination; the abandoned project is not scope.
+    replacement = re.search(r'\b(?:bırak(?:ıp)?|yerine)\b(.+)', intent, re.I)
+    if replacement: intent = replacement.group(1)
+    words=query_words(intent)
     deictic=any(w in words for w in ('dünkü','o','şu','önceki'))
     def matches(project,fuzzy=False):
         return any(alias_match(alias,words,fuzzy) and not (deictic and set(query_words(alias)) <= _GENERIC)
@@ -224,7 +228,7 @@ def asset_claim_overrides(vault):
 
 def continuation_request(query):
     words = query_words(task_intent(query))
-    return any(alias_match(term, words) for term in ('devam', 'kaldık', 'sonraki adım'))
+    return any(alias_match(term, words) for term in ('devam', 'kaldık', 'sonraki adım', 'ne durumda', 'nerede kaldık', 'son durum', 'kaldığımız yer'))
 
 
 class RevisionMap(dict):
@@ -401,7 +405,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
                     'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'suppressed-history':6, 'decision-history':4, 'knowledge':2, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
-        if ident in task_ids: priority=4
+        if ident in task_ids: priority=-2
         if ident.startswith('output:'): priority=5
         candidates.append((priority, len(candidates), ident, text))
         return True
@@ -508,25 +512,47 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 source_versions[str(path)]=digest(path)
                 add('working-source',ref['role']+': '+str(path)+'; kaynak: '+ref['evidence_source']+'. Gerektikçe aç; varlık ≠ kabul.')
             else: omitted.append(str(path)+':missing')
-        for working_root in project.get('roots',[]): add('working-root','Çalışma kökü: '+working_root+'; dosyada işlem yapmadan canlı Git HEAD/status ve ilgili testleri doğrula.')
-        for task in brief(vault,limit=100):
-            if task.get('project_id')==project['id'] or task['id'] in project.get('task_ids',[]):
-                task_ids.add(task['id'])
-                source=h.source_file(vault,task['source_path'])
-                pinned=task.get('source_content_hash')==h.statement_hash(source.read_text())
-                if task.get('source_content_hash') and not pinned:
-                    omitted.append(task['id']+':source_changed'); continue
-                if pinned:
-                    resume_tasks.append(task)
-                    if resume and len(resume_tasks) > 3:
-                        omitted.append(task['id']+':card_limit'); continue
-                    current_tasks.append(task)
-                source_versions[task['source_path']]=digest(source)
-                if resume and pinned:
-                    state_label = 'engelli' if task['status'] == 'blocked' else 'devam edilebilir'
-                    add(task['id'], 'Devam kartı ['+state_label+']: '+task['title']+': '+task['next_step']+' (kaynak: '+task['source_path']+')')
-                    continue
-                add(task['id'],('Güncel sonraki adım: ' if pinned else 'Kaynağı yeniden doğrulanacak iş: ')+task['title']+': '+task['next_step']+' (kaynak: '+task['source_path']+')')
+        roots = project.get('roots', [])
+        if roots:
+            matching = [r for r in roots if cwd and Path(cwd).resolve().is_relative_to(Path(r).resolve())]
+            working_root = max(matching, key=lambda r: len(Path(r).resolve().parts)) if matching else roots[0]
+            add('working-root','Çalışma kökü: '+working_root+'; dosyada işlem yapmadan canlı Git HEAD/status ve ilgili testleri doğrula.')
+            if len(roots)>1: add('alternative-roots',f'+{len(roots)-1} alternatif kök: komuta/gorev-baglam.json')
+        project_tasks = [t for t in brief(vault,limit=10000,include_stale=True)
+                         if t.get('project_id')==project['id'] or t['id'] in project.get('task_ids',[])]
+        visible_count = 0
+        for task in project_tasks:
+            task_ids.add(task['id'])
+            source=h.source_file(vault,task['source_path'])
+            pinned=task.get('source_content_hash')==h.statement_hash(source.read_text())
+            if task.get('source_content_hash') and not pinned:
+                omitted.append(task['id']+':source_changed'); continue
+            stale = task.get('confirmation_required', False)
+            if pinned and not stale: resume_tasks.append(task)
+            if visible_count:
+                omitted.append(task['id']+':card_limit'); continue
+            visible_count += 1
+            if pinned and not stale: current_tasks.append(task)
+            source_versions[task['source_path']]=digest(source)
+            date = task.get('last_verified') or 'tarih yok'
+            state_label = ('son bilinen durum ('+date+', teyit gerekli)' if stale else
+                           'engelli' if task['status']=='blocked' else 'devam edilebilir')
+            prefix = ('Kaynağı yeniden doğrulanacak iş:' if not pinned else
+                      'Devam kartı' if resume else 'İş durum kartı')
+            def field(name, fallback):
+                value = task.get(name)
+                return value if isinstance(value, str) and value and not h.contains_secret(value) else fallback
+            text = (prefix+' ['+state_label+']: '+task['title']+
+                    '; Hedef: '+field('goal', task['title'])+
+                    '; Son sonuç: '+field('last_result', 'kaydedilmemiş')+
+                    '; Açık iş/engel: '+field('blocker', field('open_work', task['status']))+
+                    '; Sonraki adım: '+task['next_step']+'; Tarih: '+date+
+                    ' (kaynak: '+task['source_path']+')')
+            add(task['id'],text)
+        if len(resume_tasks)>1:
+            add('other-active-tasks',f'{len(resume_tasks)-1} aktif iş daha; hedef işi seçmek için iş defterini aç.')
+            priority,sequence,ident,text=candidates[-1]
+            candidates[-1]=(-1,sequence,ident,text)
         for asset in project.get('assets',[]):
             try: path=validate_asset(asset)
             except (ValueError,OSError,KeyError) as e: omitted.append(asset.get('id','asset')+':'+str(e)); continue
@@ -575,7 +601,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                    for i in range(len(qwords)-len(parts)+1))
     explicit_history=any(history_phrase(term) for term in
                          ('geçmiş','dün','dünkü','hatırla','neden seçtik','eski karar','önceki karar','önceki oturum'))
-    topic=content_words(query)-set(query_words('devam kaldık nerede şimdi sonraki adım edelim iş işine önceki ders dersini uygulayarak bu ayki teslim kontrol plan planını yaz hazırla yap çıkar oluştur'))
+    topic=content_words(query)-set(query_words('devam kaldık nerede şimdi ne durumda son durum kaldığımız yer sonraki adım edelim iş işine önceki ders dersini uygulayarak bu ayki teslim kontrol plan planını yaz hazırla yap çıkar oluştur'))
     if project:
         for alias in project.get('aliases',[]):
             topic={t for t in topic if not any(word_match(t,a) for a in query_words(alias))}
