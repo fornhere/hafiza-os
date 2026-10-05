@@ -71,7 +71,7 @@ class Package(unittest.TestCase):
   for ident,prefix in [('working-root','Çalışma kökü: '),('working-source','brief: ')]:
    segment=package['delivered_segments'][ident]
    if ident=='working-root':
-    self.assertEqual(2,segment.count(prefix))
+    self.assertEqual(1,segment.count(prefix))
    else:
     self.assertIn('brief: ',segment);self.assertIn('reference: ',segment)
    self.assertIn(segment,package['text'])
@@ -475,3 +475,77 @@ class RankRelevance(unittest.TestCase):
     def test_distinguishing_term_still_selects_its_record(self):
         ids = [r['memory_id'] for r in rank_records(self.rows(), 'kurgu temposu nasıl olmalı')]
         self.assertEqual(['r1'], ids)
+
+
+class ProjectStatusTests(unittest.TestCase):
+    setUp = ScopeContextPackageTests.setUp
+
+    def task(self, ident='work', days=0, **extra):
+        from is_ve_ders import put
+        data = dict(id=ident, title='Orvant iş kartı', status='active', project_id='alpha',
+                    source_path='source.md', evidence=(self.vault/'source.md').read_text(),
+                    actor='test', next_step='Testleri doğrula', goal='Durumu görünür yap',
+                    last_result='Düzeltme uygulandı', open_work='Regresyon kontrolü',
+                    last_verified=(dt.date.today()-dt.timedelta(days=days)).isoformat())
+        data.update(extra)
+        return put(self.vault, 'task', data)
+
+    def test_one_root_selects_cwd_or_primary_and_counts_alternatives(self):
+        roots = [str(self.vault/str(i)) for i in range(31)]
+        path = self.vault/'komuta/gorev-baglam.json'
+        path.write_text(json.dumps({'projects':[dict(id='alpha',aliases=['alpha'],roots=roots)]}))
+        for cwd, expected in ((None, roots[0]), (roots[17]+'/child', roots[17])):
+            with self.subTest(cwd=cwd):
+                result=build_task_package(self.vault,'alpha ne durumda',cwd=cwd)
+                lines=[line for line in result['text'].splitlines() if line.startswith('Çalışma kökü:')]
+                self.assertEqual(1,len(lines))
+                self.assertIn(expected,lines[0])
+                self.assertEqual(1,result['text'].count('canlı Git HEAD/status'))
+                self.assertIn('+30 alternatif kök: komuta/gorev-baglam.json',result['text'])
+
+    def test_status_card_precedes_seven_long_catalog_records_and_survives_budget(self):
+        self.task()
+        rows=[dict(self.row,memory_id='record'+str(i),statement='Alpha sunum tercihi '+('uzun '*100)) for i in range(7)]
+        h._write_jsonl(self.vault/h.CATALOG_PATH,rows)
+        with patch('jev_retrieval.catalog',side_effect=lambda v,q,r,rank,scope: (r,None)):
+            for query in ('alpha sunum', 'alpha ne durumda'):
+                result=build_task_package(self.vault,query,budget=1000,history='never')
+                self.assertIn('work',result['selected_ids'])
+                self.assertNotIn('work:budget',result['omitted_reasons'])
+                self.assertEqual('work',result['selected_ids'][0] if result['selected_ids'][0]!='scope-header' else result['selected_ids'][1])
+                for label in ('Hedef: Durumu görünür yap','Son sonuç: Düzeltme uygulandı',
+                              'Açık iş/engel: Regresyon kontrolü','Sonraki adım: Testleri doğrula','Tarih: '+dt.date.today().isoformat()):
+                    self.assertIn(label,result['text'])
+                self.assertLessEqual(len(result['text']),1000)
+
+    def test_old_task_has_dated_label_and_never_suggests_action(self):
+        task=self.task(days=8)
+        result=build_task_package(self.vault,'alpha ne durumda')
+        self.assertIn('son bilinen durum ('+task['last_verified']+', teyit gerekli)',result['text'])
+        self.assertIsNone(result['capsule']['suggested_next_step'])
+        self.task('fresh')
+        result=build_task_package(self.vault,'alpha ne durumda',budget=500)
+        self.assertIn('fresh',result['selected_ids'])
+        self.assertNotIn('work',result['selected_ids'])
+
+    def test_newest_active_task_and_remaining_count(self):
+        self.task('first');self.task('second')
+        result=build_task_package(self.vault,'alpha devam')
+        self.assertEqual(['second'],[t['id'] for t in result['capsule']['tasks']])
+        self.assertIn('1 aktif iş daha',result['text'])
+        self.assertTrue(result['capsule']['selection_required'])
+        self.assertIsNone(result['capsule']['suggested_next_step'])
+
+    def test_status_intents_and_destination_project(self):
+        from gorev_baglam import continuation_request, select_projects
+        for phrase in ('ne durumda','nerede kaldık','son durum','kaldığımız yer','devam'):
+            self.assertTrue(continuation_request('alpha '+phrase))
+            self.assertTrue(build_task_package(self.vault,'alpha '+phrase)['capsule']['enabled'])
+        projects=[dict(id='serai',aliases=['Serai']),dict(id='orvant',aliases=['Orvant'])]
+        (self.vault/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':projects}))
+        for query in ("Serai'yi bırakıp Orvant", 'Serai yerine Orvant', 'Serai’yi bırak Orvant ne durumda'):
+            with self.subTest(query=query):
+                self.assertEqual(['orvant'],[p['id'] for p in select_projects(projects,query)[0]])
+                result=build_task_package(self.vault,query)
+                self.assertEqual('orvant',result['project_id'])
+                self.assertNotIn('ambiguous_project',result['omitted_reasons'])

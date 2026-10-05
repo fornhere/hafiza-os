@@ -112,7 +112,8 @@ def put(vault, kind, data):
     return data
 
 
-def brief(vault, limit=3):
+def brief(vault, limit=3, include_stale=False):
+    """Verified current work; status views may also request dated confirmation hints."""
     result = []
     try:
         registry = json.loads((vault / 'komuta/gorev-baglam.json').read_text(encoding='utf-8'))
@@ -129,11 +130,16 @@ def brief(vault, limit=3):
             if row.get('source_content_hash') and row['source_content_hash'] != h.statement_hash(content): continue
         except (OSError, ValueError): continue
         verified = row.get('last_verified')
-        # Kullanıcı kuralı (2026-09-24): bir haftadır teyit edilmeyen iş aktif sayılmaz.
-        if not verified or (dt.date.today() - dt.date.fromisoformat(verified)).days > STALE_DAYS:
+        if not verified: continue
+        try:
+            stale = (dt.date.today() - dt.date.fromisoformat(verified)).days > STALE_DAYS
+        except (ValueError, TypeError):
             continue
-        result.append(row)
-    return sorted(result, key=lambda r: r['updated_at'], reverse=True)[:limit]
+        if stale and not include_stale: continue
+        # Derived visibility only: an old confirmation never becomes a current action.
+        result.append(dict(row, status='needs_confirmation', confirmation_required=True) if stale else row)
+    result.sort(key=lambda r: r['updated_at'], reverse=True)
+    return sorted(result, key=lambda r: r.get('confirmation_required', False))[:limit]
 
 
 @h.serialized
@@ -141,7 +147,7 @@ def render(vault):
     if not (vault / TASKS).exists():
         raise ValueError('Önce kaynaklı iş defteri oluştur; mevcut liste korunuyor')
     tasks = latest(vault, 'task')
-    current_ids = {r['id'] for r in brief(vault, limit=10000)}
+    current_ids = {r['id'] for r in brief(vault, limit=10000, include_stale=False)}
     tasks = {ident: dict(row, status='needs_confirmation') if row['status'] in ('active', 'blocked') and ident not in current_ids else row for ident, row in tasks.items()}
     lines = ['# Açık İşler', '', 'Kaynak: `zihin/is-durumu.jsonl`. Bu görünüm `araclar/is_ve_ders.py render` ile üretilir.',
              'Durum değişikliği deftere yeni sürüm ekler; geçmiş silinmez. Önceki liste: [[arşiv/is-listesi-oncesi]].', '']

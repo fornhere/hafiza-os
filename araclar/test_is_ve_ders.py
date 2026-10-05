@@ -49,7 +49,13 @@ class Work(unittest.TestCase):
 
     def test_stale_and_unconfirmed_not_presented_as_current(self):
         w.put(self.vault, 'task', dict(self.row, last_verified='2020-01-01'))
-        self.assertEqual([], w.brief(self.vault))
+        old = w.brief(self.vault, include_stale=True)[0]
+        self.assertEqual('needs_confirmation', old['status'])
+        self.assertEqual('2020-01-01', old['last_verified'])
+        self.assertTrue(old['confirmation_required'])
+        self.assertEqual([], w.brief(self.vault, include_stale=False))
+        w.render(self.vault)
+        self.assertIn('**needs_confirmation**', (self.vault/'zihin/açık-işler.md').read_text())
         w.put(self.vault, 'task', dict(self.row, expected_version=1, status='needs_confirmation'))
         self.assertEqual([], w.brief(self.vault))
 
@@ -60,6 +66,9 @@ class Work(unittest.TestCase):
         self.assertEqual(1, len(w.brief(self.vault)))
         w.put(self.vault, 'task', dict(self.row, last_verified=eight, expected_version=1))
         self.assertEqual([], w.brief(self.vault))
+        self.assertTrue(w.brief(self.vault, include_stale=True)[0]['confirmation_required'])
+        w.put(self.vault, 'task', dict(self.row, id='fresh', last_verified=six))
+        self.assertEqual('fresh', w.brief(self.vault, limit=1, include_stale=True)[0]['id'])
 
     def test_task_source_change_invalidates_current_summary_even_with_quote(self):
         row=w.put(self.vault, 'task', self.row)
