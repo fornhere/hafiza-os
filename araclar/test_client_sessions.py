@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import client_hafiza as hooks
 import client_sessions as sessions
-from client_transcripts import MAX_LINE, MAX_LINES, MAX_SOURCE, SourceError, parse
+from client_transcripts import MAX_LINE, MAX_LINES, MAX_SOURCE, SourceError, parse, worker_prompt
 
 
 class NativeFixture(unittest.TestCase):
@@ -545,6 +545,120 @@ class NativeSessions(NativeFixture):
         receipt = json.loads(path.read_text(encoding='utf-8')); receipt['summary'] = 'forged'
         path.write_text(json.dumps(receipt), encoding='utf-8')
         self.assertEqual(sessions.recall(self.vault), '')
+
+    def test_worker_prefix_variants_skip_opening_and_later_stop_without_state(self):
+        for marker in ('İŞÇİ KOŞUSU', 'işçi koşusu', 'ISCI KOSUSU', 'isci kosusu'):
+            with self.subTest(marker=marker):
+                prompt = marker + ' — yalnız bu görevi tamamla.'
+                self.assertTrue(worker_prompt(prompt))
+                output, result = hooks.hook(self.vault, self.client, 'UserPromptSubmit',
+                                            dict(self.payload(), prompt=prompt))
+                self.assertEqual((output, result['status']), ({}, 'worker_skipped'))
+                self.assertEqual(list(self.vault.iterdir()), [])
+                self.rows[0]['message']['content'] = prompt
+                self.write()
+                for event in ('SessionStart', 'Stop'):
+                    output, result = hooks.hook(self.vault, self.client, event, self.payload())
+                    self.assertEqual((output, result['status']), ({}, 'worker_skipped'))
+                    self.assertEqual(list(self.vault.iterdir()), [])
+                # Offline measurement still reads the source without capture rejection.
+                self.assertEqual(parse(self.client, self.session, self.path)['count'], 6)
+
+    def test_antigravity_worker_transcript_skips_context_and_stop(self):
+        self.agy()
+        for marker in ('İŞÇİ KOŞUSU', 'ISCI KOSUSU', 'isci kosusu'):
+            with self.subTest(marker=marker):
+                self.rows[0]['content'] = '<USER_REQUEST>' + marker + ' — görevi tamamla.</USER_REQUEST>'
+                self.write()
+                for event in ('PreInvocation', 'Stop'):
+                    output, result = hooks.hook(self.vault, self.client, event, self.payload())
+                    self.assertEqual((output, result['status']), ({}, 'worker_skipped'))
+                    self.assertEqual(list(self.vault.iterdir()), [])
+
+    def test_worker_environment_skips_before_source_or_state(self):
+        for variable in ('HAFIZA_ISCI', 'CODEX_WORKER'):
+            with self.subTest(variable=variable), patch.dict(os.environ, {variable: '1'}):
+                with patch.object(hooks, 'identity', side_effect=AssertionError('source forbidden')):
+                    output, result = hooks.hook(self.vault, self.client, 'Stop', self.payload())
+                self.assertEqual((output, result['status']), ({}, 'worker_skipped'))
+                self.assertEqual(list(self.vault.iterdir()), [])
+
+    def test_worker_transcript_is_rejected_by_direct_registration(self):
+        for marker in ('İŞÇİ KOŞUSU', 'ISCI KOSUSU', 'isci kosusu'):
+            with self.subTest(marker=marker):
+                self.rows[0]['message']['content'] = marker + ' — görevi tamamla.'
+                self.write()
+                with self.assertRaisesRegex(SourceError, '^worker_source$'):
+                    self.register()
+                self.assertEqual(sessions.pending(self.vault), [])
+
+    def test_worker_phrase_inside_normal_request_does_not_exclude_session(self):
+        for phrase in ('işçi koşusu', 'ISCI KOSUSU', 'isci kosusu'):
+            with self.subTest(phrase=phrase):
+                self.rows[0]['message']['content'] = 'Lütfen ' + phrase + ' terimini açıkla.'
+                self.write()
+                self.assertFalse(worker_prompt(self.rows[0]['message']['content']))
+                output, result = hooks.hook(self.vault, self.client, 'Stop', self.payload())
+                self.assertEqual((output, result['status']), ({}, 'pending'))
+
+    def test_worker_private_prompt_excludes_existing_pending_even_with_environment(self):
+        base = self.vault
+        for index, variable in enumerate((None, 'HAFIZA_ISCI', 'CODEX_WORKER')):
+            with self.subTest(variable=variable):
+                self.vault = base / str(index)
+                self.vault.mkdir()
+                ident = self.register()['id']
+                decision = self.judgment(ident)
+                prompt = 'İŞÇİ KOŞUSU — bunu hafızaya kaydetme'
+                with patch.dict(os.environ, {variable: '1'} if variable else {}):
+                    with self.assertRaisesRegex(SourceError, '^privacy_blocked$'):
+                        hooks.hook(self.vault, self.client, 'UserPromptSubmit',
+                                   dict(self.payload(), prompt=prompt))
+                # The source has never contained the request: policy alone blocks it.
+                with self.assertRaisesRegex(SourceError, '^privacy_blocked$'):
+                    sessions.review(self.vault, ident, decision, True)
+                with sessions.locked(self.vault) as (_, state):
+                    self.assertTrue(sessions.load(sessions.policy_path(state, self.client, self.session))['excluded'])
+                    self.assertNotIn(prompt, ''.join(p.read_text(encoding='utf-8') for p in state.glob('*.json')))
+
+    def test_worker_source_privacy_is_sticky_for_policy_and_hook_paths(self):
+        base = self.vault
+        for client in ('claude', 'antigravity'):
+            if client == 'antigravity':
+                self.agy()
+            for route in ('policy', 'register', 'hook'):
+                for separate in (False, True):
+                    with self.subTest(client=client, route=route, separate=separate):
+                        self.vault = base / (client + '-' + route + '-' + str(separate))
+                        self.vault.mkdir()
+                        ident = self.register()['id']
+                        decision = self.judgment(ident)
+                        field = 'content' if client == 'antigravity' else 'message'
+                        def set_user(index, text):
+                            if field == 'content':
+                                self.rows[index]['content'] = '<USER_REQUEST>' + text + '</USER_REQUEST>'
+                            else:
+                                self.rows[index]['message']['content'] = text
+                        set_user(0, 'ISCI KOSUSU' + ('' if separate else ' — bunu hafızaya kaydetme'))
+                        if separate:
+                            set_user(2, 'bunu hafızaya kaydetme')
+                        self.write()
+                        with self.assertRaisesRegex(SourceError, '^privacy_blocked$'):
+                            if route == 'policy':
+                                with sessions.locked(self.vault) as (_, state):
+                                    sessions.source_with_policy(state, self.client, self.session, self.path, 1)
+                            elif route == 'register':
+                                self.register()
+                            else:
+                                hooks.hook(self.vault, self.client, 'Stop', self.payload())
+                        set_user(0, 'Gerçek kullanıcı görevi 0')
+                        set_user(2, 'Gerçek kullanıcı görevi 1')
+                        self.write()
+                        # Restoring the source cannot undo the durable exclusion.
+                        with self.assertRaisesRegex(SourceError, '^privacy_blocked$'):
+                            sessions.review(self.vault, ident, decision, True)
+                        with sessions.locked(self.vault) as (_, state):
+                            self.assertTrue(sessions.load(sessions.policy_path(state, self.client, self.session))['excluded'])
 
     def test_private_prompt_lag_blocks_existing_pending_without_persisting_prompt(self):
         ident = self.register()['id']; decision = self.judgment(ident)
