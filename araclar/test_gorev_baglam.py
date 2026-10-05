@@ -529,6 +529,20 @@ class ProjectStatusTests(unittest.TestCase):
         self.assertIn('work',result['selected_ids'])
         self.assertIn('teyit gerekli',result['text'])
 
+    def test_missing_verification_card_is_dated_history_without_current_action(self):
+        task = self.task(last_verified=None)
+        result = build_task_package(self.vault, 'alpha ne durumda')
+        self.assertIn('work', result['selected_ids'])
+        self.assertIn('son bilinen durum ('+task['updated_at'][:10]+', teyit kaydı yok)', result['text'])
+        self.assertNotIn('work', result['summary']['task_ids'])
+        self.assertEqual([], result['capsule']['tasks'])
+        self.assertIsNone(result['capsule']['suggested_next_step'])
+        self.assertIn(task['next_step'], result['text'])
+        self.task('fresh')
+        result = build_task_package(self.vault, 'alpha ne durumda')
+        self.assertLess(result['selected_ids'].index('fresh'), result['selected_ids'].index('work'))
+        self.assertEqual(['fresh'], [t['id'] for t in result['capsule']['tasks']])
+
     def test_newest_active_task_and_remaining_count(self):
         self.task('first');self.task('second')
         result=build_task_package(self.vault,'alpha devam')

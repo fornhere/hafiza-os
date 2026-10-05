@@ -571,9 +571,11 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             visible_count += 1
             if pinned and not stale: current_tasks.append(task)
             source_versions[task['source_path']]=digest(source)
-            date = task.get('last_verified') or 'tarih yok'
+            date = task.get('last_verified') or (str(task.get('updated_at', ''))[:10]
+                   if task.get('verification_missing') else '') or 'tarih yok'
             report = task.get('assistant_report') if task.get('assertion_kind') == 'assistant_report' else None
             state_label = ('oturum kapanış bildirimi ('+date+', doğrulanmış sonuç değil)' if report else
+                           'son bilinen durum ('+date+', teyit kaydı yok)' if task.get('verification_missing') else
                            'son bilinen durum ('+date+', teyit gerekli)' if stale else
                            'engelli' if task['status']=='blocked' else 'devam edilebilir')
             prefix = ('Kaynağı yeniden doğrulanacak iş:' if not pinned else

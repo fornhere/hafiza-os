@@ -70,6 +70,50 @@ class Work(unittest.TestCase):
         w.put(self.vault, 'task', dict(self.row, id='fresh', last_verified=six))
         self.assertEqual('fresh', w.brief(self.vault, limit=1, include_stale=True)[0]['id'])
 
+    def test_missing_verification_is_only_a_pinned_history_hint(self):
+        for status in ('active', 'blocked'):
+            with self.subTest(status=status):
+                data = dict(self.row, id=status, status=status)
+                data.pop('last_verified')
+                saved = w.put(self.vault, 'task', data)
+                hint = next(r for r in w.brief(self.vault, include_stale=True) if r['id'] == status)
+                self.assertEqual('needs_confirmation', hint['status'])
+                self.assertTrue(hint['confirmation_required'])
+                self.assertTrue(hint['verification_missing'])
+                self.assertNotIn('last_verified', hint)
+                self.assertEqual(saved['updated_at'], hint['updated_at'])
+                self.assertEqual(saved, w.latest(self.vault, 'task')[status])
+        self.assertEqual([], w.brief(self.vault))
+        w.render(self.vault)
+        view = (self.vault / 'zihin/açık-işler.md').read_text()
+        self.assertNotIn('**active**', view)
+        self.assertNotIn('**blocked**', view)
+        self.assertEqual(2, view.count('**needs_confirmation**'))
+
+    def test_missing_verification_sorts_after_current_even_if_newer(self):
+        w.put(self.vault, 'task', dict(self.row, id='current'))
+        w.put(self.vault, 'task', dict(self.row, id='dated', last_verified='2020-01-01'))
+        w.put(self.vault, 'task', dict(self.row, last_verified=None))
+        self.assertEqual(['current', 'dated', 'test'], [r['id'] for r in w.brief(self.vault, include_stale=True)])
+        self.assertEqual('current', w.brief(self.vault, limit=1, include_stale=True)[0]['id'])
+
+    def test_missing_verification_requires_unchanged_pinned_source(self):
+        saved = w.put(self.vault, 'task', dict(self.row, last_verified=None))
+        for changes in (dict(source_content_hash=None), dict(source_content_hash='wrong'),
+                        dict(evidence='Kaynakta olmayan sonuç'), dict(source_path='missing.md')):
+            with self.subTest(changes=changes), patch.object(w, 'latest', return_value={'test': dict(saved, **changes)}):
+                self.assertEqual([], w.brief(self.vault, include_stale=True))
+        source = self.vault / 'kaynak.md'
+        source.write_text(source.read_text() + ' Durum değişti.')
+        self.assertEqual([], w.brief(self.vault, include_stale=True))
+
+    def test_missing_verification_does_not_restore_closed_or_archived_work(self):
+        w.put(self.vault, 'task', dict(self.row, id='closed', status='done', last_verified=None))
+        (self.vault / 'komuta').mkdir()
+        (self.vault / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': [dict(id='old', status='archived')]}))
+        w.put(self.vault, 'task', dict(self.row, project_id='old', last_verified=None))
+        self.assertEqual([], w.brief(self.vault, include_stale=True))
+
     def test_task_source_change_invalidates_current_summary_even_with_quote(self):
         row=w.put(self.vault, 'task', self.row)
         self.assertIn('source_content_hash',row)
