@@ -118,8 +118,8 @@
       "path": "araclar/jev_client.py",
       "mode": "reviewed-variant",
       "reason": "Public credential file and provider-specific environment routing versus installed legacy credential reader; choice, noul, probability, rerank, and purpose behavior is otherwise identical.",
-      "local_sha256": "5dc28a522665b253fa34149def6ff8515ba36f960d67bdc1d07021731543e144",
-      "public_sha256": "94239aa63d2c6eb9222444f833163359bfe63ac494b673ac49cc1b092000dcd4"
+      "local_sha256": "fb088bd4edecaf9abe123ec4c0bdec22922de4848cf5fc0da190973a39692676",
+      "public_sha256": "afb21f9a1965ab6443f38159dd288e9727bc34801c43ddf2729a61004a4f7c84"
     },
     {
       "path": "araclar/jev_retrieval.py",
