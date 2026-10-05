@@ -617,6 +617,33 @@ class BoundedStatusRegressionTests(unittest.TestCase):
         self.task('mixed', project_id=None, title='Alpha beta entegrasyonu')
         self.assertNotIn('mixed', build_task_package(self.vault, 'alpha devam')['selected_ids'])
 
+    def test_video_area_restores_only_unique_unscoped_legacy_cards(self):
+        path=self.vault/'komuta/gorev-baglam.json'
+        area=dict(id='studio', kind='area', aliases=['thumbnail', 'video radarı'])
+        path.write_text(json.dumps({'projects':[area, dict(id='beta', aliases=['beta'])]}))
+        self.task('legacy-video', project_id=None, title='Model seçimi videoları')
+        self.task('foreign-video', project_id='beta', title='Model seçimi videoları')
+        self.task('unrelated', project_id=None, title='Sunucu kontrolü')
+        package=build_task_package(self.vault, 'video kurgusunu planla', history='never')
+        self.assertIn('legacy-video', package['selected_ids'])
+        self.assertNotIn('foreign-video', package['selected_ids'])
+        self.assertNotIn('unrelated', package['selected_ids'])
+        path.write_text(json.dumps({'projects':[area, dict(area, id='second')]}))
+        self.assertIsNone(build_task_package(self.vault, 'video kurgusunu planla')['project_id'])
+
+    def test_topic_area_limits_alternatives_and_omits_cover_kit(self):
+        area=dict(id='studio', kind='area', aliases=['thumbnail', 'video radarı'],
+                  assets=[dict(id='irrelevant-cover')],
+                  working_sources=[dict(path='irrelevant-cover')])
+        (self.vault/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[area]}))
+        for ident in ('one', 'two', 'three'):
+            self.task(ident, project_id=None, title='Kurgu videosu '+ident)
+        package=build_task_package(self.vault, 'video planlayalım', history='never')
+        self.assertEqual('area_topic', package['match_reason'])
+        self.assertEqual(2, len(set(package['selected_ids']) & {'one','two','three'}))
+        self.assertEqual([], package['assets'])
+        self.assertNotIn('irrelevant-cover', package['text'])
+
     def test_previous_scope_only_for_safe_unambiguous_continuation(self):
         from gorev_baglam import select_projects
         projects=[dict(id='alpha',aliases=['alpha']),dict(id='beta',aliases=['beta'],roots=[str(self.vault/'beta')])]
@@ -740,3 +767,61 @@ class CatalogBudgetFairnessTests(unittest.TestCase):
         self.assertEqual(note_cards[0], small['delivered_segments']['knowledge'])
         self.assertIn('knowledge:budget', small['omitted_reasons'])
         self.assertLessEqual(len(small['text']), budget)
+
+
+class SharedWorkspaceRoutingTests(unittest.TestCase):
+    def test_alias_possessives_do_not_expand_record_ranking(self):
+        from gorev_baglam import alias_match, word_match
+        self.assertTrue(alias_match('video', ['videomuza']))
+        self.assertFalse(word_match('video', 'videomuza'))
+        self.assertFalse(word_match('sekmeyi', 'sekmedeneme'))
+
+    def test_shared_vault_needs_topic_but_nested_workspace_keeps_scope(self):
+        from gorev_baglam import select_projects
+        with tempfile.TemporaryDirectory() as tmp:
+            vault=Path(tmp)
+            projects=[dict(id='memory-engine', aliases=['hafıza sistemi'], roots=[str(vault)]),
+                      dict(id='studio', kind='area', aliases=['thumbnail', 'video radarı']),
+                      dict(id='beta', aliases=['beta'], roots=[str(vault/'beta')])]
+            for query, expected in [('durum ne', []), ('hava nasıl', []),
+                                    ('hafızamızda ne değişti', ['memory-engine']),
+                                    ('video fikri', ['studio']), ('kurgu planla', ['studio']),
+                                    ('beta devam', ['beta'])]:
+                with self.subTest(query=query):
+                    rows,_=select_projects(projects, query, cwd=str(vault), vault=vault)
+                    self.assertEqual(expected, [p['id'] for p in rows])
+            rows,reason=select_projects(projects, 'devam', cwd=str(vault/'beta'), vault=vault)
+            self.assertEqual((['beta'], 'cwd'), ([p['id'] for p in rows], reason))
+            rows,reason=select_projects(projects, 'devam', cwd=str(vault),
+                                       previous_user='video planlayalım', vault=vault)
+            self.assertEqual((['studio'], 'previous_user'), ([p['id'] for p in rows], reason))
+
+    def test_relocated_vault_recognizes_original_layout(self):
+        from gorev_baglam import select_projects
+        with tempfile.TemporaryDirectory() as tmp:
+            origin=Path(tmp)/'origin'
+            (origin/'komuta').mkdir(parents=True)
+            (origin/'komuta/gorev-baglam.json').write_text('{}')
+            (origin/'zihin').mkdir()
+            projects=[dict(id='engine', aliases=['memory engine'], roots=[str(origin)])]
+            self.assertEqual([], select_projects(projects, 'devam', cwd=str(origin),
+                                                vault=Path(tmp)/'snapshot')[0])
+            self.assertEqual(['engine'], [p['id'] for p in select_projects(
+                projects, 'memory engine devam', cwd=str(origin), vault=Path(tmp)/'snapshot')[0]])
+
+    def test_generic_guard_and_specific_names_survive_area_expansion(self):
+        from gorev_baglam import select_projects
+        projects=[dict(id='studio', kind='area', aliases=['thumbnail', 'video radarı']),
+                  dict(id='nova', aliases=['nova videosu'])]
+        for query, expected in [('videomuza kesit çıkar', ['studio']),
+                                ('youtube için hazırla', ['studio']),
+                                ('novanın videosuna kapak', ['nova']),
+                                ('kabak çorbası', []), ('dünkü iş', []), ('o kapak', []),
+                                ('o thumbnail', []), ('önceki video', [])]:
+            with self.subTest(query=query):
+                self.assertEqual(expected, [p['id'] for p in select_projects(projects,query)[0]])
+        self.assertEqual([], select_projects([projects[1]], 'video planla')[0])
+        self.assertEqual(2, len(select_projects([projects[0],dict(projects[0],id='other')],
+                                               'video planla')[0]))
+        named=[dict(id='memory-engine',aliases=['hafıza sistemi']),projects[0]]
+        self.assertEqual(['memory-engine'],[p['id'] for p in select_projects(named,'memory-engine thumbnail üret')[0]])
