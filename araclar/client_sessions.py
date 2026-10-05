@@ -18,7 +18,7 @@ from hafiza import add_candidate, category_errors, contains_secret, valid_candid
 from client_transcripts import CLIENTS, SourceError, parse, private, read_bytes, safe_path, sha, strict_json
 
 INBOX = Path('gelen-kutusu/ajan-oturumlari')
-MAX_REGISTRY = 1000
+MAX_REGISTRY = 5000
 MAX_PACKET = 24000
 
 
