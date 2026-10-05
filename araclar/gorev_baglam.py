@@ -324,7 +324,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
         # Never relabel an old claim with a freshly computed source hash.
         text = 'Bağlam hazırlanırken kaynak değişti; güncel kaynağı yeniden doğrula.'
         result.update(text=text[:max(0,int(budget))], selected_ids=[], assets=[],
-                      source_versions={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0, lessons=dict(applied=[],diagnostics=[]))
+                      source_versions={}, delivered_segments={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0, lessons=dict(applied=[],diagnostics=[]))
         result['omitted_reasons'].append('source_changed_during_package')
         result['summary'] = dict(record_ids=[],task_ids=[],derived=True)
         result['procedure_reading'].update(paths=[],delivered=False)
@@ -621,7 +621,12 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         cost=len(text)+(1 if lines else 0)
         if used+cost>budget:
             omitted.append(ident+':budget'); continue
-        lines.append(text);selected.append(ident);delivered_segments[ident]=text;used+=cost
+        lines.append(text);selected.append(ident);used+=cost
+        # One channel may deliver several roots or working sources.
+        if ident in delivered_segments:
+            delivered_segments[ident] += '\n' + text
+        else:
+            delivered_segments[ident] = text
     if 'suppressed-history' in selected or any(row['memory_id'] in selected for row in current_facts):
         header = h.context_scope_header(scope, ['project:'+w['id'] for w in workflows])
         if used + len(header) + 1 <= budget:

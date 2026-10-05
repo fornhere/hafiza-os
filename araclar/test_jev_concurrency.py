@@ -176,6 +176,8 @@ sys.argv=['codex_hafiza.py','--vault',str(v),'hook'];h.main()
         with patch('konu_sentezi.retrieve',side_effect=knowledge),patch('jev_retrieval.catalog',side_effect=catalog):
             result=g.build_task_package(self.v,'hello')
         self.assertNotIn('Old claim',result['text']);self.assertIsNone(result['knowledge'])
+        self.assertEqual({}, result['delivered_segments'])
+        self.assertNotIn('Old claim', json.dumps(result, ensure_ascii=False))
         self.assertIn('source_changed_during_package',result['omitted_reasons'])
 
     def test_two_readers_cannot_overwrite_conflicting_source_versions(self):
@@ -185,6 +187,9 @@ sys.argv=['codex_hafiza.py','--vault',str(v),'hook'];h.main()
         with patch('konu_sentezi.retrieve',return_value=knowledge),patch('jev_procedures.route',return_value=procedure):
             result=g.build_task_package(self.v,'hello')
         self.assertNotIn('Old claim',result['text']);self.assertEqual(result['selected_ids'],[])
+        self.assertEqual({}, result['delivered_segments'])
+        self.assertNotIn('Old claim', json.dumps(result, ensure_ascii=False))
+        self.assertNotIn('Read source.md', json.dumps(result, ensure_ascii=False))
         self.assertIn('source_changed_during_package',result['omitted_reasons'])
 
     def test_package_identity_excludes_model_timing(self):
