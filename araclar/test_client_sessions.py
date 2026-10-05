@@ -90,6 +90,29 @@ class NativeFixture(unittest.TestCase):
 
 
 class RegistryMaintenance(NativeFixture):
+    def test_registry_status_missing_directory_is_read_only(self):
+        empty = self.root / 'empty-vault'
+        empty.mkdir()
+        report = sessions.registry_status(empty)
+        self.assertEqual(0, report['active_count'])
+        self.assertEqual(0, report['archive_count'])
+        self.assertTrue(report['complete'])
+        self.assertEqual([], list(empty.iterdir()))
+
+    def test_registry_status_counts_records_not_receipts_and_marks_partial(self):
+        _, state = sessions.layout(self.vault)
+        self.fill_terminal(state, 4)
+        sessions.maintain(self.vault, apply=True)
+        sessions.atomic(state / (f'{9:064x}.json'), {'status': 'pending'})
+        report = sessions.registry_status(self.vault)
+        self.assertEqual(1, report['active_count'])
+        self.assertEqual(4, report['archive_count'])
+        self.assertTrue(report['complete'])
+        with patch.object(sessions, 'MAX_STATE_ENTRIES', 3):
+            partial = sessions.registry_status(self.vault)
+        self.assertFalse(partial['complete'])
+        self.assertLessEqual(partial['archive_count'], 3)
+
     def fill_terminal(self, state, count=1005):
         for index in range(count):
             ident = f'{index:064x}'

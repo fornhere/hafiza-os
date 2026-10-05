@@ -213,6 +213,7 @@ def status(vault):
                 ages.append((now - created).total_seconds() / 86400)
         except (KeyError, TypeError, ValueError):
             continue
+    operational = __import__('hafiza_saglik').snapshot(vault)
     return {'pending_candidates': len(states['pending']),
         'blocked_candidates': len(states['blocked']),
         'oldest_pending_days': round(max(ages), 2) if ages else None,
@@ -220,7 +221,8 @@ def status(vault):
         'last_sync': last, 'catalog_count': len(h.load_catalog(vault)),
         'lesson_backlog': __import__('ders_baglam').backlog(vault),
         'knowledge': __import__('bilgi_agi').status(vault),
-        'operational_health': __import__('hafiza_saglik').snapshot(vault)}
+        'client_registry': operational['client_registry'],
+        'operational_health': operational}
 
 
 def health(vault):
@@ -237,6 +239,7 @@ def health(vault):
         '| Kontrol | Sonuç |', '|---|---|',
         f"| İşletim durumu | {report['operational_health']['status']} |",
         f"| Katalog | {report['catalog_count']} kayıt |",
+        f"| Oturum kayıt dizini | {report['client_registry']['active_count']} aktif / {report['client_registry']['archive_count']} arşiv; %{report['client_registry']['occupancy_ratio'] * 100:.1f} dolu |",
         f"| Bekleyen semantik aday | {report['pending_candidates']} |",
         f"| Engellenen semantik aday | {report['blocked_candidates']} |",
         f"| En eski bekleyen aday (gün) | {report['oldest_pending_days'] if report['oldest_pending_days'] is not None else 'Yok'} |",
@@ -284,6 +287,15 @@ def scan_with_receipt(vault, root, since, scheduled=False):
     atomic(vault / RUN_PATH, json.dumps(dict(status='running', started_at=started)))
     try:
         diagnostics = []
+        maintenance = None
+        if scheduled:
+            import client_sessions
+            registry = client_sessions.registry_status(vault)
+            maintenance = (client_sessions.maintain(vault, apply=True)
+                           if registry['maintenance_due'] else
+                           dict(status='below_threshold', receipts=[]))
+            maintenance['before'] = registry
+            maintenance['after'] = client_sessions.registry_status(vault)
         rows = sessions(vault, root, since, diagnostics=diagnostics)
         errors = max(len(diagnostics), sum(r.get('activity_state') in ('unknown', 'ambiguous') for r in rows))
         eligible = [r for r in rows if r.get('activity_state') == 'completed']
@@ -293,13 +305,18 @@ def scan_with_receipt(vault, root, since, scheduled=False):
             parse_errors=errors, eligible_count=len(eligible),
             unresolved_count=sum(r.get('activity_state') != 'completed' for r in rows),
             oldest_eligible_at=dt.datetime.fromtimestamp(oldest, dt.timezone.utc).isoformat() if oldest else None)
+        if scheduled:
+            receipt['client_registry_maintenance'] = maintenance
         atomic(vault / RUN_PATH, json.dumps(receipt))
         if scheduled:
             atomic(vault / RUN_PATH.with_name("scheduled-scan.json"), json.dumps(receipt))
         return rows
     except Exception as error:
-        atomic(vault / RUN_PATH, json.dumps(dict(status='failed', started_at=started,
-            finished_at=dt.datetime.now(dt.timezone.utc).isoformat(), error_code=type(error).__name__)))
+        failure = dict(status='failed', started_at=started,
+            finished_at=dt.datetime.now(dt.timezone.utc).isoformat(), error_code=type(error).__name__)
+        atomic(vault / RUN_PATH, json.dumps(failure))
+        if scheduled:
+            atomic(vault / RUN_PATH.with_name('scheduled-scan.json'), json.dumps(failure))
         raise
 
 
