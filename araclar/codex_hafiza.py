@@ -425,6 +425,18 @@ def hook(vault, data):
         state['delivered_lessons']=[r for r in package.get('delivered_lessons', [])
             if lesson_text and package['delivered_lesson_segments'][r['id']] in emitted]
         state['package_id']=package.get('package_id')
+        from fayda_olc import record_delivery
+        source_end_line=None
+        if state['delivered_lessons'] and data.get('transcript_path'):
+            try:
+                from client_transcripts import parse
+                source_end_line=parse('codex',session,data['transcript_path'])['end_line']
+            except (ValueError,OSError):
+                pass
+        record_delivery(vault, client='codex', session_id=session,
+                        package_id=state['package_id'], delivered_lessons=[r for r in state['delivered_lessons'] if type(r.get('version')) is int],
+                        turn_id=turn, task_id=data.get('task_id'), source_end_line=source_end_line)
+
         account_context(state, len(emitted), original_chars if suppress else 0)
         atomic(state_path, json.dumps(state))
         if parts:

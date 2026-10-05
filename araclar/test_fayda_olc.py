@@ -31,7 +31,7 @@ class PassiveObservation(unittest.TestCase):
         import tempfile
         from pathlib import Path
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        self.v=Path(self.temp.name);self.path=self.v/'source.jsonl'
+        self.v=Path(self.temp.name).resolve();self.path=self.v/'source.jsonl'
         self.events=[dict(type='session_meta',payload=dict(id='session',source='vscode'))]
         self.events += [dict(type='response_item',timestamp=str(i),payload=dict(type='message',role='user',content=[dict(text='İstek '+str(i))])) for i in range(5)]
         self.events += [dict(type='response_item',timestamp='six',payload=dict(type='message',role='user',content=[dict(text='Tamam, bu kapağı kabul ettim.')]))]
@@ -149,3 +149,154 @@ class PassiveObservation(unittest.TestCase):
         self.assertEqual(1,len(result['observational_groups']))
         self.assertEqual(1,len(result['experiment_groups']))
         self.assertEqual(1,result['observational_groups'][0]['tasks'])
+
+
+class DeliveryUtility(unittest.TestCase):
+    setUp = PassiveObservation.setUp
+    save = PassiveObservation.save
+    data = PassiveObservation.data
+    lessons = PassiveObservation.lessons
+
+    def deliver(self, **changes):
+        from fayda_olc import record_delivery
+        self.lessons()
+        data=dict(client='codex',session_id='session',package_id='package',
+                  delivered_lessons=[dict(id='a',version=1)],turn_id='turn',
+                  task_id='cover',source_end_line=6)
+        data.update(changes)
+        return record_delivery(self.v,**data)
+
+    def test_delivery_acceptance_rejection_and_receipt(self):
+        from fayda_olc import record, UTILITY_RECEIPTS
+        from hafiza_dongusu import lesson_utility
+        import hafiza as h
+        self.deliver(); record(self.v,self.data(),True)
+        result=lesson_utility(self.v,True,actor='reviewer:T22')
+        self.assertEqual(result['lessons']['a']['help'],1)
+        event=result['measurements']['events'][0]
+        self.assertEqual((event['id'],event['version'],event['attribution']),('a',1,'delivered'))
+        self.assertTrue(event['evidence_source'])
+        receipt=h.load_jsonl(self.v/UTILITY_RECEIPTS)[0]
+        self.assertEqual(receipt['actor'],'reviewer:T22')
+        self.assertEqual((receipt['linked_results'],receipt['unlinked_results']),(1,0))
+        record(self.v,self.data(outcome='rejected',expected_version=1),True)
+        result=lesson_utility(self.v)
+        self.assertEqual((result['lessons']['a']['help'],result['lessons']['a']['harm']),(0,1))
+
+    def test_no_delivery_or_no_result(self):
+        from fayda_olc import record,read_lesson_results
+        from hafiza_dongusu import lesson_utility
+        self.deliver()
+        before=read_lesson_results(self.v)
+        self.assertEqual(before['unknown_deliveries'][0]['result'],'unknown')
+        self.assertEqual(lesson_utility(self.v)['lessons']['a']['help'],0)
+        record(self.v,self.data(),True)
+        from fayda_olc import DELIVERIES
+        (self.v/DELIVERIES).unlink()
+        result=read_lesson_results(self.v)
+        self.assertEqual(result['events'],[])
+        self.assertEqual(result['unlinked_results'],1)
+
+    def test_wrong_task_or_preceding_quote_does_not_link(self):
+        from fayda_olc import record,read_lesson_results
+        self.deliver(task_id='other');record(self.v,self.data(),True)
+        self.assertEqual(read_lesson_results(self.v)['events'],[])
+        from fayda_olc import DELIVERIES
+        (self.v/DELIVERIES).unlink()
+        from fayda_olc import record_delivery
+        record_delivery(self.v,client='claude',session_id='session',package_id='new',
+                        delivered_lessons=[dict(id='a',version=1)],turn_id='next',source_end_line=7)
+        self.assertEqual(read_lesson_results(self.v)['events'],[])
+
+    def test_changed_evidence_leaves_delivery_unknown(self):
+        from fayda_olc import record,read_lesson_results
+        self.deliver();record(self.v,self.data(),True)
+        self.path.write_text(self.path.read_text().replace('"six"','"changed"'))
+        result=read_lesson_results(self.v)
+        self.assertEqual(result['events'],[])
+        self.assertEqual((result['unlinked_results'],result['unknown_deliveries_count']),(1,1))
+
+    def test_two_schemas_share_reader_and_version(self):
+        from fayda_olc import record,read_lesson_results,summarize
+        from hafiza_dongusu import lesson_utility,OUTCOMES
+        import hafiza as h
+        import bilgi_agi as b
+        import datetime as dt
+        self.deliver();record(self.v,self.data(),True)
+        path=self.v/'runner.json'
+        raw=dict(task_id='cover',exit_code=0,passed=True,command=['test'],
+                 finished_at=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(seconds=1)).isoformat())
+        import json
+        path.write_text(json.dumps(raw))
+        h._append_jsonl(self.v/OUTCOMES,dict(task_id='cover',receipt_id='runner',verification_path='runner.json',
+                      verification_hash=b.digest(path),verification_evidence=path.read_text(),
+                      verification_kind='test_result',observed_result='passed'))
+        result=read_lesson_results(self.v)
+        self.assertEqual(len(result['events']),2)
+        self.assertEqual(lesson_utility(self.v)['lessons']['a']['help'],2)
+        self.assertEqual(summarize(h.load_jsonl(self.v/'zihin/fayda-gozlemleri.jsonl'),vault=self.v)['lesson_results'],result)
+
+    def test_task_done_cancelled_transition_requires_delivery_and_source(self):
+        from fayda_olc import read_lesson_results
+        from is_ve_ders import put
+        self.deliver()
+        path=self.v/'task.md';path.write_text('Kapak iş kartının doğrulanmış durum kaynağı.')
+        row=dict(id='cover',title='Cover',source_path='task.md',evidence=path.read_text(),actor='reviewer',status='active',next_step='Finish')
+        put(self.v,'task',row)
+        put(self.v,'task',dict(row,status='done',expected_version=1))
+        result=read_lesson_results(self.v)
+        self.assertEqual(result['events'][0]['result'],'accepted')
+        put(self.v,'task',dict(row,status='cancelled',expected_version=2))
+        result=read_lesson_results(self.v)
+        self.assertIn('abandoned',[e['result'] for e in result['events']])
+
+    def test_duplicate_delivery_is_idempotent_and_empty_is_read_only(self):
+        from fayda_olc import record_delivery,DELIVERIES
+        import hafiza as h
+        self.deliver()
+        record_delivery(self.v,client='codex',session_id='session',package_id='package',
+                        delivered_lessons=[dict(id='a',version=1)],turn_id='turn',task_id='cover',source_end_line=6)
+        self.assertEqual(len(h.load_jsonl(self.v/DELIVERIES)),1)
+        record_delivery(self.v,delivered_lessons=[])
+        self.assertEqual(len(h.load_jsonl(self.v/DELIVERIES)),1)
+
+    def test_id_only_observation_stays_unlinked_and_versioned_schema_is_supported(self):
+        from fayda_olc import record,read_lesson_results
+        self.lessons()
+        record(self.v,self.data(applied_lessons=['a']),True)
+        self.assertEqual(read_lesson_results(self.v)['events'],[])
+        row=record(self.v,self.data(applied_lessons=[dict(id='a',version=1)],expected_version=1),True)['observation']
+        self.assertEqual(row['applied_lessons'],[dict(id='a',version=1)])
+        self.assertEqual(read_lesson_results(self.v)['events'],[])
+
+    def test_same_evidence_in_two_schemas_counts_once(self):
+        from fayda_olc import record,read_lesson_results
+        from hafiza_dongusu import OUTCOMES
+        import hafiza as h
+        import bilgi_agi as b
+        self.deliver();data=self.data();observation=record(self.v,data,True)['observation']
+        path=self.v/'accepted.md';path.write_text(data['evidence'])
+        h._append_jsonl(self.v/OUTCOMES,dict(task_id='cover',receipt_id='same',
+            verification_path='accepted.md',verification_hash=b.digest(path),
+            verification_evidence=data['evidence'],verification_kind='user_acceptance',
+            observed_result='accepted',recorded_at=observation['updated_at'],
+            acceptance_source={k:data[k] for k in ('session_id','source_snapshot','evidence_source','evidence')}))
+        result=read_lesson_results(self.v)
+        self.assertEqual(len(result['events']),1)
+        self.assertEqual(result['linked_results'],1)
+
+    def test_codex_hook_persists_final_delivery_through_suppression(self):
+        from fayda_olc import DELIVERIES
+        from codex_hafiza import hook
+        from unittest.mock import patch
+        import hafiza as h
+        self.lessons()
+        package=dict(text='Teslim edilen yöntem.',package_id='package',source_versions={},
+                     delivered_lessons=[dict(id='a',version=1)],
+                     delivered_lesson_segments={'a':'Teslim edilen yöntem.'})
+        with patch('gorev_baglam.build_task_package',return_value=package):
+            hook(self.v,dict(hook_event_name='UserPromptSubmit',session_id='session',turn_id='one',prompt='Kapak üret'))
+            hook(self.v,dict(hook_event_name='UserPromptSubmit',session_id='session',turn_id='two',prompt='Kapak üret'))
+        receipts=h.load_jsonl(self.v/DELIVERIES)
+        self.assertEqual(len(receipts),1)
+        self.assertEqual(receipts[0]['delivered_lessons'],[dict(id='a',version=1)])

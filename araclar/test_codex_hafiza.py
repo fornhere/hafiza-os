@@ -14,7 +14,7 @@ class Hooks(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.vault = Path(self.temp.name)
+        self.vault = Path(self.temp.name).resolve()
 
     def event(self, name, turn='t6', **extra):
         return h.hook(self.vault, dict(session_id='session1', turn_id=turn,
