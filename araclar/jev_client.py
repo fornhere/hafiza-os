@@ -132,6 +132,7 @@ def _read_config(vault):
 
 _CONTEXT = ContextVar('jev_context', default=None)
 _DISABLED = ContextVar('jev_disabled', default=False)
+_SHADOW_VAULT = ContextVar('jev_shadow_vault', default=None)
 
 @contextmanager
 def disabled():
@@ -141,13 +142,29 @@ def disabled():
     finally: _DISABLED.reset(token)
 
 
+@contextmanager
+def shadow_retrieval(vault):
+    """Apply the fixed Claude shadow profile only to this task and vault.
+
+    Copied reader contexts inherit the profile; unrelated threads and vaults do
+    not. This profile cannot override global off or a task-local disabled gate.
+    """
+    token = _SHADOW_VAULT.set(str(Path(vault).resolve()))
+    try: yield
+    finally: _SHADOW_VAULT.reset(token)
+
+
 def load_config(vault):
     if _DISABLED.get(): return dict(DEFAULTS, mode='off')
     current = _CONTEXT.get()
     if current and current['vault'] == str(Path(vault).resolve()):
         if current['config'] is None: raise ValueError('config_invalid')
-        return dict(current['config'])
-    return _read_config(vault)
+        config = dict(current['config'])
+    else:
+        config = _read_config(vault)
+    if _SHADOW_VAULT.get() == str(Path(vault).resolve()) and config['mode'] != 'off':
+        config.update(mode='on', retrieval_mode='rerank', procedure_mode='off')
+    return config
 
 
 @contextmanager
