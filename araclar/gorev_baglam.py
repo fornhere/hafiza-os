@@ -57,10 +57,17 @@ def one_typo(left, right):
     short,long=sorted([left,right],key=len)
     return any(long[:i]+long[i+1:]==short for i in range(len(long)))
 
+def alias_inflected(base, word):
+    # Vowel-final aliases take unbuffered plural possessives (video-muz-a).
+    # Keep this routing vocabulary out of general record/lesson ranking.
+    return inflected(base, word) or (base[-1:] in 'aeıioöuü' and bool(base) and
+        any(inflected(base + suffix, word) for suffix in ('mız', 'miz', 'muz', 'müz')))
+
+
 def alias_match(alias, words, fuzzy=False):
     parts=query_words(alias)
     if not parts: return False
-    return all(any(inflected(part,word) or (fuzzy and one_typo(part,word)) for word in words) for part in parts)
+    return all(any(alias_inflected(part,word) or (fuzzy and one_typo(part,word)) for word in words) for part in parts)
 
 # Function words cannot establish a memory match. Domain aliases belong in config.
 _STOPWORDS = set('bir bu şu o ve veya ile için gibi daha çok az ne nasıl neden hangi ben benim sen bizim biz bana bunu şunu mı mi mu mü da de ama olarak olan olsun yap yapalım devam et üret'.split())
@@ -151,7 +158,33 @@ def task_intent(text):
                   lambda match: match.group(1), text, flags=re.I)
 
 
-def select_projects(projects, query, cwd=None, previous_user=None, session_project_id=None):
+def shared_workspace(root, vault=None):
+    """A vault is a shared launch directory, including a relocated snapshot's origin.
+
+    Recognize the layout without reading its records or relying on a project ID.
+    Descendant project roots are still ordinary, specific workspaces.
+    """
+    root = Path(root).resolve()
+    return ((vault is not None and root == Path(vault).resolve()) or
+            ((root / 'komuta/gorev-baglam.json').is_file() and
+             (root / 'zihin').is_dir()))
+
+
+def area_topic(project, words):
+    """Expand a configured video production area, never a named video project.
+
+    Generic words remain insufficient to match arbitrary project aliases.
+    Multiple eligible areas remain ambiguous rather than picking the first.
+    """
+    vocabulary = {'video', 'kurgu', 'senaryo', 'thumbnail', 'youtube'}
+    aliases = {w for a in project.get('aliases', []) for w in query_words(a)}
+    return (project.get('kind') == 'area' and
+            bool(aliases & {'video', 'thumbnail'}) and
+            not any(w in words for w in ('dünkü', 'o', 'şu', 'önceki')) and
+            any(alias_inflected(term, word) for term in vocabulary for word in words))
+
+
+def select_projects(projects, query, cwd=None, previous_user=None, session_project_id=None, *, vault=None):
     intent = task_intent(query)
     # Explicit replacement names the destination; the abandoned project is not scope.
     replacement = re.search(r'\b(?:bırak(?:ıp)?|yerine)\b(.+)', intent, re.I)
@@ -160,23 +193,30 @@ def select_projects(projects, query, cwd=None, previous_user=None, session_proje
     deictic=any(w in words for w in ('dünkü','o','şu','önceki'))
     def matches(project,fuzzy=False):
         return any(alias_match(alias,words,fuzzy) and not (deictic and set(query_words(alias)) <= _GENERIC)
-                   for alias in project.get('aliases',[]))
+                   for alias in [project.get('id', ''), *project.get('aliases',[])])
     # Archived projects answer only an exact alias, never a fuzzy match or cwd.
     # Config uses both Turkish and English status words; both mean archived.
     active=[p for p in projects if p.get('status','aktif') not in ('arsiv', 'arşiv', 'archived')]
     explicit=[p for p in projects if matches(p)]
     if not explicit: explicit=[p for p in active if matches(p,True)]
-    specific=[p for p in explicit if any(alias_match(a,words) and not set(query_words(a)) <= _GENERIC for a in p.get('aliases',[]))]
+    specific=[p for p in explicit if any(alias_match(a,words) and not set(query_words(a)) <= _GENERIC for a in [p.get('id', ''), *p.get('aliases',[])])]
     if specific: explicit=specific
-    located=[p for p in active if cwd and any(Path(cwd).resolve().is_relative_to(Path(r).resolve()) for r in p.get('roots',[]))]
+    located=[p for p in active if cwd and any(
+        Path(cwd).resolve().is_relative_to(Path(r).resolve()) and
+        (not shared_workspace(r, vault) or any(
+            alias_inflected(term, word) for term in project_terms(p) for word in words))
+        for r in p.get('roots',[]))]
     # Nested workspaces choose the most specific root, never a sibling by recency.
     if len(located)>1:
         depths={p['id']:max(len(Path(r).resolve().parts) for r in p.get('roots',[]) if Path(cwd).resolve().is_relative_to(Path(r).resolve())) for p in located}
         located=[p for p in located if depths[p['id']]==max(depths.values())]
     # A short continuation may inherit one unambiguous previous scope.
     # Explicit current names, ambiguous matches and cwd always take precedence.
+    topical = [p for p in active if area_topic(p, words)] if not explicit else []
+    if len(topical) == len(located) == 1 and topical[0]['id'] == located[0]['id']:
+        topical = []  # The specific workspace already establishes this scope.
     prior=[]
-    if (not explicit and not located and continuation_request(query)
+    if (not explicit and not located and not topical and continuation_request(query)
             and len(words) <= 24 and len(intent) <= 240):
         if session_project_id is not None:
             # Only the caller's same-session last delivered scope; no global
@@ -184,10 +224,10 @@ def select_projects(projects, query, cwd=None, previous_user=None, session_proje
             prior = [p for p in active if isinstance(session_project_id, str)
                      and p.get('id') == session_project_id]
         elif previous_user:
-            prior, _ = select_projects(active, previous_user)
+            prior, _ = select_projects(active, previous_user, vault=vault)
         if len(prior) != 1: prior=[]
-    chosen=explicit or located or prior
-    reason='explicit' if explicit else ('cwd' if located else ('session_project' if session_project_id is not None else 'previous_user') if prior else 'unresolved')
+    chosen=explicit or topical or located or prior
+    reason='explicit' if explicit else ('area_topic' if topical else 'cwd' if located else ('session_project' if session_project_id is not None else 'previous_user') if prior else 'unresolved')
     return chosen, reason
 
 def config(vault):
@@ -286,7 +326,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                 private_fallback = True
             else:
                 private_fallback = False
-                projects, _ = select_projects(config(vault).get('projects', []), query, cwd, previous_user, session_project_id)
+                projects, _ = select_projects(config(vault).get('projects', []), query, cwd, previous_user, session_project_id, vault=vault)
                 project = projects[0] if len(projects) == 1 else None
                 project_context = (str(project.get('id', '')) + ': ' + str(project.get('summary', ''))) if project else ''
                 if h.contains_secret(project_context) or private(project_context): project_context = ''
@@ -373,8 +413,11 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     projects=[]
     cfg=config(vault)
     if cfg.get('invalid'): omitted.append('config_invalid')
-    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd, previous_user, session_project_id)
+    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd, previous_user, session_project_id, vault=vault)
     project = projects[0] if len(projects)==1 else None
+    if project and match_reason == 'area_topic':
+        # An area's production topic does not request its cover identity kit.
+        project = dict(project, assets=[], working_sources=[])
     workflows=[]
     if project:
         for candidate in cfg.get('projects',[]):
@@ -402,7 +445,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     procedure_future = submit(route_procedures, vault, query, budget=min(1000,budget))
     if rerank_state is None and (vault / 'bilgi').is_dir() and len(projects)<=1:
         from konu_sentezi import retrieve as read_knowledge
-        knowledge_future=submit(read_knowledge,vault,query,project_id=project['id'] if project else None,budget=min(1800,budget),
+        # A broad area word establishes routing, not a particular episode's
+        # decisions. Require the note's own topic evidence for this fallback.
+        knowledge_future=submit(read_knowledge,vault,query,project_id=project['id'] if project and match_reason != 'area_topic' else None,budget=min(1800,budget),
                                 context=previous_user)
     decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
     if wants_decisions and len(projects)<=1:
@@ -546,6 +591,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 title_projects = [p for p in cfg.get('projects', [])
                                   if any(not set(query_words(a)) <= _GENERIC and alias_match(a, query_words(task['title']))
                                          for a in p.get('aliases', []) if query_words(a))]
+                if not title_projects and match_reason == 'area_topic':
+                    title_projects = [p for p in cfg.get('projects', [])
+                                      if p.get('status', 'active') not in ('arsiv', 'arşiv', 'archived')
+                                      and area_topic(p, query_words(task['title']))]
                 belongs = len(title_projects)==1 and title_projects[0]['id']==project['id']
             if belongs: project_tasks.append(task)
         topical_tasks = rank_records([dict(t, statement=t['title']+' '+t['next_step'], memory_id=t['id'])
@@ -557,6 +606,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         # verified recency order and expose several alternatives, never guess one.
         project_tasks.sort(key=lambda t: (t['id'] not in topical_ids,
                                          topical_ids.index(t['id']) if t['id'] in topical_ids else 0))
+        # A topic-only area is weaker scope than a name or workspace. Keep a
+        # smaller set of alternatives until the user identifies the episode.
+        card_limit = 2 if match_reason == 'area_topic' else 3
         visible_count = 0
         for task in project_tasks:
             task_ids.add(task['id'])
@@ -566,7 +618,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 omitted.append(task['id']+':source_changed'); continue
             stale = task.get('confirmation_required', False)
             if pinned and not stale: resume_tasks.append(task)
-            if visible_count >= 3:
+            if visible_count >= card_limit:
                 omitted.append(task['id']+':card_limit'); continue
             visible_count += 1
             if pinned and not stale: current_tasks.append(task)
