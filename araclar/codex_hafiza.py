@@ -98,6 +98,8 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
         if not isinstance(candidate, dict) or not all(isinstance(candidate.get(k), str) for k in
                 ('statement', 'subject_key', 'evidence')):
             raise ValueError('aday statement, subject_key ve evidence içermeli')
+        if not candidate['subject_key'].strip() or not candidate['statement'].strip():
+            raise ValueError('aday subject_key ve statement boş olamaz')
         category = candidate.get('category')
         if category is not None and not isinstance(category, str):
             raise ValueError('geçersiz category')
