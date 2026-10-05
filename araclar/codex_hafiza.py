@@ -85,7 +85,7 @@ def pending(vault, data, event):
 
 def record(vault, session, turn, summary, semantic_candidates=None, source_snapshot=None):
     from capture_source import record_gate, validate_candidate_evidence
-    from hafiza import valid_candidate_scope
+    from hafiza import valid_candidate_scope, category_errors
     record_gate(vault, session, turn, source_snapshot)
     if not isinstance(summary, str) or not 20 <= len(summary.strip()) <= 6000:
         raise ValueError('Özet 20–6000 karakter olmalı')
@@ -100,6 +100,12 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
             raise ValueError('aday statement, subject_key ve evidence içermeli')
         if not candidate['subject_key'].strip() or not candidate['statement'].strip():
             raise ValueError('aday subject_key ve statement boş olamaz')
+        category = candidate.get('category')
+        if category is not None and not isinstance(category, str):
+            raise ValueError('geçersiz category')
+        problems = category_errors('semantic', category)
+        if problems:
+            raise ValueError('; '.join(problems))
         if not valid_candidate_scope(vault, candidate.get('scope', 'user')):
             raise ValueError('invalid_scope')
         if not 10 <= len(candidate['evidence']) <= 1500 or candidate['evidence'] not in summary:
@@ -133,7 +139,8 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
             scope=candidate.get('scope', 'user'), subject_key=candidate['subject_key'],
             source_path=str(note.relative_to(vault)), source_anchor='Kullanıcı beyanı',
             confidence='explicit-user', sensitivity='normal', proposed_by='codex-receipt',
-            evidence=candidate['evidence'], evidence_source=candidate['evidence_source']))
+            evidence=candidate['evidence'], evidence_source=candidate['evidence_source'],
+            category=candidate.get('category')))
     waiting.unlink(missing_ok=True)
     return {'saved': str(note), 'candidates': queued}
 

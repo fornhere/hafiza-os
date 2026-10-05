@@ -95,6 +95,10 @@
       "mode": "shared"
     },
     {
+      "path": "araclar/oturum_gorunumu.py",
+      "mode": "shared"
+    },
+    {
       "path": "araclar/ogrenme_pilotu.py",
       "mode": "shared"
     },
@@ -114,8 +118,8 @@
       "path": "araclar/jev_client.py",
       "mode": "reviewed-variant",
       "reason": "Public credential file and provider-specific environment routing versus installed legacy credential reader; choice, noul, probability, rerank, and purpose behavior is otherwise identical.",
-      "local_sha256": "894941ce33e2f6a54b8418fe980b76368ed5942d108bb1e3ad8f179c56a6447b",
-      "public_sha256": "18d0e64bd57b6e321a088af20487db50ff0f39929f4d9c889d5807aafd7036a5"
+      "local_sha256": "5dc28a522665b253fa34149def6ff8515ba36f960d67bdc1d07021731543e144",
+      "public_sha256": "94239aa63d2c6eb9222444f833163359bfe63ac494b673ac49cc1b092000dcd4"
     },
     {
       "path": "araclar/jev_retrieval.py",
