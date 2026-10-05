@@ -10,7 +10,7 @@ class TopicTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.v = Path(self.tmp.name)
+        self.v = Path(self.tmp.name).resolve()
         self.source = self.v / 'source.md'
         self.quote = 'Sunumda kısa cümle kullan; başka projede uzun anlatı kullan.'
         self.source.write_text(self.quote)
@@ -54,6 +54,17 @@ class TopicTests(unittest.TestCase):
         self.assertLessEqual(len(result['text']), 100)
         self.assertEqual(result['omitted_record_ids'], ['short'])
         self.assertFalse(result['source_versions'])
+
+    def test_normal_area_query_keeps_guarded_project_preferences(self):
+        self.add(id='screen',title='Ekran planı',scope='project:channel',
+                 domains=['video'],statement='Video ekran planını birlikte yaz.')
+        self.add(id='episode',title='Ekran planı',scope='project:channel',
+                 domains=['video'],kind='decision',statement='Video ekran planı eski bölümde seçildi.')
+        query='Video ekranını hazırla'
+        kwargs=dict(routed_project_id='channel')
+        result=k._retrieve_local(self.v,query,**kwargs)
+        self.assertEqual([r['id'] for r in result['records']],['screen'])
+        self.assertEqual(result,b._retrieve_local(self.v,query,**kwargs))
 
     def test_normal_queries_keep_baseline_transfer(self):
         query = 'sevdiğim tarzda site üret'
