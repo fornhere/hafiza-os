@@ -529,6 +529,20 @@ class ProjectStatusTests(unittest.TestCase):
         self.assertIn('work',result['selected_ids'])
         self.assertIn('teyit gerekli',result['text'])
 
+    def test_missing_verification_card_is_dated_history_without_current_action(self):
+        task = self.task(last_verified=None)
+        result = build_task_package(self.vault, 'alpha ne durumda')
+        self.assertIn('work', result['selected_ids'])
+        self.assertIn('son bilinen durum ('+task['updated_at'][:10]+', teyit kaydı yok)', result['text'])
+        self.assertNotIn('work', result['summary']['task_ids'])
+        self.assertEqual([], result['capsule']['tasks'])
+        self.assertIsNone(result['capsule']['suggested_next_step'])
+        self.assertIn(task['next_step'], result['text'])
+        self.task('fresh')
+        result = build_task_package(self.vault, 'alpha ne durumda')
+        self.assertLess(result['selected_ids'].index('fresh'), result['selected_ids'].index('work'))
+        self.assertEqual(['fresh'], [t['id'] for t in result['capsule']['tasks']])
+
     def test_newest_active_task_and_remaining_count(self):
         self.task('first');self.task('second')
         result=build_task_package(self.vault,'alpha devam')
@@ -649,3 +663,80 @@ class BoundedStatusRegressionTests(unittest.TestCase):
         self.assertEqual('build', result['capsule']['tasks'][0]['id'])
         self.assertTrue(result['capsule']['selection_required'])
         self.assertIsNone(result['capsule']['suggested_next_step'])
+
+
+class SessionProjectInheritanceTests(unittest.TestCase):
+    setUp = ScopeContextPackageTests.setUp
+
+    def test_session_scope_precedes_previous_turn_but_not_current_evidence(self):
+        projects = [dict(id='alpha', aliases=['alpha']),
+                    dict(id='beta', aliases=['beta'], roots=[str(self.vault/'beta')])]
+        (self.vault/'komuta/gorev-baglam.json').write_text(json.dumps({'projects': projects}))
+        for query in ('pr attıysan devam edelim', 'devam et döngüye', 'son durum'):
+            result = build_task_package(self.vault, query, cwd='/unrelated',
+                                        previous_user='beta üzerinde çalış', session_project_id='alpha')
+            self.assertEqual(('alpha', 'session_project'), (result['project_id'], result['match_reason']))
+        for kwargs in (dict(query='beta devam'), dict(query='devam', cwd=str(self.vault/'beta'))):
+            result = build_task_package(self.vault, session_project_id='alpha', **kwargs)
+            self.assertEqual('beta', result['project_id'])
+        self.assertIsNone(build_task_package(self.vault, 'alpha beta devam', session_project_id='alpha')['project_id'])
+        # Scope remains available after a prior continuation no longer names it.
+        self.assertEqual('alpha', build_task_package(self.vault, 'devam', previous_user='devam',
+                                                     session_project_id='alpha')['project_id'])
+        self.assertEqual('alpha', build_task_package(self.vault, 'devam', previous_user='alpha')['project_id'])
+
+    def test_session_inheritance_fails_closed(self):
+        projects = [dict(id='alpha', aliases=['alpha']),
+                    dict(id='old', aliases=['old'], status='archived')]
+        (self.vault/'komuta/gorev-baglam.json').write_text(json.dumps({'projects': projects}))
+        for ident in ('missing', 'old', ['alpha', 'old'], {'project_id': 'alpha'}, ''):
+            with self.subTest(ident=ident):
+                self.assertIsNone(build_task_package(self.vault, 'devam', previous_user='alpha',
+                                                     session_project_id=ident)['project_id'])
+        for query in ('hava nasıl', 'devam ' + 'uzun açıklama '*25,
+                      '[kaydetme] devam', 'İŞÇİ KOŞUSU. devam',
+                      'devam token sk-' + 'abcdefghijklmnopqrstuvwxyz123456'):
+            with self.subTest(query=query):
+                self.assertIsNone(build_task_package(self.vault, query, session_project_id='alpha')['project_id'])
+
+    def test_inherited_scope_rechecks_configuration_revision(self):
+        def change_config(vault, query, rows, rank, scope):
+            (vault/'komuta/gorev-baglam.json').write_text(json.dumps({'projects': []}))
+            return rank(rows, query), None
+        with patch('jev_retrieval.catalog', side_effect=change_config):
+            result = build_task_package(self.vault, 'devam', session_project_id='alpha')
+        self.assertEqual([], result['selected_ids'])
+        self.assertEqual({}, result['source_versions'])
+        self.assertNotIn('Proje: alpha', result['text'])
+        self.assertIn('source_changed_during_package', result['omitted_reasons'])
+
+
+class CatalogBudgetFairnessTests(unittest.TestCase):
+    setUp = ScopeContextPackageTests.setUp
+
+    def test_equal_match_prefers_selected_scope_and_preserves_order_independence(self):
+        rows = [dict(self.row, memory_id='a-user', scope='user'),
+                dict(self.row, memory_id='z-project'),
+                dict(self.row, memory_id='other', scope='project:other')]
+        for data in (rows, rows[::-1]):
+            h._write_jsonl(self.vault/h.CATALOG_PATH, data)
+            package = build_task_package(self.vault, 'alpha sunum', history='never', budget=2000)
+            ids = [ident for ident in package['selected_ids'] if ident in ('a-user', 'z-project', 'other')]
+            self.assertEqual(['z-project', 'a-user'], ids)
+
+    def test_notes_and_catalog_share_budget_without_splitting_cards(self):
+        first = dict(self.row, memory_id='first')
+        second = dict(self.row, memory_id='second')
+        h._write_jsonl(self.vault/h.CATALOG_PATH, [first, second])
+        (self.vault/'bilgi').mkdir()
+        note_cards = ['Bilgi [decision]: Sentetik not '+str(i)+' '+('n'*240) for i in range(3)]
+        knowledge = dict(text='\n\n'.join(note_cards), records=[], source_versions={}, transfers=[], topics=[])
+        with patch('konu_sentezi.retrieve', return_value=knowledge):
+            full = build_task_package(self.vault, 'alpha sunum', history='never', budget=10000)
+            segments = full['delivered_segments']
+            budget = len(segments['first']) + len(note_cards[0]) + len(segments['second']) + 2
+            small = build_task_package(self.vault, 'alpha sunum', history='never', budget=budget)
+        self.assertEqual(['first', 'knowledge', 'second'], small['selected_ids'])
+        self.assertEqual(note_cards[0], small['delivered_segments']['knowledge'])
+        self.assertIn('knowledge:budget', small['omitted_reasons'])
+        self.assertLessEqual(len(small['text']), budget)

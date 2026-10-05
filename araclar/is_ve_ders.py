@@ -177,7 +177,13 @@ def brief(vault, limit=3, include_stale=False):
                                last_verified=str(row.get('updated_at', ''))[:10] or None))
             continue
         verified = row.get('last_verified')
-        if not verified: continue
+        if not verified:
+            # A pinned source establishes recorded history, not current work.
+            # Unpinned legacy cards still cannot become confirmation hints.
+            if include_stale and row.get('source_content_hash') == h.statement_hash(content):
+                result.append(dict(row, status='needs_confirmation',
+                                   confirmation_required=True, verification_missing=True))
+            continue
         try:
             stale = (dt.date.today() - dt.date.fromisoformat(verified)).days > STALE_DAYS
         except (ValueError, TypeError):
@@ -186,9 +192,11 @@ def brief(vault, limit=3, include_stale=False):
         # Derived visibility only: an old confirmation never becomes a current action.
         result.append(dict(row, status='needs_confirmation', confirmation_required=True) if stale else row)
     result.sort(key=lambda r: r['updated_at'], reverse=True)
-    # Fresh session reports compete by recency; only old confirmations sink.
-    return sorted(result, key=lambda r: r.get('confirmation_required', False)
-                  and r.get('assertion_kind') != 'assistant_report')[:limit]
+    # Fresh session reports compete by recency. Dated confirmations precede
+    # never-confirmed history so missing dates cannot displace existing cards.
+    return sorted(result, key=lambda r: (
+        r.get('confirmation_required', False) and r.get('assertion_kind') != 'assistant_report',
+        r.get('verification_missing', False)))[:limit]
 
 
 @h.serialized

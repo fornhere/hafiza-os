@@ -151,7 +151,7 @@ def task_intent(text):
                   lambda match: match.group(1), text, flags=re.I)
 
 
-def select_projects(projects, query, cwd=None, previous_user=None):
+def select_projects(projects, query, cwd=None, previous_user=None, session_project_id=None):
     intent = task_intent(query)
     # Explicit replacement names the destination; the abandoned project is not scope.
     replacement = re.search(r'\b(?:bırak(?:ıp)?|yerine)\b(.+)', intent, re.I)
@@ -176,11 +176,18 @@ def select_projects(projects, query, cwd=None, previous_user=None):
     # A short continuation may inherit one unambiguous previous scope.
     # Explicit current names, ambiguous matches and cwd always take precedence.
     prior=[]
-    if not explicit and not located and previous_user and continuation_request(query):
-        prior, _ = select_projects(active, previous_user)
+    if (not explicit and not located and continuation_request(query)
+            and len(words) <= 24 and len(intent) <= 240):
+        if session_project_id is not None:
+            # Only the caller's same-session last delivered scope; no global
+            # recency, alias inference, archived scope or ambiguous state.
+            prior = [p for p in active if isinstance(session_project_id, str)
+                     and p.get('id') == session_project_id]
+        elif previous_user:
+            prior, _ = select_projects(active, previous_user)
         if len(prior) != 1: prior=[]
     chosen=explicit or located or prior
-    reason='explicit' if explicit else ('cwd' if located else 'previous_user' if prior else 'unresolved')
+    reason='explicit' if explicit else ('cwd' if located else ('session_project' if session_project_id is not None else 'previous_user') if prior else 'unresolved')
     return chosen, reason
 
 def config(vault):
@@ -247,7 +254,7 @@ class RevisionMap(dict):
         for key, value in other.items(): self[key] = value
 
 
-def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view="auto", previous_user=None):
+def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view="auto", previous_user=None, session_project_id=None):
     from concurrent.futures import ThreadPoolExecutor
     from contextvars import copy_context
     from jev_client import evaluation_context
@@ -255,6 +262,12 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     from is_ve_ders import TASKS, LESSONS
     vault = Path(vault).resolve()
     previous_user = previous_user if isinstance(previous_user, str) else None
+    from client_transcripts import private, worker_prompt
+    private_previous = bool(previous_user and (h.contains_secret(previous_user) or private(previous_user)))
+    if private_previous:
+        previous_user = None
+    if h.contains_secret(query) or private(query) or worker_prompt(query):
+        session_project_id = None
     ledgers = [h.CATALOG_PATH, h.SOURCE_BINDINGS, TASKS, LESSONS,
                Path('komuta/gorev-baglam.json')]
     def revisions():
@@ -268,12 +281,12 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     with evaluation_context(vault):
         if rerank_mode:
             from client_transcripts import private
-            if any(h.contains_secret(value) or private(value) for value in (query, previous_user or '')):
+            if private_previous or any(h.contains_secret(value) or private(value) for value in (query, previous_user or '')):
                 rerank_mode = False
                 private_fallback = True
             else:
                 private_fallback = False
-                projects, _ = select_projects(config(vault).get('projects', []), query, cwd, previous_user)
+                projects, _ = select_projects(config(vault).get('projects', []), query, cwd, previous_user, session_project_id)
                 project = projects[0] if len(projects) == 1 else None
                 project_context = (str(project.get('id', '')) + ': ' + str(project.get('summary', ''))) if project else ''
                 if h.contains_secret(project_context) or private(project_context): project_context = ''
@@ -315,15 +328,12 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                 return executor.submit(copy_context().run, function, *args, **kwargs)
             if (gate and gate.get('degraded')) or private_fallback:
                 with jev_client.disabled():
-                    result = _build_task_package(vault, query, cwd, budget, history, view, submit, None)
+                    result = _build_task_package(vault, query, cwd, budget, history, view, submit, None, **({'session_project_id': session_project_id} if session_project_id is not None else {}))
                 result.setdefault('jev', {})['rerank'] = dict(gate or {}, mode='rerank', degraded=True,
                     diagnostics=(gate or {}).get('diagnostics', []) + (['private_input'] if private_fallback else []))
             else:
-                if previous_user:
-                    from client_transcripts import private
-                    if h.contains_secret(previous_user) or private(previous_user): previous_user = None
                 result = _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state, skip_memory,
-                                             previous_user=(previous_user or '')[:800] or None)
+                                             previous_user=(previous_user or '')[:800] or None, **({'session_project_id': session_project_id} if session_project_id is not None else {}))
                 if gate: result.setdefault('jev', {})['gate'] = gate
     changed = before != revisions() or getattr(result.get('source_versions'), 'conflict', False)
     for name, version in result.get('source_versions', {}).items():
@@ -351,7 +361,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     return result
 
 
-def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state=None, skip_memory=False, previous_user=None):
+def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state=None, skip_memory=False, previous_user=None, session_project_id=None):
     if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
     if view not in ("auto", "standard", "resume"): raise ValueError("invalid view")
     query = task_intent(query)
@@ -363,7 +373,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     projects=[]
     cfg=config(vault)
     if cfg.get('invalid'): omitted.append('config_invalid')
-    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd, previous_user)
+    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd, previous_user, session_project_id)
     project = projects[0] if len(projects)==1 else None
     workflows=[]
     if project:
@@ -409,7 +419,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     def add(ident, text):
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
-                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'suppressed-history':6, 'decision-history':4, 'knowledge':-1, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
+                    'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'suppressed-history':6, 'decision-history':4, 'knowledge':0.5, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
         if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
         if ident in task_ids: priority=-2
         if ident.startswith('output:'): priority=5
@@ -461,7 +471,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         from jev_retrieval import catalog as semantic_catalog
         # Local ranking only; a semantic advisor keeps its own inputs.
         local_rank = functools.partial(rank_records, ignore=project_terms(project) if project else (),
-                                       context=previous_user)
+                                       context=previous_user,
+                                       tie_break=lambda row: (row.get('scope') != scope, row.get('memory_id', '')))
         catalog_future = submit(semantic_catalog, vault, query, eligible, local_rank, scope)
         ranked_catalog, catalog_evaluation = catalog_future.result()
     else:
@@ -492,7 +503,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             add('jev-reading:'+row['memory_id'], 'Jev kaynak adayı (okumadan tercih/onay sayma): '+row['subject_key']+' — '+str(vault/row['source_path']))
             source_versions[row['source_path']]=eligible_versions[row['source_path']]
 
-    for row in ranked_catalog:
+    for rank_index, row in enumerate(ranked_catalog):
         # A source-derived card requires a reviewed source revision, not a new
         # hash computed from an unreviewed legacy statement's current file.
         content = h.source_file(vault, row['source_path']).read_text()
@@ -506,7 +517,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+row['source_path']+'; kapsam: '+row.get('scope','bilinmiyor')+'; sınıf: '+h.context_source_class(row)+')'):
             current_facts.append(row)
             priority,sequence,ident,text=candidates[-1]
-            candidates[-1]=(4,sequence,ident,text)
+            # Alternate catalog cards and note cards at the same priority.
+            # A whole note dossier must not exhaust the record budget first.
+            candidates[-1]=(0.5,2*rank_index,ident,text)
             source_versions[row['source_path']]=eligible_versions[row['source_path']]
     if project:
         add('project', 'Proje: '+project['id'])
@@ -522,7 +535,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if roots:
             matching = [r for r in roots if cwd and Path(cwd).resolve().is_relative_to(Path(r).resolve())]
             working_root = max(matching, key=lambda r: len(Path(r).resolve().parts)) if matching else roots[0]
-            add('working-root','Çalışma kökü: '+working_root+'; dosyada işlem yapmadan canlı Git HEAD/status ve ilgili testleri doğrula.')
+            add('working-root','Çalışma kökü: '+working_root+'; işlem öncesi canlı Git HEAD/status ve testleri doğrula.')
             if len(roots)>1: add('alternative-roots',f'+{len(roots)-1} alternatif kök: komuta/gorev-baglam.json')
         project_tasks = []
         for task in brief(vault,limit=10000,include_stale=True):
@@ -558,9 +571,11 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             visible_count += 1
             if pinned and not stale: current_tasks.append(task)
             source_versions[task['source_path']]=digest(source)
-            date = task.get('last_verified') or 'tarih yok'
+            date = task.get('last_verified') or (str(task.get('updated_at', ''))[:10]
+                   if task.get('verification_missing') else '') or 'tarih yok'
             report = task.get('assistant_report') if task.get('assertion_kind') == 'assistant_report' else None
             state_label = ('oturum kapanış bildirimi ('+date+', doğrulanmış sonuç değil)' if report else
+                           'son bilinen durum ('+date+', teyit kaydı yok)' if task.get('verification_missing') else
                            'son bilinen durum ('+date+', teyit gerekli)' if stale else
                            'engelli' if task['status']=='blocked' else 'devam edilebilir')
             prefix = ('Kaynağı yeniden doğrulanacak iş:' if not pinned else
@@ -597,8 +612,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         # task consumes part of the budget. Transfers/syntheses keep their notices.
         separate_notes = (knowledge_data['text'].startswith('Bilgi [') and
                           not knowledge_data.get('transfers') and not knowledge_data.get('topics'))
-        for card in re.split(r'\n\n(?=Bilgi \[)', knowledge_data['text']) if separate_notes else [knowledge_data['text']]:
+        for note_index, card in enumerate(re.split(r'\n\n(?=Bilgi \[)', knowledge_data['text']) if separate_notes else [knowledge_data['text']]):
             add('knowledge',card)
+            priority, _, ident, text = candidates[-1]
+            candidates[-1] = (priority, 2*note_index+1, ident, text)
     if reuse_data and reuse_data['text']:
         add('reuse',reuse_data['text'])
     for output in output_data['outputs'][:3]:
