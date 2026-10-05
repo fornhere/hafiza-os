@@ -70,7 +70,7 @@ def alias_match(alias, words, fuzzy=False):
     return all(any(alias_inflected(part,word) or (fuzzy and one_typo(part,word)) for word in words) for part in parts)
 
 # Function words cannot establish a memory match. Domain aliases belong in config.
-_STOPWORDS = set('bir bu şu o ve veya ile için gibi daha çok az ne nasıl neden hangi ben benim sen bizim biz bana bunu şunu mı mi mu mü da de ama olarak olan olsun yap yapalım devam et üret'.split())
+_STOPWORDS = set('kanka kanak knk oğlum amk şimdi şuan şuanda tamam tamamdır falan bakalım göre ilgili son artık önemli zaten ya yahu bir bu şu o ve veya ile için gibi daha çok az ne nasıl neden hangi ben benim sen bizim biz bana bunu şunu mı mi mu mü da de ama olarak olan olsun yap yapalım devam et üret'.split())
 _SYNONYMS = ({'kapak', 'thumbnail'}, {'sunum', 'slayt', 'slideshow'},
              {'hafıza', 'bellek'}, {'yöntem', 'prosedür'}, {'yedek', 'yedekleme'})
 
@@ -623,7 +623,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         from jev_retrieval import catalog as semantic_catalog
         # Local ranking only; a semantic advisor keeps its own inputs.
         local_rank = functools.partial(rank_records, ignore=project_terms(project) if project else (),
-                                       context=previous_user, expansion=expansion,
+                                       context=previous_user, expansion=area_expansion(query),
                                        tie_break=lambda row: (row.get('scope') != scope, row.get('memory_id', '')))
         catalog_future = submit(semantic_catalog, vault, query, eligible, local_rank, scope)
         ranked_catalog, catalog_evaluation = catalog_future.result()
@@ -650,7 +650,13 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     ranked_catalog=[row for row in ranked_catalog if still_current(row)]
     profile_rows = [] if skip_memory else scope_profile(
         eligible, project, cfg.get('projects', []))
-    profile_rows = [row for row in profile_rows if still_current(row)]
+    # Scope identifies whose preferences apply; the active work domain decides
+    # which of them deserve unsolicited space. A vague continuation does not
+    # activate every preference of a project.
+    profile_topic = content_words(area_expansion(query))
+    profile_rows = [row for row in profile_rows if still_current(row) and
+                    any(word_match(t, w) for t in profile_topic
+                        for w in content_words(search_text(row)))]
     ranked_ids = {row['memory_id'] for row in ranked_catalog}
     profile_ids = set()
     profile_used = 0
