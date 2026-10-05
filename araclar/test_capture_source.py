@@ -14,7 +14,7 @@ import codex_hafiza as hook
 class HeartbeatThreads(unittest.TestCase):
     def check_config(self, content, expected):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             path = root / 'automations/hb/automation.toml'
             path.parent.mkdir(parents=True)
             path.write_bytes(content.encode('utf-8') if isinstance(content, str) else content)
@@ -62,7 +62,7 @@ class HeartbeatThreads(unittest.TestCase):
 class Capture(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-        self.v=Path(self.tmp.name);self.root=self.v/'codex';(self.root/'sessions').mkdir(parents=True)
+        self.v=Path(self.tmp.name).resolve();self.root=self.v/'codex';(self.root/'sessions').mkdir(parents=True)
         self.p=self.root/'sessions/a.jsonl'
         self.rows=[dict(type='session_meta',payload=dict(id='s',source='vscode'))]
         self.rows += [dict(type='response_item',timestamp=str(i),payload=dict(type='message',role='user',content=[dict(text='Gerçek istek '+str(i))])) for i in range(6)]
@@ -101,6 +101,26 @@ class Capture(unittest.TestCase):
         self.assertEqual('kapak yap',c.clean_user('<in-app-browser-context source="ambient">OBS</in-app-browser-context>\n## My request:\nkapak yap'))
         self.assertEqual('',c.clean_user('<task-notification>\n<task-id>x</task-id>\n<output-file>/tmp/-home-u-ikinci-beyin/x.output</output-file>\n</task-notification>'))
         self.assertEqual('',c.clean_user('<in-app-browser-context>OBS</in-app-browser-context>'))
+
+    def test_harness_wrappers_preserve_only_real_user_text(self):
+        for tag in ('task-notification', 'cross-session-message', 'system-reminder',
+                    'heartbeat', 'goal', 'subagent_notification', 'collaboration',
+                    'hook_prompt', 'turn_aborted', 'codex_internal_context'):
+            wrapper = f'<{tag} source="synthetic">Foreign project</{tag}>'
+            with self.subTest(tag=tag):
+                self.assertEqual('', c.clean_user(wrapper))
+                self.assertEqual('User request', c.clean_user('User request\n' + wrapper))
+                self.assertEqual('User request', c.clean_user(wrapper + '\nUser request'))
+                self.assertEqual('User request', c.clean_user('User ' + wrapper + 'request'))
+                self.assertEqual('User request', c.clean_user('User request\n'
+                                 f'<{tag}>incomplete notification'))
+                self.assertEqual('User request', c.clean_user(f'<{tag}/>User request'))
+
+    def test_nested_harness_and_normal_prompt(self):
+        self.assertEqual('User request', c.clean_user('<task-notification>'
+            '<task-notification>nested</task-notification>tail</task-notification>\nUser request'))
+        self.assertEqual('Normal request about heartbeat and loops',
+                         c.clean_user('Normal request about heartbeat and loops'))
     def test_late_result_noise_and_gate(self):
         self.event('task_started');self.save();before=c.snapshot(self.p)
         with self.assertRaises(ValueError): c.validate_source(self.v,'s',before)

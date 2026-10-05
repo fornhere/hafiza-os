@@ -122,6 +122,58 @@ class SessionProjectTests(unittest.TestCase):
                 self.prompt(client, 'İŞÇİ KOŞUSU. devam et', session='worker')
                 self.assertFalse(self.state_path(client, 'worker').exists())
 
+    def notifications(self):
+        # Synthetic bodies; tag/attribute shapes verified in T14 A:1867/2202.
+        return [
+            '<task-notification><task-id>t</task-id><tool-use-id>u</tool-use-id>'
+            '<output-file>/tmp/task.output</output-file><status>completed</status>'
+            '<summary>Boreal ne durumda</summary></task-notification>',
+            '<cross-session-message from="peer" from-session="other" '
+            'from-name="peer" from-mode="default">Boreal ne durumda</cross-session-message>',
+            '<system-reminder>Boreal ne durumda</system-reminder>',
+            '<heartbeat>Boreal ne durumda</heartbeat>',
+            '<goal>Boreal ne durumda</goal>',
+            '[HAFIZA_OTOMASYON] Boreal ne durumda',
+        ]
+
+    def test_claude_harness_has_no_context_or_scope_update(self):
+        self.prompt('claude', 'Atlas ne durumda')
+        before = self.state_path('claude').read_bytes()
+        count = len(self.calls)
+        for notification in self.notifications():
+            with self.subTest(notification=notification):
+                output, status = self.prompt('claude', notification)
+                self.assertEqual(output, {})
+                self.assertEqual(status['status'], 'context_suppressed')
+                self.assertEqual(len(self.calls), count)
+                self.assertEqual(self.state_path('claude').read_bytes(), before)
+                self.prompt('claude', notification, session='fresh')
+                self.assertFalse(self.state_path('claude', 'fresh').exists())
+
+    def test_claude_mixed_prompt_uses_only_user_text(self):
+        for index, notification in enumerate(self.notifications()):
+            if notification.startswith('[HAFIZA_OTOMASYON]'):
+                continue  # Legacy marker has no closing boundary for a mixed prompt.
+            for position, prompt in enumerate(('Atlas ne durumda\n' + notification,
+                           notification + '\nAtlas ne durumda',
+                           'Atlas ' + notification + 'ne durumda')):
+                with self.subTest(index=index, prompt=prompt):
+                    session = 'mixed' + str(index)
+                    # Reset duplicate suppression by using a fresh session.
+                    with patch.object(claude, 'claude_task_package', wraps=claude.claude_task_package) as build:
+                        self.prompt('claude', prompt, session=session + str(position))
+                    self.assertEqual(build.call_args.args[1], 'Atlas ne durumda')
+                    self.assertEqual(self.calls[-1][1], 'x')
+
+    def test_claude_direct_context_notification_does_not_use_lagging_user(self):
+        self.prompt('claude', 'Atlas ne durumda')
+        before = self.state_path('claude').read_bytes()
+        source = dict(latest_user=dict(quote='Boreal ne durumda', message_id='old'),
+                      entries=[dict(role='user', quote='Boreal ne durumda')])
+        self.assertEqual(claude.context(self.vault, 'claude', 's1', source,
+                         dict(prompt=self.notifications()[1]), 'UserPromptSubmit'), '')
+        self.assertEqual(self.state_path('claude').read_bytes(), before)
+
     def test_codex_suppressed_package_does_not_replace_last_delivered_scope(self):
         self.prompt('codex', 'Atlas ne durumda')
         with patch.object(gorev_baglam, 'build_task_package', return_value={

@@ -11,6 +11,20 @@ import jev_client
 
 
 class HistoryTests(unittest.TestCase):
+    def test_previous_turn_ignores_peer_and_attached_notifications(self):
+        source = {'entries': [dict(role='user', quote='Earlier task\n'
+            '<task-notification>Foreign project</task-notification>'),
+            dict(role='user', quote='<cross-session-message from="peer">'
+                 'Foreign project</cross-session-message>'),
+            dict(role='user', quote='Current task')]}
+        self.assertEqual(client_hafiza.previous_user(source, 'Current task'), 'Earlier task')
+
+    def test_previous_turn_attached_secret_still_blocks_context(self):
+        source = {'entries': [dict(role='user', quote='Earlier task\n'
+            '<task-notification>api_key=sk-' + 'x' * 48 + '</task-notification>'),
+            dict(role='user', quote='Current task')]}
+        self.assertIsNone(client_hafiza.previous_user(source, 'Current task'))
+
     def test_previous_genuine_user_turn_only(self):
         source = {'entries': [dict(role='user', quote='Earlier task'),
                               dict(role='assistant', quote='response'),
@@ -29,7 +43,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_claude_shadow_logs_hash_without_prompt_and_keeps_local_text(self):
         with tempfile.TemporaryDirectory() as directory:
-            vault=Path(directory)
+            vault=Path(directory).resolve()
             local={'text':'local context','selected_ids':['local']}
             shadow={'text':'remote context','selected_ids':['memory:m1'],
                     'jev':{'gate':{'scores':{},'diagnostics':[]},
@@ -50,7 +64,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_global_off_prevents_claude_shadow_and_on_evaluation(self):
         with tempfile.TemporaryDirectory() as directory:
-            vault = Path(directory)
+            vault = Path(directory).resolve()
             local = {'text': 'Local task context'}
             for hook_mode in ('shadow', 'on'):
                 with self.subTest(hook_mode=hook_mode):
@@ -64,7 +78,7 @@ class HistoryTests(unittest.TestCase):
 
     def test_claude_shadow_does_not_reenable_global_off_during_request(self):
         with tempfile.TemporaryDirectory() as directory:
-            vault = Path(directory)
+            vault = Path(directory).resolve()
             seen_modes = []
             def build(path, *args, **kwargs):
                 seen_modes.append(jev_client.load_config(path)['mode'])
