@@ -173,6 +173,7 @@ def enforce_policy(state, client, session, exclude=False):
     target = policy_path(state, client, session)
     policy = load(target) if target.exists() else {}
     if exclude:
+        policy.pop('session_project_id', None)
         policy.update(client=client, session=session, excluded=True)
         atomic(target, policy)
     if policy.get('excluded'):
