@@ -70,6 +70,55 @@ class Package(unittest.TestCase):
   self.assertIn('asset_revision_conflict',package['text'])
   with self.assertRaisesRegex(ValueError,'asset_revision_conflict'): hydrate_remote(self.v,remote)
 
+ def test_duplicate_closures_keep_newest_and_different_next_steps_survive(self):
+  from client_sessions import unique_states
+  base=dict(project_id='youtube',assertion_kind='assistant_report',
+      assistant_report=dict(outcome='Yayın düzenlemesi kaynak kontrolü ve kabul incelemesi tamamlandı.'),
+      next_step='Yayın kabulünü kontrol et.')
+  old=dict(base,id='old',updated_at='2026-10-01')
+  new=dict(base,id='new',updated_at='2026-10-02')
+  groups=unique_states([old,new])
+  self.assertEqual([[c['id'] for c in g] for g in groups],[['new','old']])
+  different=dict(new,next_step='Ses sürücüsünü yükle.')
+  self.assertEqual(len(unique_states([old,different])),2)
+
+ def state_fixture(self, different=False, changed=False):
+  from is_ve_ders import put
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project]}))
+  statement='Sentetik kaynak durumu ve doğrulama kanıtı.'
+  for ident in ('work', 'project-state:youtube'):
+   (self.v/(ident.replace(':','-')+'.md')).write_text(statement)
+  common=dict(project_id='youtube', transcript_source=dict(client='claude',session='fixture-session'), next_step='Yayın kabulünü kontrol et.', actor='reviewer', evidence=statement)
+  put(self.v,'task',dict(common,id='work',title='Yayın iş durumu',status='active',
+      last_verified=dt.date.today().isoformat(),last_result='Yayın düzenlemesi tamamlandı.',
+      open_work='Ek kapak kontrolü bekleniyor.',source_path='work.md'))
+  if different: common['next_step']='Mikrofon sürücüsünü yükle.'
+  put(self.v,'task',dict(common,id='project-state:youtube',title='Youtube oturum kapanışı',status='needs_confirmation',
+      source_path='project-state-youtube.md',assertion_kind='assistant_report',
+      assistant_report=dict(outcome='Yayın düzenlemesi tamamlandı.',open_items=[]),
+      ))
+  if changed: (self.v/'project-state-youtube.md').write_text('Değişmiş ve onaysız kaynak')
+
+ def test_same_state_report_and_work_are_one_newest_card(self):
+  self.state_fixture()
+  package=build_task_package(self.v,'kapak durumu',budget=5000)
+  self.assertEqual(package['text'].count('İş durum kartı'),1)
+  self.assertIn('Youtube oturum kapanışı',package['text'])
+  self.assertIn('Ek kapak kontrolü bekleniyor.',package['text'])
+  self.assertIn('work',package['selected_ids'])
+  self.assertIn('project-state:youtube',package['selected_ids'])
+
+ def test_different_jobs_are_not_collapsed(self):
+  self.state_fixture(different=True)
+  package=build_task_package(self.v,'kapak durumu',budget=5000)
+  self.assertEqual(package['text'].count('İş durum kartı'),2)
+
+ def test_changed_newer_source_cannot_displace_work(self):
+  self.state_fixture(changed=True)
+  package=build_task_package(self.v,'kapak durumu',budget=5000)
+  self.assertIn('Yayın iş durumu',package['text'])
+  self.assertNotIn('Youtube oturum kapanışı',package['text'])
+
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
   self.v=Path(self.tmp.name).resolve();(self.v/'komuta').mkdir()

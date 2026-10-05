@@ -474,7 +474,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if view not in ("auto", "standard", "resume"): raise ValueError("invalid view")
     query = task_intent(query)
     resume = view == "resume" or (view == "auto" and continuation_request(query))
-    resume_tasks = []; card_facts = []
+    resume_tasks = []; card_facts = []; task_duplicates = {}
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions=RevisionMap()
     budget=max(0, int(budget)); candidates=[]; current_facts=[]; current_tasks=[]
@@ -731,8 +731,21 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         # A topic-only area is weaker scope than a name or workspace. Keep a
         # smaller set of alternatives until the user identifies the episode.
         card_limit = 2 if match_reason == 'area_topic' else 3
-        visible_count = 0
+        from client_sessions import unique_states, state_values
+        # Verify every source before allowing it to displace another card.
+        valid_tasks = []
         for task in project_tasks:
+            source = h.source_file(vault, task['source_path'])
+            if task.get('source_content_hash') and task['source_content_hash'] != h.statement_hash(source.read_text()):
+                omitted.append(task['id']+':source_changed')
+            else:
+                valid_tasks.append(task)
+        groups = unique_states([t for t in valid_tasks if t.get('source_content_hash')])
+        groups.extend([t] for t in valid_tasks if not t.get('source_content_hash'))
+        groups.sort(key=lambda group: min(project_tasks.index(t) for t in group))
+        visible_count = 0
+        for group in groups:
+            task = group[0]
             task_ids.add(task['id'])
             source=h.source_file(vault,task['source_path'])
             pinned=task.get('source_content_hash')==h.statement_hash(source.read_text())
@@ -767,6 +780,16 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 if value: text += '; '+label+': '+value
             text += ('; Sonraki adım: '+task['next_step']+'; Tarih: '+date+
                      ' (kaynak: '+task['source_path']+')')
+            values = state_values(task)
+            duplicates = []
+            for older in group[1:]:
+                extra = [v for v in state_values(older) if v not in values]
+                if extra:
+                    text += '; Ek alan: ' + '; '.join(extra) + ' (kaynak: '+older['source_path']+')'
+                    values.extend(extra)
+                source_versions[older['source_path']] = digest(h.source_file(vault, older['source_path']))
+                duplicates.append(older['id'])
+            task_duplicates[task['id']] = duplicates
             add(task['id'],text)
             # One relevant primary card comes first; notes precede additional
             # cards and unrelated recency hints, so a long card cannot starve notes.
@@ -876,6 +899,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if used+cost>budget:
             omitted.append(ident+':budget'); continue
         lines.append(text);selected.append(ident);used+=cost
+        selected.extend(task_duplicates.get(ident, []))
         # One channel may deliver several roots or working sources.
         if ident in delivered_segments:
             delivered_segments[ident] += '\n' + text
@@ -900,6 +924,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             omitted.append('scope-header:budget')
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
+    result['deduplicated_tasks'] = {ident: ids for ident, ids in task_duplicates.items() if ids and ident in selected}
     result['suppressed_count']=suppressed_count
     result['lessons']=dict(applied=[dict(id=r['id'],version=r['version']) for r in lesson_details['lessons']] if 'methods' in selected else [],diagnostics=lesson_diagnostics)
     if knowledge_data and 'knowledge' in selected:

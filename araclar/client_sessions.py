@@ -428,7 +428,65 @@ def verify_candidate_evidence(vault, source_path, evidence):
     return True
 
 
-def recall(vault, budget=2500, exclude=None, max_age_days=7):
+def state_values(card):
+    report = card.get('assistant_report') or card.get('project_state') or {}
+    return [str(v) for v in (card.get('goal'), card.get('last_result') or report.get('outcome'),
+            card.get('open_work') or '; '.join(report.get('open_items') or []),
+            card.get('blocker'), card.get('next_step') or report.get('next_step'))
+            if v and not contains_secret(str(v)) and not private(str(v))]
+
+
+def same_state(left, right):
+    """Only a report can collapse a card; shared projects alone prove nothing."""
+    if not left.get('project_id') or left.get('project_id') != right.get('project_id'):
+        return False
+    if not any(c.get('assertion_kind') == 'assistant_report' for c in (left, right)):
+        return False
+    a, b = state_values(left), state_values(right)
+    if not a or not b:
+        return False
+    words = lambda values: set(re.findall(r'\w+', ' '.join(values).casefold()))
+    wa, wb = words(a), words(b)
+    overlap = len(wa & wb) / max(1, len(wa | wb))
+    origins = [c.get('transcript_source') or {} for c in (left, right)]
+    same_origin = (bool(left.get('receipt_id')) and left.get('receipt_id') == right.get('receipt_id')) or (
+        bool(origins[0].get('session')) and
+        (origins[0].get('client'), origins[0].get('session')) ==
+        (origins[1].get('client'), origins[1].get('session')))
+    same_source = bool(left.get('source_path')) and left.get('source_path') == right.get('source_path')
+    # Different tasks in one session must retain their independent next steps.
+    steps = [c.get('next_step') or (c.get('assistant_report') or {}).get('next_step') for c in (left, right)]
+    step_words = [set(re.findall(r'\w+', str(step or '').casefold())) for step in steps]
+    step_overlap = len(step_words[0] & step_words[1]) / max(1, len(step_words[0] | step_words[1]))
+    matching_step = bool(steps[0]) and (steps[0] == steps[1] or (
+        len(step_words[0] & step_words[1]) >= 4 and step_overlap >= .8))
+    return matching_step and (((same_origin or same_source) and overlap >= .5) or (
+        len(wa & wb) >= 6 and overlap >= .9))
+
+
+def state_signature(card):
+    """Content-free delivery marker for the first prompt after an opening."""
+    report = card.get('assistant_report') or {}
+    step = card.get('next_step') or report.get('next_step') or ''
+    return dict(project_id=card.get('project_id'),
+                report=card.get('assertion_kind') == 'assistant_report',
+                step=sha(step.encode()),
+                words=sorted({sha(w.encode()) for w in re.findall(r'\w+', ' '.join(state_values(card)).casefold())}))
+
+
+def unique_states(cards):
+    """Newest representative plus older, source-validated supplements."""
+    groups = []
+    for card in sorted(cards, key=lambda c: str(c.get('updated_at', '')), reverse=True):
+        group = next((g for g in groups if same_state(g[0], card)), None)
+        if group is None:
+            groups.append([card])
+        else:
+            group.append(card)
+    return groups
+
+
+def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), delivered_cards=None):
     budget = max(0, min(int(budget), 6500))
     oldest_ns = time.time_ns() - int(max_age_days * 86400 * 1e9)
     with locked(vault) as (root, state):
@@ -441,15 +499,13 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7):
                     candidates.append(item)
             except (ValueError, OSError, KeyError, TypeError):
                 continue
-        parts, used, seen_sessions = [], 0, set()
+        parts, used, seen_sessions, seen_cards = [], 0, set(), list(exclude_cards)
         # At most 20 recent original sources are reread per opening hook.
         for item in sorted(candidates, key=lambda i: i['created_ns'], reverse=True)[:20]:
             if len(parts) >= 3 or used >= budget:
                 break
             try:
                 identity = (item['client'], item['session'])
-                if identity in seen_sessions:
-                    continue
                 _validate(item, state)
                 receipt_path = root / (item['id'] + '.json')
                 if sha(read_bytes(receipt_path, 128000)) != item.get('receipt_sha256'):
@@ -463,8 +519,14 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7):
                 if not isinstance(summary, str) or contains_secret(summary) or private(summary):
                     continue
                 report = receipt.get('project_state')
+                if not isinstance(report, dict) and identity in seen_sessions:
+                    continue
                 if isinstance(report, dict) and report.get('assertion_kind') == 'assistant_report':
                     # Shown by session recall independent of the next user's question.
+                    card = dict(project_id=report.get('project_id'), assertion_kind='assistant_report',
+                                assistant_report=report, transcript_source=item)
+                    if any(same_state(card, seen) for seen in seen_cards):
+                        continue
                     report_text = ('Asistan bildirimi (doğrulanmış sonuç değildir) — proje: '
                                    + str(report.get('project_id')) + '\nSonuç: ' + report['outcome']
                                    + '\nGerekçe: ' + report['rationale']
@@ -482,6 +544,10 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7):
                 parts.append(text)
                 used += len(text) + (1 if len(parts) > 1 else 0)
                 seen_sessions.add(identity)
+                if isinstance(report, dict) and report.get('assertion_kind') == 'assistant_report':
+                    seen_cards.append(card)
+                    if delivered_cards is not None and report_text in excerpt:
+                        delivered_cards.append(card)
             except (ValueError, OSError, KeyError, TypeError):
                 continue
         return '\n'.join(parts)
