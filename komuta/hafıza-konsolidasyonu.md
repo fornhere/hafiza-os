@@ -315,6 +315,26 @@ ayrı incelemeden geçene kadar ders bağlama girmez. Eski zararlar yeniden
 onaydan sonra tekrar düşürmez. `zihin/ders-faydasi.json` türetilmiş görünümdür;
 kanonik ders geçmişinin veya kaynak incelemesinin yerine geçmez.
 
+Teslim makbuzları `günlük/hafıza-makbuzları/lesson-deliveries.jsonl` içinde
+son enjekte edilen metinden ID+sürüm, paket, oturum/tur ve zamanla tutulur.
+Teslim tek başına uygulama veya fayda değildir. Ortak okuyucu
+`fayda_olc.read_lesson_results`, `lesson-outcomes.jsonl` ve
+`fayda-gozlemleri.jsonl` kaynaklarını yeniden doğrular; aynı iş kartı veya
+aynı oturumdaki daha sonraki kanıtı ders sürümüne bağlar. Oturumdan bağlanan
+kullanıcı beyanının satırı teslim anındaki transcript sınırından sonra olmalıdır.
+Kanıtlı test sonucu, kullanıcı kabul/ret beyanı ve kaynaklı done/cancelled
+geçişleri ayrı kanıt türleri olarak görünür; cancelled yardım/zarar sayılmaz.
+Sonuçsuz teslim `unknown`, kanıtsız veya eşleşmeyen eski gözlem `unlinked` kalır.
+Eski sürümlü `applied_lessons` beyanları `legacy_applied` olarak korunur;
+sadece ID içeren listelere bugünkü sürüm atanmaz. İki liste biçimi de okunur.
+
+`python3 araclar/fayda_olc.py --vault .` ortak sonuç görünümünü de raporlar;
+eski `--observations DOSYA` arayüzü betimleyici rapor için korunur.
+Bakımda `lesson-utility --actor AKTÖR --apply`, türetilmiş görünümle birlikte
+`günlük/hafıza-makbuzları/lesson-utility.jsonl` dosyasına aktör, UTC zaman,
+linked/unlinked sonuç ve unknown teslim sayılarını yazar. Dry-run bunları
+raporlar, dosya yazmaz. Sayaçlar nedensel fayda iddiası değildir.
+
 ## Talimat dosyası kapısı
 
 Her derinlikte `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md`, `GEMINI.md`, `SKILL.md`,

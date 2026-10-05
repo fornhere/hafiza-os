@@ -151,6 +151,7 @@ def review_pending(vault, project_id=None, limit=5, apply=False, conflict_pairs=
 def outcome(vault,data,apply=False):
     """Queue externally verifiable work evidence; never self-promote lessons."""
     from is_ve_ders import latest, validate_acceptance_source
+    data=dict(data);recorded_at=data.pop('recorded_at',None)
     vault=Path(vault)
     required=('task_id','title','lesson','conditions','method_path','verification_path','verification_evidence','verification_hash','verification_kind','observed_result','actor')
     if any(not isinstance(data.get(k),str) or not data[k].strip() for k in required):raise ValueError('outcome_fields_required')
@@ -184,6 +185,8 @@ def outcome(vault,data,apply=False):
     if h.contains_secret(content) or h.contains_secret(method.read_text()):raise ValueError('restricted_source')
     row=dict(data,task_version=task['version'],scope=task.get('scope','project:'+task['project_id'] if task.get('project_id') else 'user'),project_id=task.get('project_id'),method_hash=h.statement_hash(method.read_text()),source_path=task['source_path'],source_content_hash=task['source_content_hash'],evidence=task['evidence'],status='proposed')
     row['receipt_id']=fingerprint(row)
+    if data.get('actor_session_id'):
+        row['recorded_at']=recorded_at or dt.datetime.now(dt.timezone.utc).isoformat()
     return append_once(vault,OUTCOMES,row) if apply else dict(row=row,changed=False)
 
 
@@ -211,7 +214,7 @@ def review_lesson(vault,data,apply=False):
     return dict(changed=apply,lesson=put(vault,'lesson',lesson) if apply else lesson)
 
 
-def lesson_utility(vault, apply=False, min_harm=2):
+def lesson_utility(vault, apply=False, min_harm=2, actor="lesson-utility"):
     """Request review, never delete: one failure may be attribution noise.
 
     Count each task/verification once, after the last review-required version;
@@ -225,18 +228,19 @@ def lesson_utility(vault, apply=False, min_harm=2):
         if 'review_required' in row:cutoffs[row['id']]=max(cutoffs.get(row['id'],0),row['version'])
     lessons={ident:dict(help=0,harm=0,outcome_ids=[],action='none') for ident in sorted(current)}
     seen=set();review_required=[];failures=[]
-    for row in h.load_jsonl(vault/OUTCOMES):
-        result=row.get('observed_result')
+    from fayda_olc import read_lesson_results, UTILITY_RECEIPTS
+    if not isinstance(actor,str) or not actor.strip():raise ValueError('actor_required')
+    measurements=read_lesson_results(vault)
+    for row in measurements['events']:
+        result=row['result'];ident=row['id']
         if result not in ('passed','accepted','failed','rejected'):continue
-        for item in row.get('applied_lessons',[]):
-            ident=item['id']
-            if ident not in current or item['version']<=cutoffs.get(ident,0):continue
-            if row['receipt_id']==current[ident].get('outcome_id'):continue
-            key=(ident,row['task_id'],row['verification_hash'])
-            if key in seen:continue
-            seen.add(key);entry=lessons[ident]
-            entry['help' if result in ('passed','accepted') else 'harm']+=1
-            entry['outcome_ids'].append(row['receipt_id'])
+        if ident not in current or row['version']<=cutoffs.get(ident,0):continue
+        if row['outcome_id']==current[ident].get('outcome_id'):continue
+        key=(ident,row['task_id'],row['evidence_hash'])
+        if key in seen:continue
+        seen.add(key);entry=lessons[ident]
+        entry['help' if result in ('passed','accepted') else 'harm']+=1
+        entry['outcome_ids'].append(row['outcome_id'])
     for ident,entry in lessons.items():
         entry['outcome_ids']=sorted(set(entry['outcome_ids']));row=current[ident]
         if any(is_instruction_target(vault,row.get(k)) for k in ('target_path','method_path')):entry['instruction_target']=True
@@ -255,9 +259,15 @@ def lesson_utility(vault, apply=False, min_harm=2):
                 entry['action']='demotion_failed:'+str(exc)
                 failures.append(dict(id=ident,reason=entry['action']));continue
         review_required.append(ident)
+    receipt=dict(actor=actor,at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                 linked_results=measurements['linked_results'],unlinked_results=measurements['unlinked_results'],
+                 unknown_deliveries=measurements['unknown_deliveries_count'],applied=apply)
     if apply:
-        atomic(vault/'zihin/ders-faydasi.json',json.dumps(dict(generated_at=dt.datetime.now(dt.timezone.utc).isoformat(),min_harm=min_harm,lessons=lessons),ensure_ascii=False,indent=2)+'\n')
-    return dict(lessons=lessons,review_required=review_required,failures=failures,applied=apply,canonical_deletes=0)
+        atomic(vault/'zihin/ders-faydasi.json',json.dumps(dict(generated_at=receipt['at'],min_harm=min_harm,lessons=lessons,measurements=measurements,maintenance_receipt=receipt),ensure_ascii=False,indent=2)+'\n')
+        h._append_jsonl(vault/UTILITY_RECEIPTS,receipt)
+    return dict(lessons=lessons,review_required=review_required,failures=failures,applied=apply,canonical_deletes=0,
+                measurements=measurements,maintenance_receipt=receipt)
+
 
 
 def main(argv=None):
@@ -269,10 +279,10 @@ def main(argv=None):
         if name!='verify-answer':r.add_argument('--apply',action='store_true')
         else:r.add_argument('--project-id')
     r=sub.add_parser('context');r.add_argument('query');r.add_argument('--cwd');r.add_argument('--budget',type=int,default=5000)
-    r=sub.add_parser('lesson-utility');r.add_argument('--apply',action='store_true');r.add_argument('--min-harm',type=int,default=2)
+    r=sub.add_parser('lesson-utility');r.add_argument('--apply',action='store_true');r.add_argument('--min-harm',type=int,default=2);r.add_argument('--actor',default='lesson-utility')
     a=p.parse_args(argv);v=a.vault.resolve()
     if a.cmd=='review-pending':result=review_pending(v,a.project_id,a.limit,a.apply,conflict_pairs=a.conflict_pairs)
-    elif a.cmd=='lesson-utility':result=lesson_utility(v,a.apply,a.min_harm)
+    elif a.cmd=='lesson-utility':result=lesson_utility(v,a.apply,a.min_harm,a.actor)
     elif a.cmd=='context':
         from gorev_baglam import build_task_package
         result=build_task_package(v,a.query,a.cwd,a.budget)

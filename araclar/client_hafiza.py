@@ -176,6 +176,12 @@ def context(vault, client, session, source, payload, event):
         current['delivered_lessons']=[r for r in (package or {}).get('delivered_lessons', [])
             if package['delivered_lesson_segments'][r['id']] in result]
         current['package_id']=(package or {}).get('package_id')
+        from fayda_olc import record_delivery
+        record_delivery(vault, client=client, session_id=session,
+                        package_id=current['package_id'], delivered_lessons=[r for r in current['delivered_lessons'] if type(r.get('version')) is int],
+                        turn_id=fingerprint, task_id=payload.get('task_id'),
+                        source_end_line=source.get('end_line') if source else None)
+
         if opening:
             # Persist hashes only; consume on the first subsequent user prompt.
             current['opening_line_hashes'] = [sha(line.encode()) for line in result.splitlines() if line]
