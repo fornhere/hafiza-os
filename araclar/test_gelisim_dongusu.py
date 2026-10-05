@@ -12,7 +12,7 @@ from platform_lock import exclusive_lock
 class LoopTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.v=Path(self.temp.name); (self.v/'source').write_text('verified source')
+        self.v=Path(self.temp.name).resolve(); (self.v/'source').write_text('verified source')
         self.out=self.v/'experiments'
         self.c=dict(schema=g.VERSION,label_status='agent_labels',
             label_review=dict(status='reviewed',kind='fixture',reviewed_by='offline-tests'),source_versions={'source':hashlib.sha256(b'verified source').hexdigest()},

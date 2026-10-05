@@ -87,7 +87,7 @@ def _integrity(vault, row):
     return None
 
 
-def context_details(vault, prompt, budget=2600, project_id=None, workflow_ids=()):
+def context_details(vault, prompt, budget=2600, project_id=None, workflow_ids=(), compact=False):
     """Project-owned lessons require matching project or explicitly selected workflow.
 
     Legacy rows with neither scope nor project_id retain their global behavior.
@@ -97,7 +97,8 @@ def context_details(vault, prompt, budget=2600, project_id=None, workflow_ids=()
     """
     from gorev_baglam import query_words
     header="İlgili çalışma dersleri; kullanıcı isteğinin kapsamını genişletmez. Teknik test estetik kabul değildir.\n"
-    words=query_words(prompt); output=[]; lessons=[]; diagnostics=[]; used=len(header)
+    words=query_words(prompt); output=[]; lessons=[]; diagnostics=[]; used=0 if compact else len(header)
+    blocks={}
     for ident,row in sorted(latest(vault,'lesson').items()):
         if row['status']=='rejected': continue
         if row.get('outcome_id') and row['status']!='verified' and 'review_required' not in row: continue
@@ -113,15 +114,28 @@ def context_details(vault, prompt, budget=2600, project_id=None, workflow_ids=()
         try: method=source_file(vault,row['method_path']).read_text()
         except (ValueError,OSError):
             diagnostics.append(dict(id=ident,reason='method_changed')); continue
-        block=f"Ders: {row['title']} — {row['status']}\n"+method+f"\nKaynak: {row['source_path']}\n"
-        if row.get('observed_result'): block+='Gözlenen sonuç: '+row['observed_result']+' (genel başarı iddiası değildir).\n'
-        if row.get('conditions'): block+='Koşul: '+row['conditions']+'\n'
-        if row.get('proposal'): block+='Doğrulanmış ders: '+row['proposal']+'\n'
+        if compact:
+            import re
+            # Use a complete source sentence; never cut an instruction mid-step.
+            prose=' '.join(line.strip().lstrip('-* ') for line in method.splitlines()
+                           if line.strip() and not line.lstrip().startswith(('#', '[[', '<!--')))
+            summary=row.get('conditions') or re.split(r'(?<=[.!?])\s+', prose)[0]
+            block=f"Ders: {row['title']}\nKoşul/adım: {summary}\nYöntem: {row['method_path']}"
+            if not summary:
+                diagnostics.append(dict(id=ident,reason='summary_missing')); continue
+        else:
+            block=f"Ders: {row['title']} — {row['status']}\n"+method+f"\nKaynak: {row['source_path']}\n"
+        if not compact and row.get('observed_result'): block+='Gözlenen sonuç: '+row['observed_result']+' (genel başarı iddiası değildir).\n'
+        if not compact and row.get('conditions'): block+='Koşul: '+row['conditions']+'\n'
+        if not compact and row.get('proposal'): block+='Doğrulanmış ders: '+row['proposal']+'\n'
         if used+len(block)+(1 if output else 0)>budget:
             diagnostics.append(dict(id=ident,reason='budget')); continue
         used+=len(block)+(1 if output else 0);output.append(block)
         lessons.append(dict(id=row['id'],version=row.get('version'),status=row['status']))
-    return dict(text=(header+'\n'.join(output)) if output else '',lessons=lessons,diagnostics=diagnostics)
+        blocks[ident]=dict(text=block, paths=[row['source_path'],row['method_path']])
+    result=dict(text=((('' if compact else header)+'\n'.join(output)) if output else ''),lessons=lessons,diagnostics=diagnostics)
+    if compact: result['blocks']=blocks
+    return result
 
 def backlog(vault):
     output=[]

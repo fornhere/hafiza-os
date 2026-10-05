@@ -422,6 +422,9 @@ def hook(vault, data):
         if shared:
             parts.append(shared)
         emitted = '\n\n'.join(parts)
+        state['delivered_lessons']=[r for r in package.get('delivered_lessons', [])
+            if lesson_text and package['delivered_lesson_segments'][r['id']] in emitted]
+        state['package_id']=package.get('package_id')
         account_context(state, len(emitted), original_chars if suppress else 0)
         atomic(state_path, json.dumps(state))
         if parts:

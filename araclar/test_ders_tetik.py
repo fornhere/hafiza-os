@@ -16,7 +16,7 @@ from is_ve_ders import put
 class LessonTriggerTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-  self.v=Path(self.tmp.name);self.out=self.v/'reports/result.json'
+  self.v=Path(self.tmp.name).resolve();self.out=self.v/'reports/result.json'
   self.ledger=self.v/'zihin/ders-durumu.jsonl'
   (self.v/'source.md').write_text('Kapak üretirken önce kimlik ve tasarımı denetle.',encoding='utf-8')
   (self.v/'method.md').write_text('Kimlik ve tasarımı denetle.',encoding='utf-8')

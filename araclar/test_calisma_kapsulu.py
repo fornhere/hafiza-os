@@ -13,7 +13,7 @@ from codex_hafiza import hook
 class Capsule(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        self.v=Path(self.temp.name);(self.v/'komuta').mkdir();(self.v/'zihin').mkdir()
+        self.v=Path(self.temp.name).resolve();(self.v/'komuta').mkdir();(self.v/'zihin').mkdir()
         self.source=self.v/'current.md';self.source.write_text('Atlas CSV dışa aktarım. Sonraki adım CSV kontrolü.')
         (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[dict(id='atlas',aliases=['Atlas'],assets=[])]}))
     def task(self, ident='export', status='active'):
@@ -89,6 +89,47 @@ class Capsule(unittest.TestCase):
             new=build_task_package(fixture.v,'kapak devam',budget=budget,view='resume')
             if 'input-check' in old['selected_ids']:
                 self.assertIn('input-check',new['selected_ids'])
+
+    def test_codex_receipt_counts_delivery_but_not_suppressed_repeat(self):
+        import codex_hafiza as c
+        method='Atlas CSV üretirken alanları kontrol et.'
+        (self.v/'method.md').write_text(method)
+        lesson=put(self.v,'lesson',dict(id='csv-method',title='CSV kontrolü',status='proposed',
+            source_path='current.md',evidence=self.source.read_text(),actor='test',
+            triggers=['CSV'],project_id='atlas',method_path='method.md',implementation_hash=h.statement_hash(method)))
+        def event(turn):
+            return hook(self.v,dict(session_id='lessons',turn_id=turn,hook_event_name='UserPromptSubmit',prompt='Atlas CSV üret'))
+        def receipt():
+            return json.loads((self.v/c.INBOX/'.state'/(c.key('lessons','state')+'.json')).read_text())
+        with patch('codex_hafiza.opening_brief',return_value=''),patch('codex_hafiza.shared_reviewed_context',return_value=''):
+            first=event('one')
+            self.assertIn('Yöntem: method.md',first['hookSpecificOutput']['additionalContext'])
+            self.assertEqual(receipt()['delivered_lessons'],[dict(id=lesson['id'],version=lesson['version'])])
+            event('two');self.assertEqual(receipt()['delivered_lessons'],[])
+            event('three');self.assertEqual(receipt()['delivered_lessons'],[dict(id=lesson['id'],version=lesson['version'])])
+        self.assertFalse((self.v/'gelen-kutusu/lesson-outcomes.jsonl').exists())
+
+    def test_claude_receipt_uses_final_text_after_filter_and_truncation(self):
+        import client_hafiza as client
+        from client_sessions import locked, policy_path
+        segment='Ders: CSV kontrolü\nKoşul/adım: Üretirken alanları kontrol et.\nYöntem: method.md'
+        lesson=dict(id='csv-method',version=3)
+        package=dict(text=segment,selected_ids=[],project_id='atlas',package_id='synthetic',
+            delivered_lessons=[lesson],delivered_lesson_segments={'csv-method':segment})
+        with patch('client_hafiza.claude_task_package',return_value=package),patch('codex_hafiza.opening_brief',return_value=''),patch('codex_hafiza.latest_session_section',return_value=''),patch('client_hafiza.recall',return_value=''):
+            first=client.context(self.v,'claude','lessons',None,{'prompt':'Atlas CSV üret'},'UserPromptSubmit')
+            self.assertIn(segment,first)
+            with locked(self.v) as (_,state):
+                receipt=json.loads(policy_path(state,'claude','lessons').read_text())
+            self.assertEqual(receipt['delivered_lessons'],[lesson])
+            # Opening line dedup removes the entire unchanged lesson.
+            client.context(self.v,'claude','lessons',None,{'prompt':'Atlas CSV yenile'},'UserPromptSubmit')
+            with locked(self.v) as (_,state):
+                self.assertEqual(json.loads(policy_path(state,'claude','lessons').read_text())['delivered_lessons'],[])
+            with patch.object(client,'CONTEXT_BUDGET',50):
+                client.context(self.v,'claude','lessons',None,{'prompt':'Atlas CSV hazırla'},'UserPromptSubmit')
+            with locked(self.v) as (_,state):
+                self.assertEqual(json.loads(policy_path(state,'claude','lessons').read_text())['delivered_lessons'],[])
 
     def test_hook_reads_fresh_cards_and_keeps_receipt_quiet(self):
         self.task();self.fact()
