@@ -10,6 +10,28 @@ def digest(value):
 
 
 def clean_user(text):
+    # Native harness messages may accompany a real user request. Remove only
+    # their bodies, wherever they occur; an unclosed wrapper consumes the tail.
+    # cross-session-message is a peer's text, never the host user's request.
+    harness_tags = ('subagent_notification', 'turn_aborted', 'hook_prompt',
+        'system-reminder', 'goal', 'heartbeat', 'collaboration',
+        'codex_internal_context', 'task-notification', 'cross-session-message')
+    token = re.compile(r'<(?P<end>/)?(?P<tag>' + '|'.join(harness_tags)
+                       + r')(?=\s|/?>)(?P<attrs>[^>]*)>', re.I)
+    pieces = []; stack = []; cursor = 0
+    for match in token.finditer(text):
+        tag = match['tag'].lower()
+        if not stack:
+            pieces.append(text[cursor:match.start()])
+        if match['end']:
+            if stack and tag == stack[-1]:
+                stack.pop()
+        elif not match['attrs'].rstrip().endswith('/'):
+            stack.append(tag)
+        cursor = match.end()
+    if not stack:
+        pieces.append(text[cursor:])
+    text = ''.join(pieces)
     for tag in ('recommended_plugins', 'environment_context', 'permissions instructions', 'in-app-browser-context'):
         text = re.sub(r'<' + tag + r'(?:\s[^>]*)?>.*?</' + tag + r'>', '', text, flags=re.S)
     text = text.strip()
@@ -18,7 +40,7 @@ def clean_user(text):
     excluded = ('# AGENTS.md instructions', '<subagent_notification', '<turn_aborted',
         '<hook_prompt', '[HAFIZA_KAPANIS]', '[HAFIZA_OTOMASYON]', '<system-reminder', '<goal>',
         '<heartbeat', '<collaboration', '<codex_internal_context', '<in-app-browser-context',
-        '<task-notification')
+        '<task-notification', '<cross-session-message')
     return '' if text.startswith(excluded) else text
 
 

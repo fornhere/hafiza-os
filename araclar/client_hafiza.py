@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from client_transcripts import CLIENTS, SourceError, parse, private, sha, source_path, strict_json, worker_prompt
 from client_sessions import atomic, enforce_policy, locked, load, recall, register, source_with_policy
 from hafiza import contains_secret
+from capture_source import clean_user
 
 MAX_INPUT = 128000
 CONTEXT_BUDGET = 6500
@@ -75,10 +76,14 @@ def identity(client, payload):
 
 
 def previous_user(source, current_query):
-    users = [entry['quote'] for entry in source['entries'] if entry['role'] == 'user'] if source else []
-    if users and users[-1] == current_query: users.pop()
-    preceding = users[-1] if users else None
-    return None if preceding and (contains_secret(preceding) or private(preceding)) else preceding
+    users = [(clean_user(entry['quote']), entry['quote'])
+             for entry in source['entries'] if entry['role'] == 'user'] if source else []
+    users = [(text, raw) for text, raw in users if text]
+    if users and users[-1][0] == current_query: users.pop()
+    if not users:
+        return None
+    preceding, raw = users[-1]
+    return None if contains_secret(raw) or private(raw) else preceding
 
 
 def context(vault, client, session, source, payload, event):
@@ -88,12 +93,14 @@ def context(vault, client, session, source, payload, event):
         if not isinstance(prompt, str):
             raise SourceError('prompt_required')
         # Harness notifications and injected wrappers are not user requests.
-        from capture_source import clean_user
         query = clean_user(prompt)
     with locked(vault) as (_, state):
         enforce_policy(state, client, session, exclude=private(query))
     if contains_secret(query):
         raise SourceError('private_context')
+    # Do not open memory or touch delivered scope for a harness-only wakeup.
+    if client == 'claude' and event == 'UserPromptSubmit' and not query:
+        return ''
     ident = sha((client + '\0' + session).encode())
     turn_id = source['latest_user']['message_id'] if source and source['latest_user'] else ''
     fingerprint = sha(json.dumps([query, turn_id], ensure_ascii=False).encode())
