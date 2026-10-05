@@ -53,6 +53,29 @@ class KnowledgeTests(unittest.TestCase):
                                  linked_paths=['task.md'],budget=5000)
         self.assertEqual([r['id'] for r in result['records']],['direct'])
 
+    def test_long_domain_request_keeps_user_note_before_episode_notes(self):
+        self.d.update(id='user-guide',title='Kapak stil yönü',domains=['thumbnail'],
+                      statement='Eski kapak stiline dön.')
+        self.register()
+        episode=copy.deepcopy(self.d)
+        episode.update(id='episode',scope='project:one',title='Kapak hook video',
+                       statement='Kapak video hook metin ve etiket düzeni.')
+        b.register(self.v,episode,True)
+        query='Bu videoya kapak hook metin etiket düzeni ve yayın paketi hazırlayalım'
+        result=b._retrieve_local(self.v,query,project_id='one',budget=130)
+        self.assertEqual([r['id'] for r in result['records']],['user-guide'])
+
+    def test_mascot_request_routes_user_guidance_without_foreign_episode(self):
+        self.d.update(id='user-guide',title='Kapak stil yönü',domains=['thumbnail'],
+                      statement='Eski kapak stiline dön.')
+        self.register()
+        episode=copy.deepcopy(self.d)
+        episode.update(id='episode',scope='project:other')
+        b.register(self.v,episode,True)
+        result=b._retrieve_local(self.v,'Maskot neden bu şekilde seçildi anlamıyorum bunu düzelt',
+                                 project_id='one')
+        self.assertEqual([r['id'] for r in result['records']],['user-guide'])
+
     def test_writer_persists_exact_utf8_lf_bytes_and_declared_version(self):
         target=self.v/'exact.md'
         text='Türkçe bilgi ağı\nİkinci satır\n'

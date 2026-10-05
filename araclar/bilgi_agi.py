@@ -12,7 +12,7 @@ import hafiza as h
 # Shared established topics; aliases do not broaden card scope or domains.
 DOMAIN_ALIASES = {'site':('site','web','website'),
                   'sunum':('sunum','slayt','slideshow'),
-                  'thumbnail':('thumbnail','kapak'),
+                  'thumbnail':('thumbnail','kapak','maskot'),
                   'twitter':('twitter','tweet'),
                   'proje':('proje',),
                   'video':('video','youtube','çekim')}
@@ -297,10 +297,16 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansi
         if not requested and 'all' not in d['domains'] and len(topical)<2:
             completed={min(w for w in words if note_match(t,w)) for t in extra if any(note_match(t,w) for w in words)}
             if not expanded_match and (not topical or len(topical|completed)<2):continue
-        if len(terms)>8 and not topical and not transfer and not expanded_match:continue
-        score=4*len(matched) + (min(len(related),4)/4 if expanded_match else 0)
+        # A user-scoped domain note remains applicable in a long packaging
+        # request. Episode-specific project notes still need their own topic.
+        user_domain = d['scope']=='user' and bool(requested.intersection(d['domains']))
+        if len(terms)>8 and not topical and not transfer and not expanded_match and not user_domain:continue
+        score=4*max(len(matched), int(user_domain)) + (min(len(related),4)/4 if expanded_match else 0)
         if score or transfer or expanded_match:ranked.append((score,d,transfer))
-    ranked.sort(key=lambda item:(item[2] is not None,-item[0],item[1]['id']))
+    # General user guidance precedes an episode's incidental domain overlap;
+    # the bounded dossier must not spend its budget on old episode decisions.
+    ranked.sort(key=lambda item:(item[2] is not None,
+                                item[1]['scope']!='user',-item[0],item[1]['id']))
     selected=[];transfers=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
     expansion_count = 0
     for score,d,transfer in ranked:

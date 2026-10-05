@@ -20,6 +20,13 @@ class Package(unittest.TestCase):
   self.assertEqual([r['memory_id'] for r in expanded],['direct','related'])
   self.assertEqual(rank_records(rows,'devam',expansion='kimlik hareket kompozisyon'),[])
 
+ def test_expansion_cannot_anchor_on_discourse_words(self):
+  rows=[dict(memory_id='noise',statement='Son cevap önemli ve ilgili görsel kimliği koru.'),
+        dict(memory_id='relevant',statement='Kapak kimliği ve hareket referansları koru.')]
+  expanded=rank_records(rows,'Kapak için son önemli kararı yap bakalım',
+                        expansion='kimlik hareket referans')
+  self.assertEqual([r['memory_id'] for r in expanded],['relevant'])
+
  def test_changed_task_cannot_seed_expansion_graph(self):
   from is_ve_ders import put
   import konu_sentezi
@@ -126,9 +133,11 @@ class Package(unittest.TestCase):
   (self.v/'zihin/hafıza-kataloğu.jsonl').write_text('\n'.join(json.dumps(r) for r in rows)+'\n')
   return rows
 
- def test_scope_profile_delivers_legacy_preference_without_query_overlap(self):
+ def test_scope_profile_requires_active_domain_but_not_direct_query_overlap(self):
   self.profile_fixture()
-  package=build_task_package(self.v,'kapak')
+  self.assertNotIn('core',build_task_package(self.v,'kapak')['selected_ids'])
+  self.assertNotIn('core',build_task_package(self.v,'kapak devam')['selected_ids'])
+  package=build_task_package(self.v,'kapak için video senaryosu')
   self.assertIn('core',package['selected_ids'])
   self.assertIn('Kapsam profili: Birinci ağızdan anlatmayı tercih eder.',package['text'])
   self.assertNotIn('sibling',package['selected_ids'])
