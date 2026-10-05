@@ -342,7 +342,7 @@ def _cache_path(vault, digest):
 
 def evaluate(vault, query, candidates, *, source_versions=None, scope='user', facets=None, transport=None, purpose='retrieval', state=None, question_type=None, choice_criteria=None, timeout=None):
     started=time.monotonic()
-    result=dict(mode='off',scores={},facet_scores={},distributions={},facet_distributions={},choices={},diagnostics=[],degraded=False,cache_hit=False,
+    result=dict(mode='off',scores={},facet_scores={},distributions={},facet_distributions={},choices={},diagnostics=[],degraded=False,cache_hit=False,cache_lookup=False,
                 usage={},latency_ms=0,request_hash=None,reported_model=None,
                 confidence_provenance={'present':0,'missing':0,'used_for_selection':False})
     try:
@@ -416,6 +416,8 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
             path=None
             try:
                 path=_cache_path(vault,digest)
+                # Retain the lookup evidence even if resolve raises later.
+                initial['cache_lookup'] = result['cache_lookup'] = True
                 if path.exists():
                     cached=json.loads(path.read_text())
                     age=time.time()-cached['created_at']

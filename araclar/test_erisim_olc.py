@@ -21,6 +21,10 @@ class AccessMeasure(unittest.TestCase):
         self.codex = self.root / 'codex' / '2026' / '09'
         self.codex.mkdir(parents=True)
         self.now = datetime(2026, 9, 24, tzinfo=timezone.utc)
+        clock = patch.object(measure, 'datetime', wraps=datetime)
+        self.clock = clock.start()
+        self.addCleanup(clock.stop)
+        self.clock.now.return_value = self.now
 
     def write_rows(self, path, rows):
         path.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows), encoding='utf-8')
@@ -37,6 +41,169 @@ class AccessMeasure(unittest.TestCase):
         with patch.object(measure.gorev_baglam, 'build_task_package', side_effect=packages):
             return measure.evaluate(self.vault, self.root / 'set.jsonl', self.root / 'labels.jsonl',
                                     self.root, jev_mode=jev_mode)
+
+    def test_assist_hints_are_measured_only_when_delivered_and_never_as_claims(self):
+        labels = [dict(id='delivered', relevant_memory_ids=['m1'], relevant_notes=['n1']),
+                  dict(id='omitted', relevant_memory_ids=['m1'], relevant_notes=['n1'])]
+        packages = [dict(selected_ids=['m2', 'jev-reading:m1', 'knowledge'], text='claim and hints',
+                         delivered_segments={'m2': 'claim', 'jev-reading:m1': 'catalog hint', 'knowledge': 'note hint'},
+                         knowledge=dict(records=[], suggested_ids=['n1', 'unknown']),
+                         jev=dict(catalog=dict(suggested_ids=['m1']), knowledge=dict(suggested_ids=['n1']))),
+                    dict(selected_ids=[], text='',
+                         delivered_segments={'jev-reading:m1': 'stale hint', 'knowledge': 'stale hint'},
+                         knowledge=dict(records=[], suggested_ids=['n1']),
+                         jev=dict(catalog=dict(suggested_ids=['m1']), knowledge=dict(suggested_ids=['n1'])))]
+        report = self.evaluate_packages(labels, packages, jev_mode='assist')
+        self.assertEqual((report['metrics']['tp'], report['metrics']['fp'], report['metrics']['fn']), (0, 1, 4))
+        self.assertEqual(report['results'][0]['reading_candidates'], ['memory:m1', 'note:n1'])
+        self.assertEqual(report['results'][1]['reading_candidates'], [])
+        self.assertEqual(report['results'][1]['suggested'], ['memory:m1', 'note:n1'])
+        expected = dict(prompts=1, candidates=2, gold_hits=2, non_gold=0,
+                        additional_gold=2, delivered_or_hint_recall=0.5)
+        self.assertEqual(report['metrics']['reading_candidates'], expected)
+        self.assertEqual(report['metrics']['certain_only']['reading_candidates'], expected)
+        md = (self.root / 'erisim-degerlendirme-2026-09-24.md').read_text(encoding='utf-8')
+        for heading in ('## Jev okuma önerileri', '## Okuma adayları', '## Önbellek gözlemleri'):
+            self.assertIn(heading, md)
+
+    def test_reading_metrics_do_not_double_count_delivered_claims(self):
+        metrics = measure._reading_metrics([dict(tp=['memory:m1'], fn=['note:n1'],
+                          reading_candidates=['memory:m1', 'memory:m2'],
+                          reading_candidate_hits=['memory:m1'])])
+        self.assertEqual(metrics, dict(prompts=1, candidates=2, gold_hits=1, non_gold=1,
+                                       additional_gold=0, delivered_or_hint_recall=0.5))
+
+    def test_cache_reports_prompt_observations_without_inventing_request_counts(self):
+        labels = [dict(id=ident) for ident in ('mixed', 'uncached', 'unmeasured')]
+        packages = [dict(selected_ids=[], text='', jev=dict(
+                        catalog=dict(cache_hit=True, cache_lookup=True),
+                        knowledge=dict(cache_hit=False, packages=[
+                            dict(cache_lookup=True, cache_hit=True), dict(cache_lookup=True, cache_hit=False)]))),
+                    dict(selected_ids=[], text='', jev=dict(gate=dict(cache_hit=False, cache_lookup=True))),
+                    dict(selected_ids=[], text='', jev=dict(catalog=dict(cache_hit=False, degraded=True)))]
+        report = self.evaluate_packages(labels, packages)
+        self.assertEqual(report['metrics']['cache'],
+                         dict(prompts_observed=2, prompts_with_hits=1, prompts_with_misses=2))
+        self.assertEqual(report['results'][0]['cache_observations'],
+                         dict(catalog='hit', knowledge='not_all_hit'))
+        self.assertEqual(report['results'][2]['cache_observations'], {})
+        self.assertEqual(report['metrics']['live_requests'], 0)
+
+    def test_unqueried_subpackages_are_not_cache_misses(self):
+        labels = [dict(id=ident) for ident in ('unqueried', 'partial_hit', 'partial_miss')]
+        skipped = dict(cache_lookup=False, cache_hit=False, request_hash='assigned',
+                       degraded=True, diagnostics=['capacity_exceeded'])
+        evaluations = [dict(cache_hit=False, packages=[skipped, dict(diagnostics=['private_input'])]),
+                       dict(cache_hit=False, packages=[skipped, dict(cache_lookup=True, cache_hit=True)]),
+                       dict(cache_hit=False, packages=[skipped, dict(cache_lookup=True, cache_hit=False)])]
+        report = self.evaluate_packages(labels, [dict(selected_ids=[], text='', jev=dict(catalog=e))
+                                                for e in evaluations])
+        self.assertEqual([r['cache_observations'] for r in report['results']],
+                         [{}, dict(catalog='all_hit'), dict(catalog='not_all_hit')])
+        self.assertEqual(report['metrics']['cache'],
+                         dict(prompts_observed=2, prompts_with_hits=1, prompts_with_misses=1))
+
+    def test_real_unqueried_multi_package_does_not_report_cache_miss(self):
+        import jev_retrieval
+        cards = self.client_fixture()
+        cards.append(dict(cards[0], id='two'))
+        (self.vault / 'komuta/jev.json').write_text(
+            json.dumps(dict(mode='shadow', max_candidates=1)), encoding='utf-8')
+        for query, rejection in (('Bunu kaydetme', None), ('Synthetic task', 'capacity_exceeded')):
+            with self.subTest(query=query), patch.object(measure.jev_client, '_cache_path') as lookup:
+                if rejection:
+                    with patch('jev_runtime.run', side_effect=ValueError(rejection)):
+                        evaluation = jev_retrieval.packaged_evaluate(self.vault, query, cards, facets=[query])
+                else:
+                    evaluation = jev_retrieval.packaged_evaluate(self.vault, query, cards, facets=[query])
+                self.assertEqual(len(evaluation['packages']), 2)
+                self.assertTrue(evaluation['degraded'])
+                lookup.assert_not_called()
+                report = self.evaluate_packages([dict(id='unqueried')],
+                                                [dict(selected_ids=[], text='', jev=dict(catalog=evaluation))])
+                self.assertEqual(report['results'][0]['cache_observations'], {})
+                self.assertEqual(report['metrics']['cache']['prompts_with_misses'], 0)
+
+    def client_fixture(self):
+        (self.vault / 'komuta').mkdir(exist_ok=True)
+        (self.vault / 'komuta/jev.json').write_text(json.dumps(dict(mode='shadow')), encoding='utf-8')
+        return [dict(id='one', title='A', statement='B', scope='user', domains=['all'])]
+
+    def test_hash_assigned_but_coordinator_rejected_is_not_cache_miss(self):
+        cards = self.client_fixture()
+        with patch('jev_runtime.run', side_effect=ValueError('capacity_exceeded')), \
+             patch.object(measure.jev_client, '_cache_path') as lookup:
+            evaluation = measure.jev_client.evaluate(self.vault, 'Synthetic task', cards)
+        self.assertTrue(evaluation['request_hash'])
+        self.assertFalse(evaluation['cache_lookup'])
+        self.assertTrue(evaluation['degraded'])
+        self.assertEqual(evaluation['diagnostics'], ['capacity_exceeded'])
+        lookup.assert_not_called()
+        report = self.evaluate_packages([dict(id='rejected')],
+                                        [dict(selected_ids=[], text='', jev=dict(catalog=evaluation))])
+        self.assertEqual(report['results'][0]['cache_observations'], {})
+        self.assertEqual(report['metrics']['cache'],
+                         dict(prompts_observed=0, prompts_with_hits=0, prompts_with_misses=0))
+
+    def test_client_marks_only_actual_cache_lookups_including_failure_after_lookup(self):
+        cards = self.client_fixture()
+        def transport(url, body, key, timeout):
+            return dict(answers={q: dict(type='score', score=1.8) for q in body['questions']})
+        def failed_transport(*args):
+            raise ValueError('deadline_exceeded')
+        with patch.object(measure.jev_client, '_environment', return_value={'TYPESAFE_API_KEY': 'synthetic'}):
+            cold = measure.jev_client.evaluate(self.vault, 'Synthetic task', cards, transport=transport)
+            warm = measure.jev_client.evaluate(self.vault, 'Synthetic task', cards, transport=transport)
+            failed = measure.jev_client.evaluate(self.vault, 'Another task', cards,
+                                                 transport=failed_transport)
+        self.assertTrue(cold['cache_lookup'])
+        self.assertFalse(cold['cache_hit'])
+        self.assertFalse(cold['degraded'])
+        self.assertTrue(warm['cache_lookup'])
+        self.assertTrue(warm['cache_hit'])
+        self.assertTrue(failed['cache_lookup'])
+        self.assertTrue(failed['degraded'])
+        self.assertEqual(measure._cache_observations(dict(catalog=failed)), dict(catalog='miss'))
+        with patch.object(measure.jev_client, '_cache_path') as lookup:
+            private = measure.jev_client.evaluate(self.vault, 'Bunu kaydetme', cards)
+        self.assertIn('private_input', private['diagnostics'])
+        self.assertFalse(private['cache_lookup'])
+        lookup.assert_not_called()
+
+    def test_report_uses_run_date_and_fingerprints_inputs(self):
+        self.clock.now.return_value = datetime(2027, 2, 3, 4, 5, tzinfo=timezone.utc)
+        report = self.evaluate_packages([dict(id='one')], [dict(selected_ids=[], text='')])
+        self.assertEqual(report['generated_at'], '2027-02-03T04:05:00+00:00')
+        for extension in ('md', 'json'):
+            self.assertTrue((self.root / ('erisim-degerlendirme-2027-02-03.' + extension)).is_file())
+            self.assertFalse((self.root / ('erisim-degerlendirme-2026-09-24.' + extension)).exists())
+        import hashlib
+        self.assertEqual(report['input_sha256']['set'], hashlib.sha256((self.root / 'set.jsonl').read_bytes()).hexdigest())
+        self.assertEqual(report['input_sha256']['labels'], hashlib.sha256((self.root / 'labels.jsonl').read_bytes()).hexdigest())
+
+    def test_report_hashes_evaluated_snapshot_and_write_false_has_no_output(self):
+        self.evaluate_packages([dict(id='one')], [dict(selected_ids=[], text='')])
+        set_bytes = (self.root / 'set.jsonl').read_bytes()
+        label_bytes = (self.root / 'labels.jsonl').read_bytes()
+        def build(*args, **kwargs):
+            (self.root / 'set.jsonl').write_text('changed during evaluation', encoding='utf-8')
+            (self.root / 'labels.jsonl').write_text('changed during evaluation', encoding='utf-8')
+            return dict(selected_ids=[], text='')
+        with patch.object(measure.gorev_baglam, 'build_task_package', side_effect=build):
+            report = measure.evaluate(self.vault, self.root / 'set.jsonl', self.root / 'labels.jsonl',
+                                      self.root / 'not-created', write=False)
+        import hashlib
+        self.assertEqual(report['input_sha256']['set'], hashlib.sha256(set_bytes).hexdigest())
+        self.assertEqual(report['input_sha256']['labels'], hashlib.sha256(label_bytes).hexdigest())
+        self.assertFalse((self.root / 'not-created').exists())
+
+    def test_duplicate_labels_cannot_silently_replace_reviewed_judgment(self):
+        self.evaluate_packages([dict(id='one')], [dict(selected_ids=[], text='')])
+        self.write_rows(self.root / 'labels.jsonl', [dict(id='one'), dict(id='one', relevant_memory_ids=['m1'])])
+        with patch.object(measure.gorev_baglam, 'build_task_package') as build:
+            with self.assertRaisesRegex(ValueError, 'exactly once'):
+                measure.evaluate(self.vault, self.root / 'set.jsonl', self.root / 'labels.jsonl', self.root)
+        build.assert_not_called()
 
     def test_collect_balances_genuine_prompts_and_filters_private_worker(self):
         session = 'session1'
