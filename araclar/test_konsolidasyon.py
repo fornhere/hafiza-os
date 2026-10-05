@@ -19,7 +19,7 @@ from test_hafiza import FakeMem0
 class Pipeline(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.vault = Path(self.tmp.name)
+        self.vault = Path(self.tmp.name).resolve()
         for i in range(6):
             hook.hook(self.vault, dict(session_id="s", turn_id="t" if i == 5 else str(i), hook_event_name="UserPromptSubmit", prompt="Gerçek test isteği"))
         self.evidence = 'Belgelerin başlıkları kısa olsun.'
