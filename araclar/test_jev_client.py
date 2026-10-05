@@ -42,6 +42,32 @@ class ClientTests(unittest.TestCase):
         r=self.run_client(facets=['A','B']);self.assertEqual(len(r['facet_scores']),2)
         self.assertEqual(set(self.calls[0]['questions']),{'f0_c0','f1_c0'})
 
+    def test_outbound_nested_text_is_screened_before_environment_or_transport(self):
+        self.config()
+        for text in ('token: synthetic-sensitive-value', 'do not record this example'):
+            cases = (
+                dict(facets=[text]),
+                dict(cards=[dict(self.cards[0], domains=[text])]),
+                dict(cards=[dict(self.cards[0], rationale={'detail': text})],
+                     purpose='retrieval_rerank'),
+                dict(question_type='choice', choice_criteria={'yes': text, 'no': 'No match'}),
+            )
+            for case in cases:
+                with self.subTest(text=text, fields=sorted(case)):
+                    options = dict(case)
+                    cards = options.pop('cards', self.cards)
+                    with patch.object(j, '_environment') as environment, \
+                            patch.object(j, '_cache_path') as cache_path:
+                        result = j.evaluate(self.vault, 'question', cards,
+                                            transport=self.transport, **options)
+                    self.assertTrue(result['degraded'])
+                    self.assertEqual(result['diagnostics'], ['private_input'])
+                    environment.assert_not_called()
+                    cache_path.assert_not_called()
+                    self.assertFalse(self.calls)
+                    self.assertIsNone(result['request_hash'])
+        self.assertFalse((self.vault / '.cache/jev').exists())
+
     def test_rerank_facets_rubric_preserves_legacy(self):
         legacy = dict(type='score', criteria=j.CRITERIA, instructions=
                       'Does candidates[2] directly support the current request, within its scope, '

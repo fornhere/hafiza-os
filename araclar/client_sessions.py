@@ -150,7 +150,7 @@ def enforce_policy(state, client, session, exclude=False):
 def source_with_policy(state, client, session, path, end_line=None):
     enforce_policy(state, client, session)
     try:
-        return parse(client, session, path, end_line)
+        return parse(client, session, path, end_line, reject_workers=True)
     except SourceError as error:
         if str(error) == 'privacy_blocked':
             enforce_policy(state, client, session, exclude=True)
