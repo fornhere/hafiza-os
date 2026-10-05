@@ -17,7 +17,7 @@ from test_is_ve_ders import acceptance_fixture
 
 class Lifecycle(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.v=Path(self.tmp.name)
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.v=Path(self.tmp.name).resolve()
         (self.v/'komuta').mkdir();(self.v/'komuta/jev.json').write_text('{"mode":"off"}')
         self.quote='Sunum için kısa cümle kullan; çünkü okunabilirliği artırır. Yalnız sunum anlatımında geçerlidir.'
         (self.v/'source.md').write_text(self.quote)
@@ -279,13 +279,14 @@ class Lifecycle(unittest.TestCase):
         package=build_task_package(self.v,'sunum',budget=5000)
         self.assertIn('methods',package['selected_ids'])
         self.assertEqual(package['lessons'],dict(applied=[dict(id=lesson['id'],version=lesson['version'])],diagnostics=[]))
-        self.assertIn(ders_baglam.context(self.v,'sunum',project_id='p'),package['text'])
+        self.assertEqual(package['delivered_lessons'], package['lessons']['applied'])
+        self.assertIn('Yöntem:',package['delivered_segments']['methods'])
         self.assertEqual(build_task_package(self.v,'sunum',budget=30)['lessons'],dict(applied=[],diagnostics=[dict(id=lesson['id'],reason='budget')]))
         with patch('ders_baglam.context_details',wraps=ders_baglam.context_details) as call:
             method_budget=len(ders_baglam.context(self.v,'sunum',project_id='p'))
             package=build_task_package(self.v,'sunum',budget=method_budget)
             self.assertTrue(call.called)
-        self.assertNotIn('methods',package['selected_ids']);self.assertEqual(package['lessons'],dict(applied=[],diagnostics=[]))
+        self.assertIn('methods',package['selected_ids']);self.assertEqual(package['delivered_lessons'],[dict(id=lesson['id'],version=lesson['version'])])
 
     def test_task_package_clears_applied_lessons_on_source_change(self):
         data,lesson=self.reviewed_outcome_fixture();original=ders_baglam.context_details
@@ -315,7 +316,8 @@ class Lifecycle(unittest.TestCase):
         (self.v/'review.json').write_text(json.dumps(review))
         self.cli('review-lesson','--input-json',str(self.v/'review.json'),'--apply')
         context=build_task_package(self.v,'sunum',budget=5000)['text']
-        self.assertIn('failed',context);self.assertIn(data['conditions'],context)
+        self.assertIn('failed',ders_baglam.context(self.v,'sunum',project_id='p'))
+        self.assertIn(data['conditions'],context)
         self.assertEqual(ders_baglam.context(self.v,'sunum',project_id='q'),'')
         self.assertFalse(self.cli('review-lesson','--input-json',str(self.v/'review.json'),'--apply')['changed'])
         (self.v/'test.json').write_text('{}')

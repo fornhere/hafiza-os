@@ -17,7 +17,7 @@ import is_ve_ders as work
 
 class Reflection(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.v=Path(self.tmp.name)
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.v=Path(self.tmp.name).resolve()
         self.quote='Sunum testi tamamlandı; sonuç makbuzdan ayrıca incelenmelidir.'
         self.serial=0
         guard=patch.object(d.jev_client,'evaluate',side_effect=AssertionError('reflection must not call Jev'))

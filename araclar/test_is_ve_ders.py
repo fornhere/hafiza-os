@@ -23,7 +23,7 @@ def acceptance_fixture(vault, quote='Talimat dosyasındaki bu değişikliği kab
 class Work(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.vault = Path(self.temp.name)
+        self.vault = Path(self.temp.name).resolve()
         (self.vault / 'kaynak.md').write_text('İşin uygulaması tamamlandı, testler geçti.')
         self.row = dict(id='test', title='Kaynaklı görev', status='active', next_step='Doğrula',
             source_path='kaynak.md', evidence='İşin uygulaması tamamlandı', actor='test',

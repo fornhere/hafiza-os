@@ -420,7 +420,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                     if not gate.get('degraded') and not needed:
                         skip_memory = True
                         if jev_client.load_config(vault)['rerank_gate_scope'] == 'all':
-                            result = dict(text='', selected_ids=[], source_versions={}, assets=[], knowledge=None, lessons=dict(applied=[],diagnostics=[]),
+                            result = dict(text='', selected_ids=[], source_versions={}, assets=[], knowledge=None, delivered_lessons=[], delivered_lesson_segments={}, lessons=dict(applied=[],diagnostics=[]),
                                           omitted_reasons=[], project_id=None, suppressed_count=0, jev={'gate': gate},
                                           history={'mode': history, 'included': False},
                                           procedure_reading={'paths': [], 'delivered': False},
@@ -452,7 +452,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
         # Never relabel an old claim with a freshly computed source hash.
         text = 'Bağlam hazırlanırken kaynak değişti; güncel kaynağı yeniden doğrula.'
         result.update(text=text[:max(0,int(budget))], selected_ids=[], assets=[],
-                      source_versions={}, delivered_segments={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0, lessons=dict(applied=[],diagnostics=[]))
+                      source_versions={}, delivered_segments={}, delivered_lessons=[], delivered_lesson_segments={}, knowledge=None, decision_history=None, reuse=None, suppressed_count=0, lessons=dict(applied=[],diagnostics=[]))
         result['omitted_reasons'].append('source_changed_during_package')
         result['summary'] = dict(record_ids=[],task_ids=[],derived=True)
         result['procedure_reading'].update(paths=[],delivered=False)
@@ -830,8 +830,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                   'kaynaklı iş kartı aşağıda; yeni istek öncelikli')
         add('capsule-status', 'Devam kapsülü: '+status+'.')
     from ders_baglam import context_details
-    lesson_details=context_details(vault,query,budget=min(2600, budget), project_id=project['id'] if project else None, workflow_ids=[w['id'] for w in workflows])
+    lesson_details=context_details(vault,query,budget=min(300, budget), project_id=project['id'] if project else None, workflow_ids=[w['id'] for w in workflows], compact=True)
     methods=lesson_details['text']
+    lesson_reserve=len(methods)+1 if methods else 0
     if methods: add('methods',methods)
     lesson_diagnostics=lesson_details.get('diagnostics',[])
     if lesson_diagnostics:
@@ -896,8 +897,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     delivered_segments={}
     for _, _, ident, text in sorted(candidates):
         cost=len(text)+(1 if lines else 0)
-        if used+cost>budget:
+        limit=budget if ident=='methods' else budget-lesson_reserve
+        if used+cost>limit:
             omitted.append(ident+':budget'); continue
+        if ident=='methods': lesson_reserve=0
         lines.append(text);selected.append(ident);used+=cost
         selected.extend(task_duplicates.get(ident, []))
         # One channel may deliver several roots or working sources.
@@ -926,7 +929,16 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
     result['deduplicated_tasks'] = {ident: ids for ident, ids in task_duplicates.items() if ids and ident in selected}
     result['suppressed_count']=suppressed_count
-    result['lessons']=dict(applied=[dict(id=r['id'],version=r['version']) for r in lesson_details['lessons']] if 'methods' in selected else [],diagnostics=lesson_diagnostics)
+    delivered_lessons=[dict(id=r['id'],version=r['version']) for r in lesson_details['lessons']] if 'methods' in selected else []
+    if methods and 'methods' not in selected:
+        lesson_diagnostics.extend(dict(id=r['id'],reason='budget') for r in lesson_details['lessons'])
+    result['delivered_lessons']=delivered_lessons
+    result['delivered_lesson_segments']={r['id']:lesson_details['blocks'][r['id']]['text'] for r in delivered_lessons}
+    # Compatibility alias only: delivery is neither application nor success.
+    result['lessons']=dict(applied=delivered_lessons,diagnostics=lesson_diagnostics)
+    for r in delivered_lessons:
+        for path in lesson_details['blocks'][r['id']]['paths']:
+            source_versions[path]=digest(h.source_file(vault,path))
     if knowledge_data and 'knowledge' in selected:
         delivered = delivered_segments['knowledge']
         if separate_notes:

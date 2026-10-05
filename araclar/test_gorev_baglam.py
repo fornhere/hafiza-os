@@ -216,7 +216,7 @@ class Package(unittest.TestCase):
   row=dict(id='changed',title='Kapak yöntemi',status='proposed',source_path='approval.md',evidence=self.source.read_text(),actor='reviewer',triggers=['kapak'],method_path='method.md',implementation_hash=statement_hash((self.v/'method.md').read_text()))
   put(self.v,'lesson',row)
   (self.v/'method.md').write_text('İncelenmemiş yeni yöntem içeriği.')
-  (self.v/'long.md').write_text('Bütçeye sığmayan geçerli yöntem. '*200)
+  (self.v/'long.md').write_text('Bütçeye sığmayan geçerli yöntem '*200)
   put(self.v,'lesson',dict(row,id='long',method_path='long.md',implementation_hash=statement_hash((self.v/'long.md').read_text())))
   package=build_task_package(self.v,'kapak',budget=5000)
   self.assertEqual(package['lessons'],dict(applied=[],diagnostics=[dict(id='changed',reason='method_changed'),dict(id='long',reason='budget')]))
@@ -229,6 +229,46 @@ class Package(unittest.TestCase):
   unrelated=build_task_package(self.v,'hava nasıl')
   self.assertEqual(unrelated['lessons'],dict(applied=[],diagnostics=[]))
   self.assertNotIn('Ders kontrolü',unrelated['text'])
+
+ def test_short_lessons_have_reserved_budget_and_versioned_delivery(self):
+  from is_ve_ders import put
+  from hafiza import statement_hash
+  method='Kapak üretirken referans rollerini ayrı seç. '+('Uzun açıklama. '*250)
+  (self.v/'method.md').write_text(method)
+  row=put(self.v,'lesson',dict(id='short',title='Referans rolleri',status='proposed',
+      source_path='approval.md',evidence=self.source.read_text(),actor='reviewer',
+      triggers=['kapak'],project_id='youtube',method_path='method.md',implementation_hash=statement_hash(method)))
+  package=build_task_package(self.v,'kapak',budget=500)
+  self.assertEqual(package['delivered_lessons'],[dict(id='short',version=row['version'])])
+  self.assertEqual(package['lessons']['applied'],package['delivered_lessons'])
+  segment=package['delivered_lesson_segments']['short']
+  self.assertIn(segment,package['text']);self.assertLessEqual(len(segment),300)
+  self.assertIn('Kapak üretirken referans rollerini ayrı seç.',segment)
+  self.assertIn('Yöntem: method.md',segment)
+  self.assertIn('method.md',package['source_versions'])
+  self.assertLessEqual(len(package['text']),500)
+  small=build_task_package(self.v,'kapak',budget=20)
+  self.assertEqual(small['delivered_lessons'],[])
+  self.assertIn(dict(id='short',reason='budget'),small['lessons']['diagnostics'])
+  (self.v/'method.md').write_text('Değişmiş yöntem.')
+  self.assertEqual(build_task_package(self.v,'kapak')['delivered_lessons'],[])
+
+ def test_lessons_share_small_budget_and_exclusions_identify_each_lesson(self):
+  from is_ve_ders import put
+  from hafiza import statement_hash
+  method='Kapak üretirken kaynakları aç ve onaylı referans rolleriyle karşılaştır.'
+  (self.v/'method.md').write_text(method)
+  for ident in ('a','b','c'):
+   put(self.v,'lesson',dict(id=ident,title='Referans rolleri '+ident,status='proposed',
+       source_path='approval.md',evidence=self.source.read_text(),actor='reviewer',
+       triggers=['kapak'],method_path='method.md',implementation_hash=statement_hash(method)))
+  package=build_task_package(self.v,'kapak',budget=2000)
+  delivered={r['id'] for r in package['delivered_lessons']}
+  excluded={r['id'] for r in package['lessons']['diagnostics'] if r['reason']=='budget'}
+  self.assertTrue(delivered);self.assertTrue(excluded)
+  self.assertEqual(delivered|excluded,{'a','b','c'})
+  self.assertLessEqual(len(package['delivered_segments']['methods']),300)
+  self.assertFalse(delivered&excluded)
 
  def test_lesson_check_yields_to_content_at_exact_budget(self):
   from is_ve_ders import put
@@ -315,7 +355,7 @@ class ScopeContextPackageTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.vault = Path(tmp.name)
+        self.vault = Path(tmp.name).resolve()
         statement = 'Sunumlarda kısa cümle kullan.'
         (self.vault / 'source.md').write_text(statement, encoding='utf-8')
         self.row = dict(
@@ -391,7 +431,7 @@ class SuppressedHistoryTests(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.vault = Path(tmp.name)
+        self.vault = Path(tmp.name).resolve()
         (self.vault / 'komuta').mkdir()
         (self.vault / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': [
             dict(id='alpha', aliases=['alpha']), dict(id='youtube', aliases=['kapak']),
@@ -905,7 +945,7 @@ class SharedWorkspaceRoutingTests(unittest.TestCase):
     def test_shared_vault_needs_topic_but_nested_workspace_keeps_scope(self):
         from gorev_baglam import select_projects
         with tempfile.TemporaryDirectory() as tmp:
-            vault=Path(tmp)
+            vault=Path(tmp).resolve()
             projects=[dict(id='memory-engine', aliases=['hafıza sistemi'], roots=[str(vault)]),
                       dict(id='studio', kind='area', aliases=['thumbnail', 'video radarı']),
                       dict(id='beta', aliases=['beta'], roots=[str(vault/'beta')])]
@@ -925,15 +965,15 @@ class SharedWorkspaceRoutingTests(unittest.TestCase):
     def test_relocated_vault_recognizes_original_layout(self):
         from gorev_baglam import select_projects
         with tempfile.TemporaryDirectory() as tmp:
-            origin=Path(tmp)/'origin'
+            origin=Path(tmp).resolve()/'origin'
             (origin/'komuta').mkdir(parents=True)
             (origin/'komuta/gorev-baglam.json').write_text('{}')
             (origin/'zihin').mkdir()
             projects=[dict(id='engine', aliases=['memory engine'], roots=[str(origin)])]
             self.assertEqual([], select_projects(projects, 'devam', cwd=str(origin),
-                                                vault=Path(tmp)/'snapshot')[0])
+                                                vault=Path(tmp).resolve()/'snapshot')[0])
             self.assertEqual(['engine'], [p['id'] for p in select_projects(
-                projects, 'memory engine devam', cwd=str(origin), vault=Path(tmp)/'snapshot')[0]])
+                projects, 'memory engine devam', cwd=str(origin), vault=Path(tmp).resolve()/'snapshot')[0]])
 
     def test_generic_guard_and_specific_names_survive_area_expansion(self):
         from gorev_baglam import select_projects

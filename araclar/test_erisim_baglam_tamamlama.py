@@ -52,7 +52,7 @@ class CatalogCompletion(unittest.TestCase):
 class NoteCompletion(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.v = Path(self.tmp.name); (self.v / 'gelen-kutusu').mkdir()
+        self.v = Path(self.tmp.name).resolve(); (self.v / 'gelen-kutusu').mkdir()
         source = self.v / 'gelen-kutusu/source.md'
         source.write_text('Kullanıcı: çekimi freestyle yapalım ama çekim kartları olsun.')
         b.register(self.v, dict(id='freestyle-kart', title='Freestyle çekim kartları', kind='decision',
@@ -78,7 +78,7 @@ class HookPackage(unittest.TestCase):
         def fake_rank(rows, query, **kwargs):
             seen.append(kwargs.get('context')); return []
         with tempfile.TemporaryDirectory() as temp, patch.object(g, 'rank_records', fake_rank), jev_client.disabled():
-            v = Path(temp); (v / 'komuta').mkdir()
+            v = Path(temp).resolve(); (v / 'komuta').mkdir()
             (v / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': []}))
             per_build = []
             for previous in ('önceki tur konusu', 'token ' + 'sk-' + 'abcdefghijklmnopqrstuvwxyz123456', None):
@@ -97,7 +97,7 @@ class ContextCli(unittest.TestCase):
             seen.append(kwargs.get('context')); return []
         with tempfile.TemporaryDirectory() as temp, patch('gorev_baglam.rank_records', fake_rank), \
                 patch.object(h, 'knowledge_notes', return_value=[]):
-            v = Path(temp); (v / 'komuta').mkdir()
+            v = Path(temp).resolve(); (v / 'komuta').mkdir()
             (v / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': []}))
             for previous in ('önceki tur konusu', 'token ' + 'sk-' + 'abcdefghijklmnopqrstuvwxyz123456'):
                 with redirect_stdout(io.StringIO()):

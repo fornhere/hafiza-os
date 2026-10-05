@@ -172,6 +172,10 @@ def context(vault, client, session, source, payload, event):
         if not restart and current.get('query_sha256') == fingerprint:
             return ''
         current.update(query_sha256=fingerprint, client=client, session=session, scope_reset=False)
+        # Receipt follows final injected text, including opening dedup/truncation.
+        current['delivered_lessons']=[r for r in (package or {}).get('delivered_lessons', [])
+            if package['delivered_lesson_segments'][r['id']] in result]
+        current['package_id']=(package or {}).get('package_id')
         if opening:
             # Persist hashes only; consume on the first subsequent user prompt.
             current['opening_line_hashes'] = [sha(line.encode()) for line in result.splitlines() if line]
