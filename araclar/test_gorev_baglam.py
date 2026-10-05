@@ -9,6 +9,32 @@ from gorev_baglam import build_task_package, digest, rank_records, validate_inpu
 from codex_hafiza import hook
 
 class Package(unittest.TestCase):
+ def test_expansion_requires_current_anchor_and_preserves_order(self):
+  rows=[dict(memory_id='direct',statement='Kapak renk tipografi'),
+        dict(memory_id='related',statement='Kapak kimlik hareket'),
+        dict(memory_id='noise',statement='Kimlik hareket kompozisyon')]
+  query='Kapak renk tipografiyi hazırlayalım'
+  base=rank_records(rows,query)
+  expanded=rank_records(rows,query,expansion='kimlik hareket kompozisyon')
+  self.assertEqual([r['memory_id'] for r in base],['direct'])
+  self.assertEqual([r['memory_id'] for r in expanded],['direct','related'])
+  self.assertEqual(rank_records(rows,'devam',expansion='kimlik hareket kompozisyon'),[])
+
+ def test_changed_task_cannot_seed_expansion_graph(self):
+  from is_ve_ders import put
+  import konu_sentezi
+  statement='İş kartının onaylı kaynak metni ve kanıtı.'
+  (self.v/'task.md').write_text(statement)
+  put(self.v,'task',dict(id='task',title='Kapak düzenleme',status='active',
+      project_id='youtube',next_step='Kimlik ve hareket düzenle',source_path='task.md',
+      evidence=statement,actor='reviewer'))
+  (self.v/'bilgi').mkdir()
+  (self.v/'task.md').write_text('Changed [[bilgi/unreviewed]]')
+  with patch.object(konu_sentezi,'retrieve',return_value=dict(text='',records=[],source_versions={})) as reader:
+   build_task_package(self.v,'kapak')
+  self.assertEqual(reader.call_args.kwargs['linked_paths'],[])
+  self.assertNotIn('Kimlik ve hareket düzenle',reader.call_args.kwargs['expansion'])
+
  def asset_revision_fixture(self):
   import hafiza as h
   (self.v/'zihin').mkdir(exist_ok=True)
@@ -82,6 +108,48 @@ class Package(unittest.TestCase):
   self.assertEqual(build_task_package(self.v,'kapak',budget=1)['text'],'')
   (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project,dict(self.project,id='other')]}))
   p=build_task_package(self.v,'kapak');self.assertIsNone(p['project_id']);self.assertIn('ambiguous_project',p['omitted_reasons'])
+
+ def profile_fixture(self):
+  (self.v/'zihin').mkdir(exist_ok=True)
+  rows=[]
+  for ident,scope,source,statement in [
+      ('core','project:youtube','projeler/youtube/DURUM.md','Birinci ağızdan anlatmayı tercih eder.'),
+      ('sibling','project:other','projeler/other/DURUM.md','Farklı bir anlatımı tercih eder.'),
+      ('episode','project:youtube','gelen-kutusu/episode.md','Yeni bir anlatımı tercih eder.')]:
+   path=self.v/source;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(statement)
+   rows.append(dict(memory_id=ident,kind='semantic',scope=scope,subject_key=ident,
+       statement=statement,status='active',source_path=source,
+       source_content_hash=h.statement_hash(statement),source_anchor=ident,
+       source_hash=h.statement_hash(statement),observed_at='2026-01-01',
+       valid_from='2026-01-01',valid_to=None,confidence='explicit-user',
+       sensitivity='normal',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1))
+  (self.v/'zihin/hafıza-kataloğu.jsonl').write_text('\n'.join(json.dumps(r) for r in rows)+'\n')
+  return rows
+
+ def test_scope_profile_delivers_legacy_preference_without_query_overlap(self):
+  self.profile_fixture()
+  package=build_task_package(self.v,'kapak')
+  self.assertIn('core',package['selected_ids'])
+  self.assertIn('Kapsam profili: Birinci ağızdan anlatmayı tercih eder.',package['text'])
+  self.assertNotIn('sibling',package['selected_ids'])
+  self.assertNotIn('episode',package['selected_ids'])
+  self.assertIn('projeler/youtube/DURUM.md',package['source_versions'])
+  self.assertEqual(build_task_package(self.v,'hava nasıl')['text'],'')
+  self.assertNotIn('core',build_task_package(self.v,'kapak',budget=100)['selected_ids'])
+
+ def test_scope_profile_rejects_changed_private_expired_and_ambiguous_rows(self):
+  rows=self.profile_fixture()
+  catalog=self.v/'zihin/hafıza-kataloğu.jsonl'
+  for field,value in [('sensitivity','private'),('valid_to','2026-01-02'),('status','superseded')]:
+   altered=[dict(r,**{field:value}) if r['memory_id']=='core' else r for r in rows]
+   catalog.write_text('\n'.join(json.dumps(r) for r in altered)+'\n')
+   self.assertNotIn('core',build_task_package(self.v,'kapak')['selected_ids'])
+  catalog.write_text('\n'.join(json.dumps(r) for r in rows)+'\n')
+  (self.v/'projeler/youtube/DURUM.md').write_text('İncelenmemiş yeni ifade.')
+  self.assertNotIn('core',build_task_package(self.v,'kapak')['selected_ids'])
+  (self.v/'projeler/youtube/DURUM.md').write_text(rows[0]['statement'])
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project,dict(self.project,id='other')]}))
+  self.assertNotIn('Kapsam profili:',build_task_package(self.v,'kapak')['text'])
 
  def test_lesson_diagnostics_exclude_changed_method_from_package(self):
   from is_ve_ders import put

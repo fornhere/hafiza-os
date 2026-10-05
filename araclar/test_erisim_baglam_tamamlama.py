@@ -80,10 +80,14 @@ class HookPackage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, patch.object(g, 'rank_records', fake_rank), jev_client.disabled():
             v = Path(temp); (v / 'komuta').mkdir()
             (v / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': []}))
-            g.build_task_package(v, 'soru', previous_user='önceki tur konusu', budget=500)
-            g.build_task_package(v, 'soru', previous_user='token ' + 'sk-' + 'abcdefghijklmnopqrstuvwxyz123456', budget=500)
-            g.build_task_package(v, 'soru', budget=500)
-        self.assertEqual(seen, ['önceki tur konusu', None, None])
+            per_build = []
+            for previous in ('önceki tur konusu', 'token ' + 'sk-' + 'abcdefghijklmnopqrstuvwxyz123456', None):
+                seen.clear()
+                g.build_task_package(v, 'soru', previous_user=previous, budget=500)
+                per_build.append(set(seen))
+        # Ranking may run more than once per package (query expansion); each
+        # call sees the safe previous turn, and a secret one never reaches it.
+        self.assertEqual(per_build, [{'önceki tur konusu'}, {None}, {None}])
 
 
 class ContextCli(unittest.TestCase):

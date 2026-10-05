@@ -89,7 +89,7 @@ def search_text(row):
     keys = row.get('arama_anahtarlari')
     return ' '.join([row.get('statement', '')] + ([k for k in keys if isinstance(k, str)] if isinstance(keys, list) else []))
 
-def rank_records(rows, query, *, tie_break=None, ignore=(), context=None):
+def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expansion=None):
     """Query coverage weighted by corpus rarity; order cannot affect selection.
 
     `ignore` words (e.g. the selected project's name) are scope, not topic
@@ -131,6 +131,20 @@ def rank_records(rows, query, *, tie_break=None, ignore=(), context=None):
     def order(item):
         return (-item[0], -item[1], tie_break(item[2]) if tie_break else item[2].get('memory_id', ''))
     ranked.extend(sorted(completions, key=order)[:1])
+    if expansion and area_expansion(query):
+        ranked = [(score * 4, count, row) for score, count, row in ranked]
+        # Expansion is weaker evidence and never changes the eligible scope.
+        expanded = content_words(expansion) - terms
+        additions = []
+        selected_ids = {row.get('memory_id') for _, _, row in ranked}
+        for row, words in documents:
+            if row.get('memory_id') in selected_ids: continue
+            matched = {t for t in terms if any(word_match(t, w) for w in words)}
+            related = {w for w in words if any(word_match(t, w) for t in expanded)}
+            if not matched - scoped or len(related) < 2: continue
+            additions.append((sum(weight(t) for t in matched) * 4 + min(len(related), 4) / 4,
+                              len(matched), row))
+        ranked.extend(sorted(additions, key=order)[:2])
     return [row for _, _, row in sorted(ranked, key=order)]
 
 
@@ -139,6 +153,60 @@ def project_terms(project):
     names = [str(project.get('id', '')).replace('-', ' ')]
     names += [a for a in project.get('aliases', []) if isinstance(a, str)]
     return frozenset(content_words(' '.join(names)) - _GENERIC)
+
+
+def scope_profile(rows, project, projects, limit=4):
+    """Stable, query-independent preferences from an established scope.
+
+    Callers supply source-validated eligible rows. Legacy semantic facts do
+    not become preferences by guessing from their IDs or statement wording.
+    User records mentioning a configured domain/project are not universal.
+    Reviewed legacy preferences may lack category; explicit preference verbs
+    support a read-time classification, never a canonical metadata rewrite.
+    """
+    if project is None: return []
+    scope = 'project:' + project['id']
+    domains = content_words(' '.join(str(a) for p in projects
+                                   for a in [p.get('id', ''), *p.get('aliases', [])]))
+    def eligible(row):
+        category = row.get('category')
+        legacy_preference = category is None and bool(re.search(
+            r'\b(?:tercih eder|istemez|sevmez)\b', row.get('statement', ''), re.I))
+        if category not in ('preference', 'procedure') and not (
+                category is None and (row.get('kind') == 'procedural' or legacy_preference)):
+            return False
+        # A core profile comes from maintained project/user reference files,
+        # not from episodic captures and imported historical summaries.
+        path = Path(row.get('source_path', ''))
+        if row.get('scope') == scope:
+            return path.is_relative_to(Path('projeler') / project['id'])
+        words = content_words(search_text(row))
+        return (row.get('scope') == 'user' and path.is_relative_to(Path('zihin'))
+                and category == 'preference'
+                and not any(word_match(t, w) for t in domains for w in words))
+    def order(row):
+        date = str(row.get('observed_at', ''))[:10]
+        try: freshness = dt.date.fromisoformat(date).toordinal()
+        except ValueError: freshness = 0
+        return (row.get('scope') != scope,
+                not str(row.get('source_path', '')).startswith('projeler/'),
+                row.get('confidence') != 'explicit-user', -freshness,
+                row.get('category') != 'preference', row.get('memory_id', ''))
+    scoped = sorted((r for r in rows if eligible(r) and r.get('scope') == scope), key=order)
+    general = sorted((r for r in rows if eligible(r) and r.get('scope') == 'user'), key=order)
+    return (scoped[:max(0, limit-1)] + general[:1])[:limit]
+# Workflow vocabulary, independent of record IDs and project names. Only the
+# current request can activate a domain; scope alone cannot activate all of it.
+_AREA_TERMS = (
+    ('video senaryo kurgu çekim metin', 'anlatım anlatmayı izleyici konuşma senaryo çekim'),
+    ('kapak thumbnail maskot tasarım', 'görsel kimlik referans hareket kompozisyon tasarım'),
+)
+
+def area_expansion(query):
+    words = content_words(query)
+    return ' '.join(extra for triggers, extra in _AREA_TERMS
+                    if any(word_match(t, w) for t in content_words(triggers) for w in words))
+
 
 def task_intent(text):
     """Exclude skill packaging from topic matching, preserving ordinary user paths.
@@ -303,7 +371,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     vault = Path(vault).resolve()
     previous_user = previous_user if isinstance(previous_user, str) else None
     from client_transcripts import private, worker_prompt
-    private_previous = bool(previous_user and (h.contains_secret(previous_user) or private(previous_user)))
+    private_previous = bool(previous_user and (h.contains_secret(previous_user) or private(previous_user) or worker_prompt(previous_user)))
     if private_previous:
         previous_user = None
     if h.contains_secret(query) or private(query) or worker_prompt(query):
@@ -439,6 +507,45 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                    for i in range(len(actual)-len(parts)+1))
     wants_decisions=any(requested_phrase(p) for p in ('karar geçmişi','eski karar','önceki karar','neden seçtik','neden seçmiştik'))
     wants_reuse=any(requested_phrase(p) for p in ('yeniden kullan','yeniden kullanım','yeniden kullanabiliriz','yeniden kullanabilirim','başka nerede','hangi çıktıyı'))
+    project_tasks = []
+    if project:
+        for task in brief(vault,limit=10000,include_stale=True):
+            belongs = task.get('project_id')==project['id'] or task['id'] in project.get('task_ids',[])
+            if not task.get('project_id') and not belongs:
+                # Legacy cards have no project_id. Only a unique specific title
+                # alias can restore scope; generic video/thumbnail aliases cannot.
+                title_projects = [p for p in cfg.get('projects', [])
+                                  if any(not set(query_words(a)) <= _GENERIC and alias_match(a, query_words(task['title']))
+                                         for a in p.get('aliases', []) if query_words(a))]
+                if not title_projects and match_reason == 'area_topic':
+                    title_projects = [p for p in cfg.get('projects', [])
+                                      if p.get('status', 'active') not in ('arsiv', 'arşiv', 'archived')
+                                      and area_topic(p, query_words(task['title']))]
+                belongs = len(title_projects)==1 and title_projects[0]['id']==project['id']
+            if belongs: project_tasks.append(task)
+    task_rows = [dict(t, statement=t['title']+' '+t['next_step'], memory_id=t['id'])
+                 for t in project_tasks]
+    expansion_tasks = rank_records(task_rows, query, ignore=project_terms(project) if project else (), context=previous_user)
+    if not expansion_tasks: expansion_tasks = task_rows[:1]
+    expansion_parts = []; linked_paths = []
+    if project and len(content_words(query)) <= 24:
+        expansion_parts = [project.get('id', ''), project.get('summary', ''), area_expansion(query)]
+        expansion_parts += [a for a in project.get('aliases', []) if alias_match(a, query_words(query))]
+        for task in expansion_tasks[:1]:
+            source = h.source_file(vault, task['source_path'])
+            version = digest(source)
+            if (task.get('source_content_hash') and
+                    task['source_content_hash'] == h.statement_hash(source.read_text())):
+                expansion_parts += [task['title'], task['next_step']]
+                source_versions[task['source_path']] = version
+                linked_paths.append(task['source_path'])
+        if previous_user:
+            prior, _ = select_projects(cfg.get('projects', []), previous_user, vault=vault)
+            if len(prior) == 1 and prior[0]['id'] == project['id']:
+                expansion_parts.append(previous_user)
+    from client_transcripts import private
+    expansion = ' '.join(part for part in expansion_parts if isinstance(part, str)
+                         and not h.contains_secret(part) and not private(part))
     knowledge_data = None
     knowledge_future = None
     from jev_procedures import route as route_procedures
@@ -448,7 +555,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         # A broad area word establishes routing, not a particular episode's
         # decisions. Require the note's own topic evidence for this fallback.
         knowledge_future=submit(read_knowledge,vault,query,project_id=project['id'] if project and match_reason != 'area_topic' else None,budget=min(1800,budget),
-                                context=previous_user)
+                                context=previous_user, expansion=expansion, linked_paths=linked_paths)
     decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
     if wants_decisions and len(projects)<=1:
         from karar_gecmisi import history as read_decisions
@@ -516,7 +623,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         from jev_retrieval import catalog as semantic_catalog
         # Local ranking only; a semantic advisor keeps its own inputs.
         local_rank = functools.partial(rank_records, ignore=project_terms(project) if project else (),
-                                       context=previous_user,
+                                       context=previous_user, expansion=expansion,
                                        tie_break=lambda row: (row.get('scope') != scope, row.get('memory_id', '')))
         catalog_future = submit(semantic_catalog, vault, query, eligible, local_rank, scope)
         ranked_catalog, catalog_evaluation = catalog_future.result()
@@ -541,6 +648,30 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                     digest(h.source_file(vault,row['source_path'])) == eligible_versions[row['source_path']])
         except (OSError,ValueError): return False
     ranked_catalog=[row for row in ranked_catalog if still_current(row)]
+    profile_rows = [] if skip_memory else scope_profile(
+        eligible, project, cfg.get('projects', []))
+    profile_rows = [row for row in profile_rows if still_current(row)]
+    ranked_ids = {row['memory_id'] for row in ranked_catalog}
+    profile_ids = set()
+    profile_used = 0
+    # A reserved, bounded share; complete claims only, no truncated conditions.
+    profile_budget = min(480, budget // 4)
+    for row in profile_rows:
+        if row['memory_id'] in ranked_ids: continue
+        content = h.source_file(vault, row['source_path']).read_text()
+        details = ''.join(' '+label+': '+row[key] for key,label in
+                          (('rationale','Gerekçe'),('conditions','Geçerlilik koşulu'))
+                          if isinstance(row.get(key),str) and row[key] in content)
+        text = ('Kapsam profili: '+row['statement']+details+
+                ' (kaynak: '+row['source_path']+')')
+        if profile_used + len(text) + 1 > profile_budget: continue
+        profile_used += len(text) + 1
+        profile_ids.add(row['memory_id'])
+        add(row['memory_id'], text)
+        priority, sequence, ident, text = candidates[-1]
+        candidates[-1] = (0.6, sequence, ident, text)
+        current_facts.append(row)
+        source_versions[row['source_path']] = eligible_versions[row['source_path']]
     if catalog_evaluation and catalog_evaluation.get('suggested_ids'):
         suggested=set(catalog_evaluation['suggested_ids'])
         for row in eligible:
@@ -582,21 +713,6 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             working_root = max(matching, key=lambda r: len(Path(r).resolve().parts)) if matching else roots[0]
             add('working-root','Çalışma kökü: '+working_root+'; işlem öncesi canlı Git HEAD/status ve testleri doğrula.')
             if len(roots)>1: add('alternative-roots',f'+{len(roots)-1} alternatif kök: komuta/gorev-baglam.json')
-        project_tasks = []
-        for task in brief(vault,limit=10000,include_stale=True):
-            belongs = task.get('project_id')==project['id'] or task['id'] in project.get('task_ids',[])
-            if not task.get('project_id') and not belongs:
-                # Legacy cards have no project_id. Only a unique specific title
-                # alias can restore scope; generic video/thumbnail aliases cannot.
-                title_projects = [p for p in cfg.get('projects', [])
-                                  if any(not set(query_words(a)) <= _GENERIC and alias_match(a, query_words(task['title']))
-                                         for a in p.get('aliases', []) if query_words(a))]
-                if not title_projects and match_reason == 'area_topic':
-                    title_projects = [p for p in cfg.get('projects', [])
-                                      if p.get('status', 'active') not in ('arsiv', 'arşiv', 'archived')
-                                      and area_topic(p, query_words(task['title']))]
-                belongs = len(title_projects)==1 and title_projects[0]['id']==project['id']
-            if belongs: project_tasks.append(task)
         topical_tasks = rank_records([dict(t, statement=t['title']+' '+t['next_step'], memory_id=t['id'])
                                       for t in project_tasks], query, ignore=project_terms(project), context=previous_user)
         topical_ids = [t['id'] for t in topical_tasks]
@@ -728,7 +844,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     history_reason=('explicit' if history=='always' or explicit_history else
                     'current_context_insufficient' if use_history else 'current_context_sufficient' if covered else 'not_requested')
     if history=='never': history_reason='disabled'
-    if project and covered and not use_history:
+    if project and covered and not use_history and not profile_ids:
         add('summary-policy','Kaynaklı özet yeterliyse yeniden okuma. Hash ≠ doğruluk; yeni talep öncelikli. Belirsizlikte/işlemde kaynağı doğrula.')
     if use_history:
         for relative in sorted(project.get('episode_sources',[]), key=lambda p: len(words & tokens(p)), reverse=True)[:3]:
