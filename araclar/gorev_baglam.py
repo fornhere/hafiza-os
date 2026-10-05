@@ -265,11 +265,31 @@ def select_projects(projects, query, cwd=None, previous_user=None, session_proje
     # Archived projects answer only an exact alias, never a fuzzy match or cwd.
     # Config uses both Turkish and English status words; both mean archived.
     active=[p for p in projects if p.get('status','aktif') not in ('arsiv', 'arşiv', 'archived')]
+    # An area's root may host work about a different configured project.
+    # A mixed root name is insufficient area evidence, and "kurgu" alone can
+    # mean the structure of technical work. Require a current production topic;
+    # never infer the other project's scope from its name in this path either.
+    mixed_areas = set()
+    if cwd:
+        for area in active:
+            if area.get('kind') != 'area': continue
+            for root in area.get('roots', []):
+                if not Path(cwd).resolve().is_relative_to(Path(root).resolve()): continue
+                root_words = query_words(Path(root).name)
+                if any(alias_match(alias, root_words)
+                       for other in projects if other['id'] != area['id']
+                       and other.get('kind') != 'area'
+                       for alias in [other.get('id', ''), *other.get('aliases', [])]
+                       if query_words(alias) and not set(query_words(alias)) <= _GENERIC):
+                    mixed_areas.add(area['id'])
+    production_topic = any(alias_inflected(term, word)
+                           for term in ('video', 'senaryo', 'thumbnail', 'youtube', 'kapak', 'maskot')
+                           for word in words)
     explicit=[p for p in projects if matches(p)]
     if not explicit: explicit=[p for p in active if matches(p,True)]
     specific=[p for p in explicit if any(alias_match(a,words) and not set(query_words(a)) <= _GENERIC for a in [p.get('id', ''), *p.get('aliases',[])])]
     if specific: explicit=specific
-    located=[p for p in active if cwd and any(
+    located=[p for p in active if cwd and (p['id'] not in mixed_areas or production_topic) and any(
         Path(cwd).resolve().is_relative_to(Path(r).resolve()) and
         (not shared_workspace(r, vault) or any(
             alias_inflected(term, word) for term in project_terms(p) for word in words))
@@ -280,7 +300,8 @@ def select_projects(projects, query, cwd=None, previous_user=None, session_proje
         located=[p for p in located if depths[p['id']]==max(depths.values())]
     # A short continuation may inherit one unambiguous previous scope.
     # Explicit current names, ambiguous matches and cwd always take precedence.
-    topical = [p for p in active if area_topic(p, words)] if not explicit else []
+    topical = [p for p in active if area_topic(p, words)
+               and (p['id'] not in mixed_areas or production_topic)] if not explicit else []
     if len(topical) == len(located) == 1 and topical[0]['id'] == located[0]['id']:
         topical = []  # The specific workspace already establishes this scope.
     prior=[]

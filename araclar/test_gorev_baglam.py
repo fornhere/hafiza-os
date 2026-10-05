@@ -1044,3 +1044,54 @@ class SharedWorkspaceRoutingTests(unittest.TestCase):
                                                'video planla')[0]))
         named=[dict(id='memory-engine',aliases=['hafıza sistemi']),projects[0]]
         self.assertEqual(['memory-engine'],[p['id'] for p in select_projects(named,'memory-engine thumbnail üret')[0]])
+
+    def test_mixed_area_root_requires_current_production_topic(self):
+        from gorev_baglam import select_projects
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            mixed = base/'solver-context-video'
+            studio = dict(id='studio', kind='area', aliases=['thumbnail', 'video radarı'],
+                          roots=[str(mixed), str(base/'studio')])
+            projects = [studio, dict(id='solver', aliases=['solver']),
+                        dict(id='engine', aliases=['memory engine'])]
+            for query in ('devam et', 'doğru kurguyla devam et',
+                          'model ile devam', 'adaylar neden elendi', 'belleğimizde neler değişti'):
+                with self.subTest(query=query):
+                    self.assertEqual(([], 'unresolved'), select_projects(
+                        projects, query, cwd=str(mixed/'research')))
+            for query in ('video planla', 'kurgu videosuna devam', 'senaryo yaz', 'kapak hazırla'):
+                with self.subTest(query=query):
+                    rows, _ = select_projects(projects, query, cwd=str(mixed))
+                    self.assertEqual(['studio'], [p['id'] for p in rows])
+            rows, reason = select_projects(projects, 'devam et', cwd=str(base/'studio'))
+            self.assertEqual((['studio'], 'cwd'), ([p['id'] for p in rows], reason))
+            for query, expected in [('solver devam', 'solver'), ('memory engine devam', 'engine')]:
+                rows, reason = select_projects(projects, query, cwd=str(mixed))
+                self.assertEqual(([expected], 'explicit'), ([p['id'] for p in rows], reason))
+
+    def test_mixed_area_root_allows_safe_prior_but_never_infers_path_project(self):
+        from gorev_baglam import select_projects
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()/'solver-video'
+            projects = [dict(id='studio', kind='area', aliases=['thumbnail'], roots=[str(root)]),
+                        dict(id='solver', aliases=['solver']),
+                        dict(id='engine', aliases=['memory engine'])]
+            rows, reason = select_projects(projects, 'devam', cwd=str(root),
+                                           previous_user='memory engine üzerinde çalış')
+            self.assertEqual((['engine'], 'previous_user'), ([p['id'] for p in rows], reason))
+            rows, reason = select_projects(projects, 'devam', cwd=str(root),
+                                           session_project_id='engine')
+            self.assertEqual((['engine'], 'session_project'), ([p['id'] for p in rows], reason))
+            self.assertEqual([], select_projects(projects, 'devam', cwd=str(root),
+                                                previous_user='solver ve engine')[0])
+
+    def test_area_root_collision_uses_full_configured_alias(self):
+        from gorev_baglam import select_projects
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve()
+            projects = [dict(id='studio', kind='area', aliases=['thumbnail'],
+                             roots=[str(base/'proof-engine-video'), str(base/'proof-video')]),
+                        dict(id='solver', aliases=['proof engine'])]
+            self.assertEqual([], select_projects(projects, 'devam', cwd=str(base/'proof-engine-video'))[0])
+            rows, reason = select_projects(projects, 'devam', cwd=str(base/'proof-video'))
+            self.assertEqual((['studio'], 'cwd'), ([p['id'] for p in rows], reason))
