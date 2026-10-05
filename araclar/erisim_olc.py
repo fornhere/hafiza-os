@@ -209,7 +209,17 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
         if threshold is not None: config['rerank_p2'] = threshold
         return config
     advisor = jev_client.disabled() if jev_mode == 'local' else patch.object(jev_client, 'load_config', side_effect=measured_config)
-    with advisor:
+    # Count requests that actually reach the transport (cache hits and local
+    # budget failures do not), without reading payloads or credentials.
+    live = dict(requests=0, failed=0)
+    original_transport = jev_client._transport
+    def counted_transport(*args, **kwargs):
+        live['requests'] += 1
+        try: return original_transport(*args, **kwargs)
+        except Exception:
+            live['failed'] += 1
+            raise
+    with advisor, patch.object(jev_client, '_transport', counted_transport):
         for row in prompts:
             label = labels[row['id']]
             if 'needs_memory' in label and not isinstance(label['needs_memory'], bool):
@@ -244,6 +254,13 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
                     if isinstance(catalog_evaluation, dict) and isinstance(catalog_evaluation.get('pool_ids'), list)
                     else None)
             degraded = any(isinstance(value, dict) and value.get('degraded') for value in evaluations.values())
+            diagnostics = {name: sorted(set(value.get('diagnostics', []))) for name, value in evaluations.items()
+                           if isinstance(value, dict)}
+            # Assist reading pointers are not delivered records; score them separately.
+            suggested = {'memory:' + x for x in ((evaluations.get('catalog') or {}).get('suggested_ids') or [])
+                         if x in catalog}
+            suggested |= {'note:' + x for x in ((evaluations.get('knowledge') or {}).get('suggested_ids') or [])
+                          if x in note_ids}
             abstain = any(isinstance(value, dict) and 'abstain' in value.get('diagnostics', []) for value in evaluations.values())
             results.append(dict(id=row['id'], client=row['client'], prompt=row['prompt'],
                                 tp=sorted(actual & gold), fp=sorted(actual - gold), fn=sorted(gold - actual),
@@ -255,7 +272,12 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
                                 needs_memory=needs_memory, gate=_gate_summary(evaluations),
                                 injected_chars=len(package['text']), channel_chars=channels, latency_ms=latency_ms,
                                 requested_mode=jev_mode, effective_mode='local' if degraded else jev_mode,
-                                degraded=degraded, abstain=abstain,
+                                degraded=degraded, abstain=abstain, diagnostics=diagnostics,
+                                degraded_by={name: sorted(set(value.get('diagnostics', [])))
+                                             for name, value in evaluations.items()
+                                             if isinstance(value, dict) and value.get('degraded')},
+                                suggested=sorted(suggested), suggested_tp=sorted(suggested & gold),
+                                suggested_fp=sorted(suggested - gold),
                                 uncertain=bool(label.get('uncertain'))))
     tp = sum(len(r['tp']) for r in results)
     fp = sum(len(r['fp']) for r in results)
@@ -270,10 +292,21 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
                    uncertain_labels=sum(r['uncertain'] for r in results),
                    average_latency_ms=sum(r['latency_ms'] for r in results) / len(results) if results else 0,
                    degraded_count=sum(r['degraded'] for r in results),
+                   degraded_diagnostics=dict(Counter(f'{name}:{code}' for r in results
+                                                     for name, codes in r['degraded_by'].items() for code in codes)),
+                   diagnostic_counts=dict(Counter(f'{name}:{code}' for r in results
+                                                  for name, codes in r['diagnostics'].items() for code in codes)),
+                   live_requests=live['requests'], live_request_failures=live['failed'],
                    abstain_count=sum(r['abstain'] for r in results),
                    requested_mode_counts=dict(Counter(r['requested_mode'] for r in results)),
                    effective_mode_counts=dict(Counter(r['effective_mode'] for r in results)),
                    channel_chars={name:sum(r['channel_chars'][name] for r in results) for name in ('catalog','note','procedure','project','other')})
+    stp = sum(len(r['suggested_tp']) for r in results)
+    sfp = sum(len(r['suggested_fp']) for r in results)
+    reach = sum(len(set(r['tp']) | set(r['suggested_tp'])) for r in results)
+    metrics['suggestions'] = dict(tp=stp, fp=sfp, precision=stp / (stp + sfp) if stp + sfp else None,
+                                  prompts=sum(bool(r['suggested']) for r in results),
+                                  recall_with_suggestions=reach / (tp + fn) if tp + fn else None)
     metrics['pool_coverage'] = _pool_coverage(results)
     metrics['gate_false_negative'] = _gate_false_negative(results)
     latencies=sorted(r['latency_ms'] for r in results)
@@ -313,6 +346,10 @@ def evaluate(vault, set_path, labels_path, out_dir, *, jev_mode='local', split_s
           f"Ortalama enjekte karakter: {metrics['average_injected_chars']:.1f}; belirsiz etiket: {metrics['uncertain_labels']}.\n\n"
           f"Kesin etiketli {len(certain)} istemde precision: {metrics['certain_only']['precision']}; recall: {metrics['certain_only']['recall']} (TP {ctp}, FP {cfp}, FN {cfn}).\n\n"
           f"TP/FP/FN yalnız aktif katalog ve teslim edilmiş bilgi notu kimlikleri içindir; karakter ve boş dönme tüm paket metnini kapsar. Belirsiz etiketler metriklere dahildir.\n\n"
+          f"## Jev okuma önerileri (teslim sayılmaz)\n\nÖneri TP: {metrics['suggestions']['tp']}; FP: {metrics['suggestions']['fp']}; "
+          f"precision: {metrics['suggestions']['precision']}; önerili recall: {metrics['suggestions']['recall_with_suggestions']}.\n"
+          f"Canlı istek: {metrics['live_requests']} (başarısız {metrics['live_request_failures']}); degraded: {metrics['degraded_count']} "
+          f"{metrics['degraded_diagnostics'] or ''}.\n\n"
           f"## Havuz kapsaması\n\n{pool_summary}\n\n"
           f"## Kapı yanlış negatifi\n\n{gate_summary}\n\n"
           f"## En kötü 10 FP\n\n{examples('fp')}\n\n## En kötü 10 FN\n\n{examples('fn')}\n\n"

@@ -142,6 +142,8 @@ modülleri yoksa seçilen kasanın `araclar/` dizinindeki Python kodu çalışt�
 Yalnız anahtar girdiğin servisler güncellenir. Mevcut servis ayarları korunur;
 Jev'in `mode` ve `*_mode` tercihleri anahtar yenilenince açılmaz. Özel
 `base_url`, `env_file`, zaman aşımı, önbellek ve sıralama ayarları da korunur.
+Sağlayıcı değiştirilirse yalnız eski sağlayıcının varsayılan `base_url`/`model`
+değeri yeni sağlayıcınınkiyle değişir; yerel gateway ve özel değerler kalır.
 Mem0 kullanıcı kimliği sorusunda Enter mevcut kimliği korur. Mevcut kasada
 henüz Jev ayarı yoksa `mode=shadow` ile oluşturulur.
 

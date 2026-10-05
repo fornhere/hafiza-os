@@ -34,6 +34,21 @@ class ProcedureRouting(unittest.TestCase):
    (self.v/'HAFIZA-DONGUSU.md').write_text('changed');return self.high(*args,**kw)
   with patch.object(j,'evaluate',side_effect=mutate):self.assertEqual(p.route(self.v,'verify')['paths'],[])
   (self.v/'komuta/jev.json').write_text('{bad');self.assertEqual(p.route(self.v,'verify')['diagnostics'],['config_invalid'])
+ def test_shadow_logs_would_be_suggestion_without_prompt_text(self):
+  def shadow(*args,**kwargs):
+   return dict(mode='shadow',degraded=False,diagnostics=[],latency_ms=12.5,
+               scores={r['id']:(1.8 if r['id']=='release' else 0.4) for r in args[2]})
+  query='sürümü gizli-proje-adı ile yayınla'
+  with patch.object(j,'evaluate',side_effect=shadow):r=p.route(self.v,query)
+  self.assertEqual(r['paths'],[]);self.assertEqual(r['text'],'')
+  logs=list((self.v/'.cache/jev-golge').glob('yontem-*.jsonl'))
+  self.assertEqual(len(logs),1)
+  raw=logs[0].read_text();row=json.loads(raw)
+  self.assertNotIn('gizli-proje-adı',raw)
+  self.assertEqual(row['would_suggest'],['release']);self.assertEqual(row['latency_ms'],12.5)
+  self.assertEqual(len(row['request_hash']),64);self.assertFalse(row['degraded'])
+  with patch.object(j,'evaluate',side_effect=self.high):p.route(self.v,'yayınla')
+  self.assertEqual(len(logs[0].read_text().splitlines()),1)
  def test_secret_budget_and_shadow(self):
   with patch.object(j,'evaluate',side_effect=self.high) as call:
    self.assertEqual(p.route(self.v,'token: sensitive')['paths'],[]);call.assert_not_called()
