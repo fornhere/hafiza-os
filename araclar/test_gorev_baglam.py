@@ -910,6 +910,21 @@ class BoundedStatusRegressionTests(unittest.TestCase):
         self.assertTrue(result['capsule']['selection_required'])
         self.assertIsNone(result['capsule']['suggested_next_step'])
 
+    def test_current_topic_keeps_card_slots_against_previous_topic(self):
+        self.task('archive', days=4, title='Alpha ses kaydı', next_step='Sesi dinle')
+        self.task('older', days=3, title='Alpha derleme renkleri', next_step='Paleti incele')
+        self.task('build', title='Alpha derleme hatası', next_step='Derleme hatasını doğrula')
+        self.task('second', title='Alpha güncel kontrol', next_step='Kontrolü doğrula')
+        self.task('third', title='Alpha teslim planı', next_step='Planı doğrula')
+        query = 'alpha derleme hatası için ayrıntılı kontrol yap devam'
+        baseline = build_task_package(self.vault, query, budget=2000, history='never')
+        contextual = build_task_package(self.vault, query, budget=2000, history='never',
+                                        previous_user='renkleri ve paleti incele')
+        self.assertEqual([t['id'] for t in baseline['capsule']['tasks']],
+                         [t['id'] for t in contextual['capsule']['tasks']])
+        self.assertEqual(3, len(contextual['capsule']['tasks']))
+        self.assertIn('older:card_limit', contextual['omitted_reasons'])
+
 
 class SessionProjectInheritanceTests(unittest.TestCase):
     setUp = ScopeContextPackageTests.setUp

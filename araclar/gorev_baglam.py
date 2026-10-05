@@ -97,7 +97,9 @@ def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expans
     words a long query needs. `context` (the previous user turn) never selects
     on its own: it can only complete a record the current query already
     anchors with an informative word, where the query alone was too weak, and
-    it adds at most one such record (measured: more added mostly noise).
+    it adds at most one such record, only when the current query selects none.
+    A direct current topic must not acquire a competing prior-turn topic that
+    displaces its cards at a downstream limit or budget.
     """
     terms = content_words(query)
     scoped = {t for t in terms if any(word_match(t, w) for w in ignore)}
@@ -130,7 +132,8 @@ def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expans
         ranked.append((score, len(matched), row))
     def order(item):
         return (-item[0], -item[1], tie_break(item[2]) if tie_break else item[2].get('memory_id', ''))
-    ranked.extend(sorted(completions, key=order)[:1])
+    if not ranked:
+        ranked.extend(sorted(completions, key=order)[:1])
     if expansion and area_expansion(query):
         ranked = [(score * 4, count, row) for score, count, row in ranked]
         # Expansion is weaker evidence and never changes the eligible scope.
@@ -753,8 +756,12 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if roots:
             matching = [r for r in roots if cwd and Path(cwd).resolve().is_relative_to(Path(r).resolve())]
             working_root = max(matching, key=lambda r: len(Path(r).resolve().parts)) if matching else roots[0]
-            add('working-root','Çalışma kökü: '+working_root+'; işlem öncesi canlı Git HEAD/status ve testleri doğrula.')
-            if len(roots)>1: add('alternative-roots',f'+{len(roots)-1} alternatif kök: komuta/gorev-baglam.json')
+            root_check = ('; canlı Git HEAD/status ve testleri doğrula.' if compact else
+                          '; işlem öncesi canlı Git HEAD/status ve testleri doğrula.')
+            add('working-root','Çalışma kökü: '+working_root+root_check)
+            if len(roots)>1:
+                label = 'kök' if compact else 'alternatif kök'
+                add('alternative-roots',f'+{len(roots)-1} {label}: komuta/gorev-baglam.json')
         topical_tasks = rank_records([dict(t, statement=t['title']+' '+t['next_step'], memory_id=t['id'])
                                       for t in project_tasks], query, ignore=project_terms(project), context=previous_user)
         topical_ids = [t['id'] for t in topical_tasks]
