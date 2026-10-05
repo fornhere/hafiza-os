@@ -174,6 +174,43 @@ class SessionProjectTests(unittest.TestCase):
                          dict(prompt=self.notifications()[1]), 'UserPromptSubmit'), '')
         self.assertEqual(self.state_path('claude').read_bytes(), before)
 
+    def test_t30_native_meta_does_not_change_scope(self):
+        meta = [
+            '[Cross-session delivery notice] Boreal delivery completed.',
+            '[Image: source: /tmp/synthetic.png]',
+            '<command-message>loop</command-message><command-name>/loop</command-name>',
+            '# /loop — schedule a recurring or self-paced prompt\nBoreal ne durumda',
+        ]
+        for client in ('claude', 'codex'):
+            self.prompt(client, 'Atlas ne durumda')
+            before = self.state_path(client).read_bytes()
+            count = len(self.calls)
+            for query in meta:
+                with self.subTest(client=client, query=query):
+                    output = self.prompt(client, query, turn='t2')
+                    self.assertEqual(output[0] if client == 'claude' else output, {})
+                    self.assertEqual(len(self.calls), count)
+                    self.assertEqual(self.state_path(client).read_bytes(), before)
+                    self.prompt(client, query, session='fresh-meta')
+                    self.assertFalse(self.state_path(client, 'fresh-meta').exists())
+
+    def test_t30_mixed_attachment_and_command_only_use_text(self):
+        for client in ('claude', 'codex'):
+            for index, query in enumerate([
+                'Atlas ne durumda\n[Image: source: /tmp/synthetic.png]',
+                '[Cross-session delivery notice] Boreal delivery.\nAtlas ne durumda',
+                '<command-message>loop</command-message><command-name>/loop</command-name>'
+                '<command-args>Atlas ne durumda</command-args>\n'
+                '# /loop — schedule a recurring or self-paced prompt\nBoreal ne durumda',
+            ]):
+                with self.subTest(client=client, index=index):
+                    with patch.object(gorev_baglam, 'build_task_package', wraps=self.package) as build:
+                        output = self.prompt(client, query, session='text' + str(index))
+                    self.assertEqual(build.call_args.args[1], 'Atlas ne durumda')
+                    self.assertEqual(self.calls[-1][1], 'x')
+                    if client == 'claude':
+                        self.assertRegex(output[1]['installation_version'], r'^araclar-sha256:[0-9a-f]{64}$')
+
     def test_codex_suppressed_package_does_not_replace_last_delivered_scope(self):
         self.prompt('codex', 'Atlas ne durumda')
         with patch.object(gorev_baglam, 'build_task_package', return_value={

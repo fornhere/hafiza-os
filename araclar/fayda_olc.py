@@ -53,7 +53,8 @@ def _record_delivery(vault, *, client, session_id, package_id, delivered_lessons
         raise ValueError('delivery_identity_required')
     row = dict(client=client, session_id=session_id, package_id=package_id,
                turn_id=turn_id, task_id=task_id, source_end_line=source_end_line,
-               delivered_lessons=sorted(delivered_lessons, key=lambda r:r['id']))
+               delivered_lessons=sorted(delivered_lessons, key=lambda r:r['id']),
+               installation_version=capture.installation_version())
     row['receipt_id'] = capture.digest(row)
     old = next((r for r in h.load_jsonl(vault / DELIVERIES)
                 if r.get('receipt_id') == row['receipt_id']), None)

@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from client_transcripts import CLIENTS, SourceError, parse, private, sha, source_path, strict_json, worker_prompt
 from client_sessions import atomic, enforce_policy, locked, load, recall, register, source_with_policy
 from hafiza import contains_secret
-from capture_source import clean_user
+from capture_source import clean_user, installation_version
 
 MAX_INPUT = 128000
 CONTEXT_BUDGET = 3500
@@ -198,10 +198,18 @@ def context(vault, client, session, source, payload, event):
 
 
 def hook(vault, client, event, payload):
+    output, status = _hook(vault, client, event, payload)
+    return output, dict(status, installation_version=installation_version())
+
+
+def _hook(vault, client, event, payload):
     allowed = {'claude': ('SessionStart', 'UserPromptSubmit', 'Stop'),
                'antigravity': ('PreInvocation', 'Stop')}
     if client not in allowed or event not in allowed[client]:
         raise SourceError('unsupported_hook_event')
+    if client == 'claude' and event == 'UserPromptSubmit' and isinstance(payload, dict):
+        if isinstance(payload.get('prompt'), str):
+            payload = dict(payload, prompt=clean_user(payload['prompt']))
     prompt = payload.get('prompt', '') if isinstance(payload, dict) else ''
     exclude = isinstance(prompt, str) and private(prompt)
     # Privacy must invalidate existing candidates even for worker prompts/envs.
@@ -273,7 +281,7 @@ def main():
         print(json.dumps(status), file=sys.stderr)
     except Exception as error:
         diagnostic = str(error) if isinstance(error, SourceError) else 'hook_validation_failed'
-        print(json.dumps({'status': 'unready', 'diagnostic': diagnostic}), file=sys.stderr)
+        print(json.dumps({'status': 'unready', 'diagnostic': diagnostic, 'installation_version': installation_version()}), file=sys.stderr)
     print(json.dumps(output, ensure_ascii=False))
     return 0
 
