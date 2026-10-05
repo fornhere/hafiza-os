@@ -478,6 +478,16 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions=RevisionMap()
     budget=max(0, int(budget)); candidates=[]; current_facts=[]; current_tasks=[]
+    compact = budget <= 2000
+    source_references = {}
+    def source_reference(row, ledger):
+        path = row['source_path']
+        ident = row.get('memory_id', row.get('id'))
+        reference = ledger+'#'+ident
+        if compact and len(reference) < len(path):
+            source_references[reference] = dict(path=path, sha256=digest(h.source_file(vault, path)))
+            return reference
+        return path
     projects=[]
     cfg=config(vault)
     if cfg.get('invalid'): omitted.append('config_invalid')
@@ -674,7 +684,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                           (('rationale','Gerekçe'),('conditions','Geçerlilik koşulu'))
                           if isinstance(row.get(key),str) and row[key] in content)
         text = ('Kapsam profili: '+row['statement']+details+
-                ' (kaynak: '+row['source_path']+')')
+                ' (kaynak: '+source_reference(row, 'zihin/hafıza-kataloğu.jsonl')+')')
         if profile_used + len(text) + 1 > profile_budget: continue
         profile_used += len(text) + 1
         profile_ids.add(row['memory_id'])
@@ -701,7 +711,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if pinned: card_facts.append(row)
         prefix = 'Bilgi kartı: ' if resume and pinned else 'Güncel kayıt: '
         details = ''.join(' '+label+': '+row[key] for key,label in (('rationale','Gerekçe'),('conditions','Geçerlilik koşulu')) if isinstance(row.get(key),str) and row[key] in content and not h.contains_secret(row[key]))
-        if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+row['source_path']+'; kapsam: '+row.get('scope','bilinmiyor')+'; sınıf: '+h.context_source_class(row)+')'):
+        if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+source_reference(row, 'zihin/hafıza-kataloğu.jsonl')+'; kapsam: '+row.get('scope','bilinmiyor')+('' if compact and source_reference(row, 'zihin/hafıza-kataloğu.jsonl') != row['source_path'] else '; sınıf: '+h.context_source_class(row))+')'):
             current_facts.append(row)
             priority,sequence,ident,text=candidates[-1]
             # Alternate catalog cards and note cards at the same priority.
@@ -733,9 +743,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         # verified recency order and expose several alternatives, never guess one.
         project_tasks.sort(key=lambda t: (t['id'] not in topical_ids,
                                          topical_ids.index(t['id']) if t['id'] in topical_ids else 0))
-        # A topic-only area is weaker scope than a name or workspace. Keep a
-        # smaller set of alternatives until the user identifies the episode.
-        card_limit = 2 if match_reason == 'area_topic' else 3
+        # Routing uncertainty forbids choosing a single next action; it need not
+        # hide a third source-backed alternative that fits the same budget.
+        card_limit = 3
         from client_sessions import unique_states, state_values
         # Verify every source before allowing it to displace another card.
         valid_tasks = []
@@ -779,12 +789,13 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 return value if isinstance(value, str) and value and not h.contains_secret(value) else fallback
             text = prefix+' ['+state_label+']: '+task['title']
             # Preserve recorded facts; repeated title and absent fields add no evidence.
-            for label, value in (('Hedef', field('goal', '')),
+            optional_fields = (('Hedef', field('goal', '')),
                                  ('Son sonuç', field('last_result', '')),
-                                 ('Açık iş/engel', field('blocker', field('open_work', '')))):
-                if value: text += '; '+label+': '+value
+                                 ('Açık iş/engel', field('blocker', field('open_work', ''))))
+            for label, value in optional_fields:
+                if value and not (compact and sum(len(v) for _, v in optional_fields) > 200): text += '; '+label+': '+value
             text += ('; Sonraki adım: '+task['next_step']+'; Tarih: '+date+
-                     ' (kaynak: '+task['source_path']+')')
+                     ' (kaynak: '+source_reference(task, 'zihin/is-durumu.jsonl')+')')
             values = state_values(task)
             duplicates = []
             for older in group[1:]:
@@ -880,7 +891,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                     'current_context_insufficient' if use_history else 'current_context_sufficient' if covered else 'not_requested')
     if history=='never': history_reason='disabled'
     if project and covered and not use_history and not profile_ids:
-        add('summary-policy','Kaynaklı özet yeterliyse yeniden okuma. Hash ≠ doğruluk; yeni talep öncelikli. Belirsizlikte/işlemde kaynağı doğrula.')
+        add('summary-policy', 'Belirsizlikte/işlemde kaynağı doğrula; hash ≠ doğruluk.' if compact and source_references else 'Kaynaklı özet yeterliyse yeniden okuma. Hash ≠ doğruluk; yeni talep öncelikli. Belirsizlikte/işlemde kaynağı doğrula.')
     if use_history:
         for relative in sorted(project.get('episode_sources',[]), key=lambda p: len(words & tokens(p)), reverse=True)[:3]:
             try:
@@ -932,6 +943,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             omitted.append('scope-header:budget')
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
+    result['source_references'] = {ref: data for ref, data in source_references.items()
+                                   if ref in result['text']}
     result['deduplicated_tasks'] = {ident: ids for ident, ids in task_duplicates.items() if ids and ident in selected}
     result['suppressed_count']=suppressed_count
     delivered_lessons=[dict(id=r['id'],version=r['version']) for r in lesson_details['lessons']] if 'methods' in selected else []
