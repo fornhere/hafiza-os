@@ -594,7 +594,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         # A broad area word establishes routing, not a particular episode's
         # decisions. Require the note's own topic evidence for this fallback.
         knowledge_future=submit(read_knowledge,vault,query,project_id=project['id'] if project and match_reason != 'area_topic' else None,budget=min(1800,budget),
-                                context=previous_user, expansion=expansion, linked_paths=linked_paths)
+                                context=previous_user, expansion=expansion, linked_paths=linked_paths,
+                                routed_project_id=project['id'] if project and match_reason == 'area_topic' else None)
     decision_data = None; reuse_data = None; output_data = {'outputs':[], 'diagnostics':[]}
     if wants_decisions and len(projects)<=1:
         from karar_gecmisi import history as read_decisions

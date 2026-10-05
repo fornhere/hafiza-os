@@ -53,6 +53,59 @@ class KnowledgeTests(unittest.TestCase):
                                  linked_paths=['task.md'],budget=5000)
         self.assertEqual([r['id'] for r in result['records']],['direct'])
 
+    def test_area_route_requires_preference_topic_and_pinned_sibling(self):
+        self.d.update(id='script', title='Senaryo sınırı', scope='project:channel',
+                      domains=['video'], statement='Video senaryosunda hazırlık anlatma.')
+        self.register()
+        sibling=copy.deepcopy(self.d)
+        sibling.update(id='screen',title='Ekran düzeni',statement='Video ekran eylemini belirt.')
+        b.register(self.v,sibling,True)
+        for ident, changes in (
+                ('episode',dict(kind='decision')),
+                ('foreign',dict(scope='project:other')),
+                ('domain',dict(domains=['thumbnail'])),
+                ('unreviewed',dict(status='proposed'))):
+            note=copy.deepcopy(sibling);note.update(id=ident,**changes)
+            b.register(self.v,note,True)
+        kwargs=dict(routed_project_id='channel',budget=5000)
+        self.assertFalse(b._retrieve_local(self.v,'Video hazırlayalım',**kwargs)['records'])
+        self.assertFalse(b._retrieve_local(self.v,'Veritabanı senaryosu',**kwargs)['records'])
+        result=b._retrieve_local(self.v,'Video senaryosunu yaz',**kwargs)
+        self.assertEqual({r['id'] for r in result['records']},{'script','screen'})
+        self.assertIn('project:channel',result['text'])
+        self.assertEqual(result['source_versions']['gelen-kutusu/source.md'],b.digest(self.source))
+        (self.v/'bilgi/screen.md').write_text('manual edit')
+        result=b._retrieve_local(self.v,'Video senaryosunu yaz',**kwargs)
+        self.assertEqual([r['id'] for r in result['records']],['script'])
+        self.source.write_text('changed source')
+        self.assertFalse(b._retrieve_local(self.v,'Video senaryosunu yaz',**kwargs)['records'])
+
+    def test_area_route_ignores_time_suitability_and_includes_inflected_artifact(self):
+        self.d.update(id='screen',title='Ekran planı',scope='project:channel',
+                      domains=['video'],statement='Video konuşma metnini ve ekranın zamanını belirt.')
+        self.register()
+        kwargs=dict(routed_project_id='channel')
+        self.assertFalse(b._retrieve_local(self.v,'Video son zamanlarda yapılır mı',**kwargs)['records'])
+        self.assertFalse(b._retrieve_local(self.v,'Video uygun effort ile AI kullanımı',**kwargs)['records'])
+        result=b._retrieve_local(self.v,'Video metnini güncelle',**kwargs)
+        self.assertEqual([r['id'] for r in result['records']],['screen'])
+        self.assertIn('Alan yönlendirmesiyle bulunan proje tercihi',result['text'])
+        self.assertNotIn('başka projenin',result['text'])
+
+    def test_source_sibling_expansion_is_one_hop_and_one_record(self):
+        self.d.update(id='seed',title='Senaryo sınırı',scope='project:channel',
+                      domains=['video'],statement='Video senaryosunda hazırlık anlatma.')
+        self.register()
+        for ident in ('peer-a','peer-b'):
+            note=copy.deepcopy(self.d)
+            note.update(id=ident,title='Ekran düzeni',statement='Video ekran eylemini belirt.')
+            b.register(self.v,note,True)
+        query='Video senaryosunu yaz'
+        result=b._retrieve_local(self.v,query,routed_project_id='channel',budget=5000)
+        self.assertEqual({r['id'] for r in result['records']},{'seed','peer-a'})
+        self.assertFalse(b._retrieve_local(self.v,'devam',routed_project_id='channel',
+                                         context=query,expansion=query)['records'])
+
     def test_long_domain_request_keeps_user_note_before_episode_notes(self):
         self.d.update(id='user-guide',title='Kapak stil yönü',domains=['thumbnail'],
                       statement='Eski kapak stiline dön.')

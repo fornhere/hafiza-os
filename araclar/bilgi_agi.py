@@ -223,7 +223,7 @@ def retrieve(vault,query,project_id=None,budget=1800,context=None):
                      lambda: _retrieve_local(vault, query, project_id, budget, context=context))
 
 
-def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansion=None,linked_paths=()):
+def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansion=None,linked_paths=(),routed_project_id=None):
     from gorev_baglam import content_words,word_match
     def note_match(left,right):
         # Apostrophized three-letter names keep their Turkish case ending after
@@ -257,6 +257,26 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansi
               (f"bilgi/{d['id']}" in seeds or d['id'] in seeds or
                any(s['path'] in linked_paths for s in d['sources']))}
     neighbors = direct | {r['target'] for d in rows if d['id'] in direct for r in d.get('relations', [])}
+    # A topical preference can seed one source sibling in the same routed
+    # project/domain. A common source alone never starts a topical match.
+    # A routed area is weaker than an explicit project. Incidental words
+    # such as time/suitability cannot establish a production preference.
+    feature_words = content_words('metin metni senaryo ekran konuşma anlatım anlatı akış hikâye '
+                                  'tipografi font renk palet boşluk hiyerarşi kompozisyon yerleşim hareket animasyon')
+    feature_terms = {t for t in terms if any(note_match(t,w) for w in feature_words)}
+    preference_seeds = [d for d in rows if d['kind']=='preference' and
+                        d['scope'] in ('user', f'project:{project_id}', f'project:{routed_project_id}') and
+                        requested.intersection(d['domains']) and
+                        any(note_match(t,w) for t in feature_terms
+                            if not any(note_match(t,g) for g in generic)
+                            for w in content_words(d['title']+' '+d['statement']))]
+    sibling_ids = {d['id'] for d in rows if d['kind']=='preference' and
+                   any(d['scope']==seed['scope'] and set(d['domains'])==set(seed['domains']) and
+                       any(s['path']==other['path'] and s['sha256']==other['sha256']
+                           for s in d['sources'] for other in seed['sources'])
+                       for seed in preference_seeds)}
+    if routed_project_id is None: sibling_ids = set()
+    sibling_only_ids = sibling_ids - {d['id'] for d in preference_seeds}
     ranked=[]
     # These are candidate analogies, never new user preferences. Only features
     # actually named in the reviewed statement can support a transfer.
@@ -289,9 +309,12 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansi
         topical={min(w for w in words if note_match(t,w)) for t in matched
                  if not any(note_match(t,w) for w in generic)}
         expanded_match = expanded_match and (bool(topical) or bool(requested.intersection(d['domains'])) or d['id'] in neighbors)
+        routed_preference = (d['scope']==f'project:{routed_project_id}' and
+                             d['kind']=='preference' and bool(requested.intersection(d['domains'])) and
+                             (d['id'] in sibling_ids))
         # Scoped notes outside the selected project are only historical evidence
         # for a concrete matching topic. They never become a general preference.
-        if scoped and (len(topical)<2 if project_id is None else
+        if scoped and not routed_preference and (len(topical)<2 if project_id is None else
                        not requested.intersection(d['domains']) or not topical):continue
         # Without an explicit domain, require two independent topical anchors.
         if not requested and 'all' not in d['domains'] and len(topical)<2:
@@ -300,16 +323,21 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansi
         # A user-scoped domain note remains applicable in a long packaging
         # request. Episode-specific project notes still need their own topic.
         user_domain = d['scope']=='user' and bool(requested.intersection(d['domains']))
-        if len(terms)>8 and not topical and not transfer and not expanded_match and not user_domain:continue
+        if len(terms)>8 and not topical and not transfer and not expanded_match and not user_domain and not routed_preference:continue
         score=4*max(len(matched), int(user_domain)) + (min(len(related),4)/4 if expanded_match else 0)
         if score or transfer or expanded_match:ranked.append((score,d,transfer))
     # General user guidance precedes an episode's incidental domain overlap;
     # the bounded dossier must not spend its budget on old episode decisions.
     ranked.sort(key=lambda item:(item[2] is not None,
-                                item[1]['scope']!='user',-item[0],item[1]['id']))
+                                item[1]['scope']!='user',
+                                not (routed_project_id is not None and item[1]['id'] in sibling_ids),
+                                -item[0],item[1]['id']))
     selected=[];transfers=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
     expansion_count = 0
+    sibling_count = 0
     for score,d,transfer in ranked:
+        if d['id'] in sibling_only_ids:
+            if sibling_count >= 1: continue
         if score < 4:
             if expansion_count >= 1: continue
             expansion_count += 1
@@ -317,7 +345,10 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansi
         except (OSError,ValueError):
             diagnostics.append(d['id']+':source_changed_during_read');continue
         card=f"Bilgi [{d['kind']}; {', '.join(d['domains'])}; {d['scope']}]: {d['statement']}\nKaynak: bilgi/{d['id']}.md"
-        if d['scope'] not in ('user',f'project:{project_id}'):
+        routed_preference = d['scope']==f'project:{routed_project_id}' and d['id'] in sibling_ids
+        if routed_preference:
+            card+='\nAlan yönlendirmesiyle bulunan proje tercihi; bölüm kararı veya yeni onay değildir.'
+        elif d['scope'] not in ('user',f'project:{project_id}'):
             card+='\nBu başka projenin kaynaklı örneğidir; bu görev için tercih veya onay değildir.'
         if transfer:
             card='Uyarlama önerisi ['+', '.join(d['domains'])+' → '+', '.join(transfer['target_domains'])+']: '+d['statement']+'\nAktarılabilecek özellik: '+', '.join(transfer['aspects'])+'. '+transfer['reason']+' Yeni alanda kullanıcı onayı değildir; renk/font gibi belirtilmeyen özellikleri çıkarma.\nKaynak: bilgi/'+d['id']+'.md'
@@ -325,10 +356,13 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansi
             if d.get(key): card+='\n'+label+': '+d[key]
         for e in d.get('examples',[]):card+=f"\nÖrnek ({e['acceptance']}; {e['role']}): {e['path']}"
         for r in d.get('relations',[]):
-            if r['target'] in valid_ids:card+=f"\nİlişki: {r['target']} — {r['reason']}"
+            if r['target'] in valid_ids:
+                card+=f"\nİlişki: {r['target']}"
+                if not routed_preference:card+=' — '+r['reason']
             else:diagnostics.append(f"{d['id']}:relation_unverified:{r['target']}")
         if len('\n\n'.join(cards+[card]))>max(0,budget):continue
         cards.append(card)
+        if d['id'] in sibling_only_ids: sibling_count += 1
         if transfer:transfers.append(dict(transfer,source_record=d))
         else:selected.append(d)
         versions[f"bilgi/{d['id']}.md"]=revision
