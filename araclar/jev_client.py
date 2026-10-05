@@ -340,6 +340,19 @@ def _cache_path(vault, digest):
     return path
 
 
+def _payload_text(value):
+    """Visit every serialized text field, including nested request metadata."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _payload_text(key)
+            yield from _payload_text(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _payload_text(item)
+
+
 def evaluate(vault, query, candidates, *, source_versions=None, scope='user', facets=None, transport=None, purpose='retrieval', state=None, question_type=None, choice_criteria=None, timeout=None):
     started=time.monotonic()
     result=dict(mode='off',scores={},facet_scores={},distributions={},facet_distributions={},choices={},diagnostics=[],degraded=False,cache_hit=False,
@@ -387,6 +400,8 @@ def evaluate(vault, query, candidates, *, source_versions=None, scope='user', fa
         question_types={key:body['questions'][key]['type'] for key in question_map}
         question_options={key:tuple(body['questions'][key]['criteria']) for key in question_map if question_types[key]=='choice'}
         if len(json.dumps(body,ensure_ascii=False))>config['max_input_chars']: raise ValueError('budget_exceeded')
+        if any(contains_secret(value) or private(value) for value in _payload_text(body)):
+            raise ValueError('private_input')
         env=_environment(config); endpoint=_resolve_endpoint(config,env)
         fingerprint=dict(body=body,scope=scope,sources=source_versions or {},endpoint=endpoint,
                          provider=config['provider'],rubric_version=config['rubric_version'],purpose=purpose,purpose_version=1,probability_adapter=4,schema=2)
