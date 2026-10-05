@@ -34,6 +34,18 @@ class Hooks(unittest.TestCase):
         self.assertFalse((self.vault / h.INBOX / '.state').exists())
         self.assertFalse(list((self.vault / h.INBOX).glob('*.pending.json')))
 
+    def test_cli_installation_version_is_content_free(self):
+        payload = dict(session_id='synthetic', turn_id='synthetic',
+                       hook_event_name='Stop')
+        proc = subprocess.run([sys.executable, str(Path(h.__file__).resolve()),
+            '--vault', str(self.vault), 'hook'], input=json.dumps(payload),
+            text=True, capture_output=True, check=True,
+            env=dict(os.environ, HAFIZA_ISCI='0', CODEX_WORKER='0'))
+        version = json.loads(proc.stderr)
+        self.assertEqual(set(version), {'installation_version'})
+        self.assertRegex(version['installation_version'], r'^araclar-sha256:[0-9a-f]{64}$')
+        self.assertEqual(json.loads(proc.stdout), {})
+
     def test_prompt_package_can_opt_out_of_remote_advisor(self):
         import gorev_baglam, jev_client
         seen = []

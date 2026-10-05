@@ -19,6 +19,28 @@ class HistoryTests(unittest.TestCase):
             dict(role='user', quote='Current task')]}
         self.assertEqual(client_hafiza.previous_user(source, 'Current task'), 'Earlier task')
 
+    def test_previous_turn_ignores_t30_metadata_and_expansions(self):
+        source = {'entries': [dict(role='user', quote=quote) for quote in (
+            'Earlier task',
+            '[Cross-session delivery notice] Synthetic delivery.',
+            '[Image: source: /tmp/synthetic.png]',
+            '# /loop — schedule a recurring or self-paced prompt\nForeign body',
+            'Current task')]}
+        self.assertEqual(client_hafiza.previous_user(source, 'Current task'), 'Earlier task')
+
+    def test_delivery_receipt_contains_content_free_installation_version(self):
+        import fayda_olc
+        with tempfile.TemporaryDirectory() as directory:
+            vault = Path(directory).resolve()
+            lesson = dict(id='synthetic', version=1)
+            with patch.object(fayda_olc.h, 'load_jsonl', return_value=[lesson]):
+                receipt = fayda_olc._record_delivery(vault, client='claude', session_id='synthetic',
+                    package_id='synthetic', delivered_lessons=[lesson], turn_id='synthetic')
+            self.assertRegex(receipt['installation_version'], r'^araclar-sha256:[0-9a-f]{64}$')
+            self.assertNotIn('prompt', receipt)
+            self.assertNotIn('content', receipt)
+            self.assertEqual(json.loads((vault / fayda_olc.DELIVERIES).read_text()), receipt)
+
     def test_previous_turn_attached_secret_still_blocks_context(self):
         source = {'entries': [dict(role='user', quote='Earlier task\n'
             '<task-notification>api_key=sk-' + 'x' * 48 + '</task-notification>'),

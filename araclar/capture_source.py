@@ -9,7 +9,35 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
+def installation_version():
+    """Identify installed runtime bytes, including uncommitted installations.
+
+    Only Python engine files enter the digest; no vault or prompt data is read.
+    """
+    root = Path(__file__).resolve().parent
+    result = hashlib.sha256()
+    for path in sorted(root.glob('*.py')):
+        if path.name.startswith('test_'):
+            continue
+        result.update(path.name.encode('utf-8') + b'\0')
+        result.update(hashlib.sha256(path.read_bytes()).digest())
+    return 'araclar-sha256:' + result.hexdigest()
+
+
 def clean_user(text):
+    # A slash invocation and its expansion are separate native user records
+    # (T30 A:2938/2939). Only explicit arguments carry user intent.
+    if re.search(r'<command-(?:message|name|args)(?=\s|/?>)', text, re.I):
+        text = '\n'.join(re.findall(
+            r'<command-args(?:\s[^>]*)?>(.*?)</command-args\s*>',
+            text, flags=re.I | re.S))
+    elif re.match(r'^\s*# /[\w-]+ — ', text):
+        return ''
+    # Native delivery notices have no closing delimiter; their body ends at
+    # the line boundary. Image source placeholders contain metadata only.
+    text = re.sub(r'^\s*\[Cross-session delivery notice\][^\n]*', '', text,
+                  flags=re.M)
+    text = re.sub(r'\[Image: source: [^\]\n]*\]', '', text)
     # Native harness messages may accompany a real user request. Remove only
     # their bodies, wherever they occur; an unclosed wrapper consumes the tail.
     # cross-session-message is a peer's text, never the host user's request.

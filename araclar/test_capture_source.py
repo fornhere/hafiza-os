@@ -11,6 +11,50 @@ import konsolidasyon as k
 import codex_hafiza as hook
 
 
+class NativeOriginTests(unittest.TestCase):
+    def test_t30_delivery_and_attachment_metadata(self):
+        # T30 B:9318/9330/9481/9545 and B:9445, synthetic bodies.
+        for metadata in (
+                '[Cross-session delivery notice] Synthetic delivery status.',
+                '[Image: source: /tmp/synthetic.png]',
+                '[Image: source: /tmp/synthetic.png]\n[Image: source: /tmp/other.png]'):
+            with self.subTest(metadata=metadata):
+                self.assertEqual(c.clean_user(metadata), '')
+                self.assertEqual(c.clean_user(metadata + '\nReal task'), 'Real task')
+                self.assertEqual(c.clean_user('Real task\n' + metadata), 'Real task')
+        self.assertEqual(c.clean_user('Real task'), 'Real task')
+
+    def test_t30_command_invocation_and_expanded_body(self):
+        # Invocation A:2938, separate expansion A:2939.
+        body = '# /loop — schedule a recurring or self-paced prompt\nForeign task body'
+        wrappers = '<command-message>loop</command-message><command-name>/loop</command-name>'
+        for args in ('', 'Real task'):
+            with self.subTest(args=args):
+                self.assertEqual(c.clean_user(wrappers + '<command-args>' + args
+                                 + '</command-args>\n' + body), args)
+        self.assertEqual(c.clean_user(wrappers), '')
+        self.assertEqual(c.clean_user(body), '')
+        self.assertEqual(c.clean_user(wrappers + '<command-args>unclosed'), '')
+        self.assertEqual(c.clean_user(wrappers + '<command-args>Real task'
+                         '<task-notification>Foreign</task-notification></command-args>'), 'Real task')
+
+    def test_installation_version_only_reads_runtime_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            script = root / 'capture_source.py'
+            script.write_text('runtime')
+            (root / 'test_private.py').write_text('private fixture')
+            (root / 'private.md').write_text('private prompt')
+            with patch.object(c, '__file__', str(script)):
+                first = c.installation_version()
+                self.assertRegex(first, r'^araclar-sha256:[0-9a-f]{64}$')
+                (root / 'private.md').write_text('different private prompt')
+                (root / 'test_private.py').write_text('different fixture')
+                self.assertEqual(first, c.installation_version())
+                script.write_text('new runtime')
+                self.assertNotEqual(first, c.installation_version())
+
+
 class HeartbeatThreads(unittest.TestCase):
     def check_config(self, content, expected):
         with tempfile.TemporaryDirectory() as directory:

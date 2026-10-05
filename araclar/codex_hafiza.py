@@ -508,6 +508,9 @@ def main():
             # remains serialized so a late prompt cannot overwrite newer turn state.
             with exclusive_lock(state_dir / (key(data.get('session_id'), 'state') + '.lock')):
                 result = hook(args.vault, data)
+    if args.cmd != 'hook' or not worker_run(data):
+        from capture_source import installation_version
+        print(json.dumps({'installation_version': installation_version()}), file=sys.stderr)
     print(json.dumps(result, ensure_ascii=False))
 
 
