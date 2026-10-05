@@ -217,13 +217,13 @@ def status(vault):
                 coverage_note='Unreviewed means no current source assessment; it does not imply a missing decision.')
 
 
-def retrieve(vault,query,project_id=None,budget=1800):
+def retrieve(vault,query,project_id=None,budget=1800,context=None):
     from jev_retrieval import knowledge
     return knowledge(vault, query, project_id, budget,
-                     lambda: _retrieve_local(vault, query, project_id, budget))
+                     lambda: _retrieve_local(vault, query, project_id, budget, context=context))
 
 
-def _retrieve_local(vault,query,project_id=None,budget=1800):
+def _retrieve_local(vault,query,project_id=None,budget=1800,context=None):
     from gorev_baglam import content_words,word_match
     def note_match(left,right):
         # Apostrophized three-letter names keep their Turkish case ending after
@@ -240,6 +240,9 @@ def _retrieve_local(vault,query,project_id=None,budget=1800):
     project_words=content_words(' '.join(str(value) for project in config(vault).get('projects', [])
                                         for value in [project.get('id', ''), *project.get('aliases', [])]))
     generic=domain_words|project_words|content_words('bilgi yöntem kaynak gerçek konu')
+    # The previous user turn can complete, never start, a topical match.
+    extra={t for t in (content_words(context) if context else set())-terms
+           if not any(note_match(t,u) for u in terms) and not any(note_match(t,w) for w in generic)}
     ranked=[]
     # These are candidate analogies, never new user preferences. Only features
     # actually named in the reviewed statement can support a transfer.
@@ -270,7 +273,9 @@ def _retrieve_local(vault,query,project_id=None,budget=1800):
         if scoped and (len(topical)<2 if project_id is None else
                        not requested.intersection(d['domains']) or not topical):continue
         # Without an explicit domain, require two independent topical anchors.
-        if not requested and 'all' not in d['domains'] and len(topical)<2:continue
+        if not requested and 'all' not in d['domains'] and len(topical)<2:
+            completed={min(w for w in words if note_match(t,w)) for t in extra if any(note_match(t,w) for w in words)}
+            if not topical or len(topical|completed)<2:continue
         if len(terms)>8 and not topical and not transfer:continue
         score=len(matched)
         if score or transfer:ranked.append((score,d,transfer))

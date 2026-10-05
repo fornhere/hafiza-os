@@ -96,6 +96,18 @@ class Hooks(unittest.TestCase):
         self.assertEqual(len(config['hooks']['Stop']), 1)
         self.assertNotEqual(config['hooks']['Stop'][0]['hooks'][0]['command'], command)
 
+    def test_codex_raw_legacy_upgrade(self):
+        path = self.home / '.codex/hooks.json'; path.parent.mkdir(parents=True)
+        command = 'python3 ' + str(self.vault / 'araclar/codex_hafiza.py') + ' hook'
+        legacy = {'hooks': [{'type': 'command', 'command': command, 'timeout': 10}]}
+        path.write_text(json.dumps({'hooks': {'SessionStart': [legacy], 'UserPromptSubmit': [legacy]}}), encoding='utf-8')
+        with self.assertRaises(ValueError): self.install(apply=True)
+        self.install(migrate_legacy=True, apply=True)
+        config = json.loads(path.read_text(encoding='utf-8'))
+        for event in ('SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt'):
+            self.assertEqual(len(config['hooks'][event]), 1)
+            self.assertNotEqual(config['hooks'][event][0]['hooks'][0]['command'], command)
+
     def test_quoted_claude_legacy_all_events_preserve_wrappers_and_settings(self):
         path = self.home / '.claude/settings.json'
         path.parent.mkdir(parents=True)

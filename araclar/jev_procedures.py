@@ -1,7 +1,9 @@
 """Bounded optional procedure routing. Suggestions never replace mandatory rules."""
+from datetime import datetime, timezone
 from pathlib import Path
 import hashlib
 import json
+import os
 import jev_client
 import hafiza
 
@@ -16,6 +18,27 @@ PROCEDURES = (
  ('agent-setup','ENTEGRASYONLAR.md','Claude, Codex veya Antigravity için hafıza bağlantısı, hook kurulumu, istemci ayarı veya hook arızası teşhisi.'),
  ('agenda','zihin/açık-işler.md','Kullanıcı gündemi, ne kaldığını veya devam edilecek işleri soruyorsa güncel kaynaklı açık işleri seç. Başka net göreve eski işler ekleme.'),
 )
+
+def _shadow_log(vault, query, evaluation, by_id):
+    """Gölge modda 'açık olsaydı' önerisini ölçüm için kaydet; istem metni yazılmaz."""
+    scores=evaluation.get('scores',{})
+    row=dict(request_hash=hashlib.sha256(query.encode()).hexdigest(),
+             would_suggest=sorted((i for i in by_id if scores.get(i,0)>=1.5),key=lambda i:(-scores[i],i))[:3],
+             scores={i:scores[i] for i in sorted(scores) if i in by_id},
+             degraded=bool(evaluation.get('degraded')),diagnostics=list(evaluation.get('diagnostics',[])),
+             latency_ms=evaluation.get('latency_ms'),cache_hit=bool(evaluation.get('cache_hit')))
+    try:
+        folder=Path(vault)/'.cache/jev-golge'
+        if folder.is_symlink(): raise OSError('unsafe_shadow_log')
+        folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+        os.chmod(folder,0o700)
+        target=folder/('yontem-'+datetime.now(timezone.utc).date().isoformat()+'.jsonl')
+        if target.is_symlink(): raise OSError('unsafe_shadow_log')
+        descriptor=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_APPEND|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_BINARY',0),0o600)
+        try: os.write(descriptor,(json.dumps(row,ensure_ascii=False)+'\n').encode())
+        finally: os.close(descriptor)
+    except OSError:
+        pass
 
 def route(vault, query, budget=1000):
     vault=Path(vault)
@@ -44,6 +67,7 @@ def route(vault, query, budget=1000):
     except (ValueError,OSError):unchanged=False
     if not unchanged:
         result['diagnostics']=['source_changed'];return result
+    if evaluation.get('mode')=='shadow':_shadow_log(vault,query,evaluation,by_id)
     if evaluation.get('degraded') or evaluation.get('mode')!='on':return result
     scores=evaluation.get('scores',{})
     order=sorted((i for i in by_id if scores.get(i,0)>=1.5),key=lambda i:(-scores[i],i))

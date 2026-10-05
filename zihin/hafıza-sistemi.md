@@ -96,9 +96,11 @@ python3 araclar/hafiza.py --vault . promote ADAY_KIMLIGI \
 python3 araclar/hafiza.py --vault . sync
 python3 araclar/hafiza.py --vault . sync --apply
 
-# Göreve özel, kaynaklı ve bütçeli bağlam paketi
+# Göreve özel, kaynaklı ve bütçeli bağlam paketi. Kapsam verilmezse proje,
+# sorudaki proje adından ya da çalışma klasöründen bulunur (--scope ile ezilir).
+# Notlar incelenmiş bilgi/ kayıtlarından gelir; ham Markdown yalnız --uri ile taranır.
 python3 araclar/hafiza.py --vault . context "Nasıl cevap isteniyor?" \
-  --scope user --limit 5 --char-budget 1200
+  --limit 5 --char-budget 1200
 
 # Regresyon ve drift denetimi
 python3 araclar/hafiza.py --vault . eval

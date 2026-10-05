@@ -163,7 +163,15 @@ def run(vault, argv, apply=False, timeout=60, limit=10):
             material = packet(vault, ident)
             prompt = INSTRUCTIONS + '\nBEGIN_UNTRUSTED_PACKET\n' + json.dumps(material, ensure_ascii=False) + '\nEND_UNTRUSTED_PACKET\n'
             decision = invoke(argv, prompt, timeout)
-            results.append(review(vault, ident, decision, apply=True))
+            result = review(vault, ident, decision, apply=True)
+            results.append(result)
+            if result['status'] == 'record':
+                try:
+                    from oturum_gorunumu import render
+                    render(vault, apply=True)
+                except Exception as error:
+                    diagnostic = str(error) if isinstance(error, SourceError) else type(error).__name__
+                    print('oturum_gorunumu render başarısız: ' + diagnostic, file=sys.stderr)
         except Exception as error:
             diagnostic = str(error) if isinstance(error, SourceError) else 'reviewer_failed'
             # A newer Stop can supersede the item while the reviewer runs; that is not a failure.

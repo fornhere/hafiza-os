@@ -86,7 +86,9 @@ def plan_hooks(vault, agent, home, codex_home, remove, migrate, shell):
             # Compare whole generated strings only; wrappers remain user-owned.
             legacy |= {shlex.quote(command) for command in legacy}
         elif client == 'codex':
-            legacy = {'python3 ' + shlex.quote(str(vault / 'araclar/codex_hafiza.py')) + ' hook'}
+            script = str(vault / 'araclar/codex_hafiza.py')
+            # codex_kur.py wrote the path both raw and shlex.quote'd.
+            legacy = {'python3 ' + path + ' hook' for path in (script, shlex.quote(script))}
         for event, groups in list(hooks.items()):
             if not nested:
                 continue

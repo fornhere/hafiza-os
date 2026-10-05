@@ -874,4 +874,213 @@ class ServiceTests(unittest.TestCase):
                                       'credential_source': 'file'})
             carrier.assert_not_called()
 
+
+class SecurityRegressionTests(unittest.TestCase):
+    """Kol güvenlik: sentetik yollar, sahte taşıyıcılar; ağ veya gerçek anahtar yok."""
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.environment = patch.dict(os.environ, {}, clear=True)
+        self.environment.start(); self.addCleanup(self.environment.stop)
+
+    def _vault(self, path):
+        (path / 'araclar').mkdir(parents=True)
+        (path / 'agents.md').write_text('personal')
+        (path / 'araclar/hafiza.py').write_text('')
+        return path
+
+    def _args(self, vault, config_home, **kw):
+        return argparse.Namespace(**dict(dict(
+            agent='codex', vault=str(vault), client_home=str(self.root / 'client'),
+            config_home=str(config_home), revision='a' * 40, non_interactive=True, skip_obsidian=True,
+            configure_services=False, verify_services=False), **kw))
+
+    # 1. Hesaplanan anahtar dizini kasanın içine düşmemeli.
+    def test_computed_credential_dir_inside_vault_rejected_on_first_install(self):
+        vault = self.root / 'x' / 'hafiza-os'  # config_home/hafiza-os/<hash> == vault/<hash>
+        with patch.object(b, 'download', side_effect=AssertionError('no network')), \
+             patch.object(b, 'get_json', side_effect=AssertionError('no network')), \
+             self.assertRaisesRegex(ValueError, 'kasasının dışında'):
+            b.run(self._args(vault, self.root / 'x'))
+        self.assertFalse(vault.exists())
+
+    def test_computed_credential_dir_inside_vault_rejected_on_configure_services(self):
+        vault = self._vault(self.root / 'x' / 'hafiza-os')
+        before = sorted(str(p) for p in self.root.rglob('*'))
+        args = self._args(vault, self.root / 'x', non_interactive=False, configure_services=True)
+        with patch.object(b, 'ask_mem0', side_effect=AssertionError('asked before path check')), \
+             patch.object(b, 'ask_jev', side_effect=AssertionError('asked before path check')), \
+             patch.object(b.sys.stdin, 'isatty', return_value=True), \
+             self.assertRaisesRegex(ValueError, 'kasasının dışında'):
+            b.run(args)
+        # optional_services itself (configure_services entry) also refuses before prompting.
+        with patch.object(b, 'ask_mem0', side_effect=AssertionError('asked')), \
+             self.assertRaisesRegex(ValueError, 'kasasının dışında'):
+            b.configure_services(vault, self.root / 'x')
+        self.assertEqual(sorted(str(p) for p in self.root.rglob('*')), before)
+
+    def test_credential_target_checked_after_resolution(self):
+        vault = self._vault(self.root / 'kasa')
+        with self.assertRaises(ValueError):
+            b._outside_vault(vault / 'a' / '..' / 'b' / 'mem0.json', vault)
+        with self.assertRaises(ValueError):
+            b._outside_vault(vault, vault)
+        outside = self.root / 'secrets' / 'hafiza-os' / 'x' / 'mem0.json'
+        self.assertEqual(b._outside_vault(outside, vault), outside)
+        # Legitimate separate config home keeps working.
+        self.assertFalse(b._credential_dir(vault, self.root / 'secrets').is_relative_to(vault))
+
+    # 3. Sağlayıcı değişince eski sağlayıcının resmi host'u yeni anahtarı almamalı.
+    def test_provider_switch_moves_only_default_endpoint_and_keeps_local_gateway(self):
+        for old, expected in (({}, ('https://ai-gateway.vercel.sh/typesafe', 'typesafe-ai/jev')),
+                              ({'base_url': 'http://127.0.0.1:18760', 'model': 'jev-latest'},
+                               ('http://127.0.0.1:18760', 'typesafe-ai/jev')),
+                              ({'base_url': 'http://127.0.0.1:18760', 'model': 'benim-modelim'},
+                               ('http://127.0.0.1:18760', 'benim-modelim'))):
+            with self.subTest(old=old):
+                vault = self._vault(self.root / ('switch-' + str(len(list(self.root.iterdir())))))
+                ref = vault / 'komuta/jev.json'; ref.parent.mkdir()
+                ref.write_text(json.dumps(dict({'mode': 'shadow', 'provider': 'typesafe'}, **old)))
+                with patch.object(b, 'ask_mem0', return_value=('', 'ben')), \
+                     patch.object(b, 'ask_jev', return_value=('new-gateway-key', 'vercel')), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    b.configure_services(vault, self.root / 'secrets')
+                config = json.loads(ref.read_text())
+                self.assertEqual((config['base_url'], config['model'], config['provider']), expected + ('vercel',))
+                jev_client._resolve_endpoint(jev_client._read_config(vault), {})
+
+    def test_verification_never_sends_key_to_unbound_remote_host(self):
+        for extra, env in (({'base_url': 'https://evil.example/jev'}, None),
+                           ({'provider': 'vercel', 'base_url': 'https://api.typesafe.ai'}, None),
+                           ({'base_url': 'http://ai-gateway.example'}, None),
+                           ({}, 'TYPESAFE_BASE_URL=https://evil.example\nTYPESAFE_API_KEY=file-key\n')):
+            with self.subTest(extra=extra, env=bool(env)):
+                vault = self._vault(self.root / ('bound-' + str(len(list(self.root.iterdir())))))
+                config = dict({'mode': 'shadow', 'provider': 'typesafe'}, **extra)
+                if env:
+                    env_file = self.root / (vault.name + '.env'); env_file.write_text(env)
+                    config['env_file'] = str(env_file)
+                (vault / 'komuta').mkdir(); (vault / 'komuta/jev.json').write_text(json.dumps(config))
+                os.environ['TYPESAFE_API_KEY'] = os.environ['AI_GATEWAY_API_KEY'] = 'env-key'
+                with patch.object(jev_client, '_transport', side_effect=AssertionError('key sent')) as carrier:
+                    result = b._jev_verification(vault)
+                carrier.assert_not_called()
+                self.assertEqual(result['status'], 'verification_failed:endpoint_invalid')
+
+    def test_verification_allows_explicit_custom_https_endpoint(self):
+        vault = self._vault(self.root / 'custom')
+        (vault / 'komuta').mkdir()
+        (vault / 'komuta/jev.json').write_text(json.dumps(
+            {'mode': 'shadow', 'provider': 'typesafe', 'base_url': 'https://jev.example/v1', 'allow_custom_endpoint': True}))
+        os.environ['TYPESAFE_API_KEY'] = 'env-key'
+        ok = lambda url, body, key, timeout: {'answers': {q: {'type': 'score', 'score': 1.0} for q in body['questions']}}
+        with patch.object(jev_client, '_transport', side_effect=ok) as carrier:
+            self.assertEqual(b._jev_verification(vault)['status'], 'verified')
+        self.assertEqual(carrier.call_args.args[0], 'https://jev.example/v1/systemone')
+
+    def test_verification_fails_closed_with_old_unbound_client(self):
+        vault = self._vault(self.root / 'old-client')
+        (vault / 'komuta').mkdir()
+        (vault / 'komuta/jev.json').write_text(json.dumps({'mode': 'shadow', 'provider': 'typesafe'}))
+        os.environ['TYPESAFE_API_KEY'] = 'env-key'
+        old = type('OldClient', (), {name: staticmethod(getattr(jev_client, name))
+                                     for name in ('_read_config', '_environment', '_scores', '_transport')})
+        old._endpoint = staticmethod(lambda base: base + '/v1/systemone')
+        with patch.object(b, '_service_clients', return_value=(hafiza, old)), \
+             patch.object(old, '_transport', side_effect=AssertionError('key sent')):
+            self.assertEqual(b._jev_verification(vault)['status'], 'verification_failed:endpoint_invalid')
+
+    # 4. private_json: önce ACL, sonra içerik; her hata yolunda dosya kalmaz.
+    def _windows(self, *, whoami='host\\user', fail_run=None, observe=None):
+        """Sahte Windows: whoami/icacls taklidi; fail_run=n -> n. icacls çağrısı hata verir."""
+        calls = []
+        def output(*args, **kwargs):
+            if isinstance(whoami, BaseException): raise whoami
+            return whoami
+        def run(command, **kwargs):
+            calls.append(command)
+            if observe: observe(Path(command[1]))
+            if fail_run == len(calls):
+                return b.subprocess.CompletedProcess(command, 5)
+            if fail_run == -len(calls):
+                raise FileNotFoundError('icacls')
+            return b.subprocess.CompletedProcess(command, 0)
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.object(b, '_is_windows', return_value=True))
+        stack.enter_context(patch.object(b.subprocess, 'check_output', side_effect=output))
+        stack.enter_context(patch.object(b.subprocess, 'run', side_effect=run))
+        return stack, calls
+
+    def test_private_json_windows_secret_born_in_private_staging_before_content(self):
+        target = self.root / 'keys' / 'jev.json'
+        seen = []
+        stack, calls = self._windows(observe=lambda item: seen.append(
+            (item.is_dir(), item.stat().st_size if item.is_file() else None, target.exists())))
+        with stack:
+            b.private_json(target, {'TYPESAFE_API_KEY': 'synthetic-secret'})
+        staging, file = Path(calls[0][1]), Path(calls[1][1])
+        self.assertEqual(calls[0][2:], ['/inheritance:r', '/grant:r', 'host\\user:(OI)(CI)F'])
+        self.assertEqual(calls[1][2:], ['/inheritance:r', '/grant:r', 'host\\user:F'])
+        self.assertEqual(file.parent, staging)
+        self.assertEqual(staging.parent, target.parent)
+        # Dizin boşken, dosya henüz 0 bayt iken ve hedef henüz yokken daraltılır.
+        self.assertEqual(seen, [(True, None, False), (False, 0, False)])
+        self.assertEqual(json.loads(target.read_text(encoding='utf-8')), {'TYPESAFE_API_KEY': 'synthetic-secret'})
+        self.assertEqual(sorted(p.name for p in target.parent.iterdir()), ['jev.json'])
+
+    def test_private_json_windows_failures_leave_no_file_or_staging(self):
+        cases = {
+            'whoami_missing': dict(whoami=FileNotFoundError('whoami')),
+            'whoami_failed': dict(whoami=b.subprocess.CalledProcessError(1, 'whoami')),
+            'whoami_empty': dict(whoami=''),
+            'whoami_bad': dict(whoami='host\\user:(OI)'),
+            'icacls_dir_failed': dict(fail_run=1),
+            'icacls_dir_missing': dict(fail_run=-1),
+            'icacls_file_failed': dict(fail_run=2),
+            'icacls_file_missing': dict(fail_run=-2),
+        }
+        for name, options in cases.items():
+            with self.subTest(name):
+                folder = self.root / ('acl-' + name); folder.mkdir()
+                target = folder / 'secret.json'
+                stack, _ = self._windows(**options)
+                with stack, self.assertRaisesRegex(ValueError, 'Windows erişimi sınırlandırılamadı'):
+                    b.private_json(target, {'MEM0_API_KEY': 'synthetic-secret'})
+                self.assertEqual(list(folder.iterdir()), [])
+        for name, failure in (('fsync', patch.object(b.os, 'fsync', side_effect=OSError('disk'))),
+                              ('rename', patch.object(b.os, 'rename', side_effect=OSError('busy')))):
+            with self.subTest(name):
+                folder = self.root / ('io-' + name); folder.mkdir()
+                stack, _ = self._windows()
+                with stack, failure, self.assertRaises(OSError):
+                    b.private_json(folder / 'secret.json', {'MEM0_API_KEY': 'synthetic-secret'})
+                self.assertEqual(list(folder.iterdir()), [])
+
+    def test_private_json_windows_never_overwrites_existing_target(self):
+        target = self.root / 'existing.json'; target.write_text('keep')
+        stack, calls = self._windows()
+        with stack, self.assertRaises(FileExistsError):
+            b.private_json(target, {'k': 'v'})
+        self.assertEqual(target.read_text(), 'keep'); self.assertEqual(calls, [])
+
+    def test_private_json_write_or_serialization_failure_leaves_no_file(self):
+        target = self.root / 'fail' / 'secret.json'
+        with patch.object(b.os, 'fsync', side_effect=OSError('disk')), self.assertRaises(OSError):
+            b.private_json(target, {'MEM0_API_KEY': 'synthetic-secret'})
+        self.assertFalse(target.exists())
+        with self.assertRaises(TypeError):
+            b.private_json(target, {'bad': object()})
+        self.assertFalse(target.exists())
+
+    @unittest.skipIf(os.name != 'nt', 'Windows ACL yalnız Windows üzerinde doğrulanır')
+    def test_private_json_real_windows_acl(self):
+        target = self.root / 'win' / 'secret.json'
+        b.private_json(target, {'k': 'v'})
+        identity = b.subprocess.check_output(['whoami'], text=True).strip()
+        acl = b.subprocess.run(['icacls', str(target)], capture_output=True, text=True).stdout
+        self.assertIn(identity.lower(), acl.lower())
+        self.assertNotIn('(I)', acl)  # inheritance removed
+        self.assertEqual(json.loads(target.read_text()), {'k': 'v'})
+
+
 if __name__=='__main__':unittest.main()
