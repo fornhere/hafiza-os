@@ -354,6 +354,15 @@ def worker_run(data, environ=os.environ):
 
 
 def hook(vault, data):
+    from hook_health import record_failure
+    try:
+        return _hook(vault, data)
+    except Exception as error:
+        record_failure(vault, 'codex', data.get('hook_event_name') if isinstance(data, dict) else None, error)
+        raise
+
+
+def _hook(vault, data):
     if worker_run(data):
         return {}
     event = data.get('hook_event_name')
@@ -450,7 +459,8 @@ def hook(vault, data):
         missing = len(list(queue.glob('*.pending.json')))
         receipt_count = sum(p.name != 'README.md' for p in queue.glob('*.md'))
         from hafiza_saglik import notice
-        health_notice = notice(vault)
+        from hook_health import warning
+        health_notice = warning(vault) + '\n' + notice(vault)
         context = (f'Hafıza kasası: {vault}. Önce {vault}/agents.md oku; '
             'son oturum özeti için şu komutu çalıştır. '
             f'Bütçeli okuma ({"PowerShell" if os.name == "nt" else "POSIX shell"}):\n'
@@ -498,16 +508,32 @@ def main():
         with exclusive_lock(queue / '.lock'):
             result = record(args.vault, data['session_id'], data['turn_id'], data['summary'], data['semantic_candidates'], data.get('source_snapshot'))
     else:
-        data = json.load(sys.stdin)
-        if worker_run(data):
+        data = {}
+        called = False
+        try:
+            data = json.load(sys.stdin)
+            if not isinstance(data, dict):
+                data = {}
+                raise ValueError('hook_payload_invalid')
+            if worker_run(data):
+                result = {}
+            else:
+                state_dir = args.vault / INBOX / '.state'
+                state_dir.mkdir(parents=True, exist_ok=True)
+                # Serialize only this session; health uses a separate nonblocking lock.
+                with exclusive_lock(state_dir / (key(data.get('session_id'), 'state') + '.lock')):
+                    called = True
+                    result = hook(args.vault, data)
+        except Exception as error:
+            from hook_health import record_failure, error_code, warning
+            if not called:
+                record_failure(args.vault, 'codex', data.get('hook_event_name'), error)
+            print(json.dumps({'status': 'unready', 'diagnostic': error_code(error) or 'source_validation_failed'}), file=sys.stderr)
             result = {}
-        else:
-            state_dir = args.vault / INBOX / '.state'
-            state_dir.mkdir(parents=True, exist_ok=True)
-            # Different sessions can progress independently. Same-session ordering
-            # remains serialized so a late prompt cannot overwrite newer turn state.
-            with exclusive_lock(state_dir / (key(data.get('session_id'), 'state') + '.lock')):
-                result = hook(args.vault, data)
+            if data.get('hook_event_name') == 'SessionStart':
+                line = warning(args.vault)
+                if line:
+                    result = {'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': line}}
     if args.cmd != 'hook' or not worker_run(data):
         from capture_source import installation_version
         print(json.dumps({'installation_version': installation_version()}), file=sys.stderr)

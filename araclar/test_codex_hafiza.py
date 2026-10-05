@@ -46,6 +46,45 @@ class Hooks(unittest.TestCase):
         self.assertRegex(version['installation_version'], r'^araclar-sha256:[0-9a-f]{64}$')
         self.assertEqual(json.loads(proc.stdout), {})
 
+    def test_runtime_health_record_and_session_start_warning(self):
+        import hook_health
+        from client_transcripts import SourceError
+        with patch.object(h, '_hook', side_effect=SourceError('registry_limit')):
+            with self.assertRaises(SourceError):
+                self.event('Stop')
+        self.assertEqual(hook_health.read_events(self.vault)[0]['client'], 'codex')
+        self.assertIn('oturum yakalama 1 kez başarısız (registry_limit)',
+                      self.event('SessionStart')['hookSpecificOutput']['additionalContext'])
+
+    def test_cli_runtime_failure_is_nonblocking_and_content_free(self):
+        import io
+        import hook_health
+        data = dict(session_id='synthetic', hook_event_name='Stop', prompt='NEVER STORE THIS')
+        with patch.object(h, '_hook', side_effect=RuntimeError('NEVER STORE THIS')), \
+             patch.object(sys, 'argv', ['codex_hafiza.py', '--vault', str(self.vault), 'hook']), \
+             patch.object(sys, 'stdin', io.StringIO(json.dumps(data))), \
+             patch.object(sys, 'stdout', io.StringIO()) as out, \
+             patch.object(sys, 'stderr', io.StringIO()) as err:
+            h.main()
+            self.assertEqual(json.loads(out.getvalue()), {})
+            self.assertNotIn('NEVER STORE THIS', err.getvalue())
+        self.assertEqual(hook_health.read_events(self.vault)[0]['error_code'], 'hook_runtime_failed')
+
+    def test_cli_failed_opening_still_shows_warning(self):
+        import io
+        import hook_health
+        from client_transcripts import SourceError
+        hook_health.record_failure(self.vault, 'codex', 'Stop', SourceError('registry_limit'))
+        data = dict(session_id='synthetic', hook_event_name='SessionStart')
+        with patch.object(h, '_hook', side_effect=RuntimeError('NEVER STORE THIS')), \
+             patch.object(sys, 'argv', ['codex_hafiza.py', '--vault', str(self.vault), 'hook']), \
+             patch.object(sys, 'stdin', io.StringIO(json.dumps(data))), \
+             patch.object(sys, 'stdout', io.StringIO()) as out, \
+             patch.object(sys, 'stderr', io.StringIO()):
+            h.main()
+            self.assertIn('oturum yakalama 1 kez başarısız (registry_limit)',
+                          json.loads(out.getvalue())['hookSpecificOutput']['additionalContext'])
+
     def test_prompt_package_can_opt_out_of_remote_advisor(self):
         import gorev_baglam, jev_client
         seen = []

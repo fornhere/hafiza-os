@@ -18,7 +18,7 @@ class WeeklyReport(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.vault = Path(self.tmp.name)
+        self.vault = Path(self.tmp.name).resolve()
 
     def write_rows(self, name, items):
         path = self.vault / name
@@ -32,6 +32,17 @@ class WeeklyReport(unittest.TestCase):
         path.write_text(content, encoding='utf-8')
         os.utime(path, (NOW.timestamp(), NOW.timestamp()))
         return path
+
+    def test_hook_runtime_summary_in_weekly_report(self):
+        import hafiza_rapor
+        from hook_health import record_failure
+        from client_transcripts import SourceError
+        record_failure(self.vault, 'claude', 'Stop', SourceError('registry_limit'))
+        data = hafiza_rapor.report(self.vault)
+        self.assertEqual(data['hook_runtime']['stop_failures'], 1)
+        rendered = hafiza_rapor.markdown(data)
+        self.assertIn('registry_limit=1', rendered)
+        self.assertIn('son 256 olay', rendered)
 
     def test_all_sections_use_real_field_names_and_window(self):
         recent = (NOW - dt.timedelta(days=1)).isoformat()

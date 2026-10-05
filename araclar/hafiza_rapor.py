@@ -158,8 +158,10 @@ def report(vault, days=7, now=None):
         health = status(vault)['operational_health']['status']
     except Exception:
         health = 'unknown'
+    from hook_health import summary
+    hooks = summary(vault, now, hours=days * 24)
     return {
-        'generated_at': now.isoformat(), 'days': days, 'period_start': cutoff.isoformat(),
+        'hook_runtime': hooks, 'generated_at': now.isoformat(), 'days': days, 'period_start': cutoff.isoformat(),
         'capture': capture, 'candidates': candidate_report, 'catalog': catalog_report,
         'context': context, 'tasks': tasks, 'health': {'status': health},
     }
@@ -190,6 +192,10 @@ def markdown(data):
              '- Durum: ' + ', '.join(f'{k}={v}' for k, v in tasks['status'].items()),
              f"- Dönemde kapanan: {tasks['closed_in_period']}", '', '## Sağlık', '',
              f"- İşletim durumu: {data['health']['status']}", '']
+    hooks = data.get('hook_runtime', {})
+    lines.extend([f"- Hook hataları (dönem): {hooks.get('total', 0)}; Stop başarısızlığı: {hooks.get('stop_failures', 0)}",
+                  '- Hook hata kodları: ' + (', '.join(f'{c}={n}' for c, n in hooks.get('by_code', {}).items()) or 'yok'),
+                  '- Hook olay saklama sınırı: son 256 olay; toplamlar bu sınırla kısıtlıdır.', ''])
     return '\n'.join(lines)
 
 

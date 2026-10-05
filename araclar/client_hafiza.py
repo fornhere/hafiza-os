@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Native hooks: bounded context and successful Stop registration only.
 
-Every runtime failure is a safe stderr diagnostic and a non-blocking response.
+Runtime failures produce bounded, content-free health events and safe stderr
+diagnostics; CLI responses remain non-blocking.
 The hook never starts a reviewer. Optional Jev task advice follows its config.
 """
 import argparse
@@ -17,6 +18,7 @@ from client_transcripts import CLIENTS, SourceError, parse, private, sha, source
 from client_sessions import atomic, enforce_policy, locked, load, recall, register, source_with_policy
 from hafiza import contains_secret
 from capture_source import clean_user, installation_version
+from hook_health import record_failure, warning
 
 MAX_INPUT = 128000
 CONTEXT_BUDGET = 3500
@@ -198,7 +200,16 @@ def context(vault, client, session, source, payload, event):
 
 
 def hook(vault, client, event, payload):
-    output, status = _hook(vault, client, event, payload)
+    try:
+        output, status = _hook(vault, client, event, payload)
+    except Exception as error:
+        record_failure(vault, client, event, error)
+        raise
+    if client == 'claude' and event == 'SessionStart' and status.get('status') != 'worker_skipped':
+        line = warning(vault)
+        if line:
+            specific = output.setdefault('hookSpecificOutput', {'hookEventName': event})
+            specific['additionalContext'] = line + '\n' + specific.get('additionalContext', '')
     return output, dict(status, installation_version=installation_version())
 
 
@@ -273,13 +284,22 @@ def main():
     parser.add_argument('--event', required=True)
     args = parser.parse_args()
     output = {}
+    called = False
     try:
         raw = sys.stdin.buffer.read(MAX_INPUT + 1)
         if len(raw) > MAX_INPUT:
             raise SourceError('hook_input_too_large')
-        output, status = hook(args.vault, args.client, args.event, strict_json(raw))
+        payload = strict_json(raw)
+        called = True
+        output, status = hook(args.vault, args.client, args.event, payload)
         print(json.dumps(status), file=sys.stderr)
     except Exception as error:
+        if not called:
+            record_failure(args.vault, args.client, args.event, error)
+        if args.client == 'claude' and args.event == 'SessionStart':
+            line = warning(args.vault)
+            if line:
+                output = {'hookSpecificOutput': {'hookEventName': args.event, 'additionalContext': line}}
         diagnostic = str(error) if isinstance(error, SourceError) else 'hook_validation_failed'
         print(json.dumps({'status': 'unready', 'diagnostic': diagnostic, 'installation_version': installation_version()}), file=sys.stderr)
     print(json.dumps(output, ensure_ascii=False))

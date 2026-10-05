@@ -134,5 +134,96 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(seen_modes, ['off'])
 
 
+class HookHealthTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.vault = Path(self.temp.name).resolve()
+
+    def fail(self, event='Stop', error=None):
+        from client_transcripts import SourceError
+        error = error or SourceError('registry_limit')
+        with patch.object(client_hafiza, '_hook', side_effect=error):
+            with self.assertRaises(type(error)):
+                client_hafiza.hook(self.vault, 'claude', event, {'prompt': 'NEVER STORE THIS'})
+
+    def opening(self):
+        with patch.object(client_hafiza, '_hook', return_value=({}, {'status': 'context_suppressed'})):
+            return client_hafiza.hook(self.vault, 'claude', 'SessionStart', {})[0]
+
+    def test_registry_failure_records_only_health_fields_and_warns(self):
+        import hook_health as health
+        self.fail()
+        row = health.read_events(self.vault)[0]
+        self.assertEqual(set(row), {'at', 'client', 'event_type', 'error_code', 'installation_version'})
+        self.assertEqual(row['error_code'], 'registry_limit')
+        self.assertEqual(row['event_type'], 'Stop')
+        self.assertNotIn('NEVER STORE THIS', (self.vault / health.PATH).read_text())
+        text = self.opening()['hookSpecificOutput']['additionalContext']
+        self.assertIn('oturum yakalama 1 kez başarısız (registry_limit)', text)
+        self.assertLessEqual(len(text), 241)
+
+    def test_expected_source_rejections_do_not_warn(self):
+        import hook_health as health
+        from client_transcripts import SourceError
+        for code in ('privacy_blocked', 'source_validation_failed', 'source_identity_mismatch', 'threshold_or_incomplete'):
+            self.fail(error=SourceError(code))
+        self.assertEqual(health.read_events(self.vault), [])
+        self.assertEqual(self.opening(), {})
+
+    def test_prompt_threshold_and_24_hour_window(self):
+        import datetime as dt
+        import hook_health as health
+        for _ in range(2):
+            self.fail('UserPromptSubmit')
+        self.assertEqual(self.opening(), {})
+        self.fail('UserPromptSubmit')
+        self.assertIn('hook çalışması 3 kez', self.opening()['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(health.warning(self.vault, dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=25)), '')
+
+    def test_telemetry_io_failure_keeps_original_hook_error(self):
+        import hook_health as health
+        with patch.object(health, 'exclusive_lock', side_effect=OSError('NEVER STORE THIS')):
+            self.fail()
+        self.assertEqual(health.read_events(self.vault), [])
+        with patch.object(health, 'read_events', side_effect=OSError('NEVER STORE THIS')):
+            self.assertEqual(health.warning(self.vault), '')
+
+    def test_cli_failed_opening_still_shows_warning(self):
+        import io
+        import sys
+        from client_transcripts import SourceError
+        payload = {'session_id': 'synthetic', 'prompt': 'NEVER STORE THIS'}
+        with patch.object(client_hafiza, '_hook', side_effect=SourceError('registry_limit')), \
+             patch.object(sys, 'argv', ['client_hafiza.py', '--vault', str(self.vault),
+                                      '--client', 'claude', '--event', 'SessionStart']), \
+             patch.object(sys, 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(payload).encode()))), \
+             patch.object(sys, 'stdout', io.StringIO()) as out, \
+             patch.object(sys, 'stderr', io.StringIO()) as err:
+            # This is the third same-code opening failure, with no normal context.
+            self.fail('SessionStart')
+            self.fail('SessionStart')
+            self.assertEqual(client_hafiza.main(), 0)
+            self.assertIn('hook çalışması 3 kez başarısız (registry_limit)',
+                          json.loads(out.getvalue())['hookSpecificOutput']['additionalContext'])
+            self.assertNotIn('NEVER STORE THIS', err.getvalue())
+
+    def test_retention_and_nonblocking_lock(self):
+        import hook_health as health
+        from client_transcripts import SourceError
+        from platform_lock import exclusive_lock
+        health.record_failure(self.vault, 'claude', 'Stop', SourceError('registry_limit'))
+        path = self.vault / health.PATH
+        original = path.read_bytes()
+        with exclusive_lock(path.with_suffix('.lock')):
+            health.record_failure(self.vault, 'claude', 'Stop', SourceError('registry_limit'))
+        self.assertEqual(path.read_bytes(), original)
+        with patch.object(health, 'MAX_EVENTS', 3):
+            for _ in range(6):
+                health.record_failure(self.vault, 'claude', 'Stop', RuntimeError('NEVER STORE THIS'))
+            self.assertEqual(len(health.read_events(self.vault)), 3)
+        self.assertNotIn('NEVER STORE THIS', path.read_text())
+
+
 if __name__ == '__main__':
     unittest.main()
