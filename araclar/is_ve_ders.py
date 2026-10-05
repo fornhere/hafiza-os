@@ -112,6 +112,47 @@ def put(vault, kind, data):
     return data
 
 
+@h.serialized
+def put_project_state(vault, state, receipt_id, source_path, transcript_source):
+    """One project card, append-only assistant reports; never verify an outcome."""
+    try:
+        projects = json.loads((vault / 'komuta/gorev-baglam.json').read_text(encoding='utf-8'))['projects']
+        matches = [p for p in projects if p.get('id') == state['project_id']
+                   and p.get('status', 'active') == 'active']
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        matches = []
+    if state['project_id'] is None or len(matches) != 1:
+        # No transcript text or guessed project name in diagnostics.
+        events = h.load_jsonl(vault / h.EVENT_PATH)
+        if not any(e.get('event_type') == 'project_state.skipped' and
+                   e.get('receipt_id') == receipt_id for e in events):
+            h._append_jsonl(vault / h.EVENT_PATH, dict(event_type='project_state.skipped',
+                receipt_id=receipt_id, reason='project_unresolved',
+                at=dt.datetime.now(dt.timezone.utc).isoformat(), actor='client-review'))
+        return {'status': 'skipped', 'reason': 'project_unresolved'}
+    ident = 'project-state:' + state['project_id']
+    rows = h.load_jsonl(vault / TASKS)
+    previous_report = next((r for r in rows if r.get('id') == ident and
+                            r.get('receipt_id') == receipt_id), None)
+    if previous_report:
+        if (previous_report.get('assistant_report') != state or
+                previous_report.get('transcript_source') != transcript_source or
+                previous_report.get('source_content_hash') !=
+                h.statement_hash(h.source_file(vault, source_path).read_text())):
+            raise ValueError('project_state_receipt_conflict')
+        return previous_report
+    previous = latest(vault, 'task').get(ident)
+    data = dict(id=ident, project_id=state['project_id'],
+        title=state['project_id'] + ' — oturum durum kartı', status='needs_confirmation',
+        source_path=source_path, evidence=state['evidence']['quote'], actor='client-review',
+        assertion_kind='assistant_report', assistant_report=state, verified_outcome=None,
+        next_step=state['next_step'], receipt_id=receipt_id, transcript_source=transcript_source)
+    if previous:
+        data['expected_version'] = previous['version']
+    # Lock already held: use the existing writer's full validation without relocking.
+    return put.__wrapped__(vault, 'task', data)
+
+
 def brief(vault, limit=3, include_stale=False):
     """Verified current work; status views may also request dated confirmation hints."""
     result = []
@@ -121,7 +162,8 @@ def brief(vault, limit=3, include_stale=False):
     except (OSError, ValueError, KeyError, TypeError):
         archived = set()
     for row in latest(vault, 'task').values():
-        if row['status'] not in ('active', 'blocked'): continue
+        report = row.get('assertion_kind') == 'assistant_report'
+        if row['status'] not in ('active', 'blocked') and not (report and include_stale): continue
         if row.get('project_id') in archived: continue
         try:
             source = h.source_file(vault, row['source_path'])
@@ -129,6 +171,11 @@ def brief(vault, limit=3, include_stale=False):
             if row.get('evidence', '') not in content: continue
             if row.get('source_content_hash') and row['source_content_hash'] != h.statement_hash(content): continue
         except (OSError, ValueError): continue
+        if report:
+            # Session close reports are dated hints, never verified current work.
+            result.append(dict(row, confirmation_required=True,
+                               last_verified=str(row.get('updated_at', ''))[:10] or None))
+            continue
         verified = row.get('last_verified')
         if not verified: continue
         try:
@@ -139,7 +186,9 @@ def brief(vault, limit=3, include_stale=False):
         # Derived visibility only: an old confirmation never becomes a current action.
         result.append(dict(row, status='needs_confirmation', confirmation_required=True) if stale else row)
     result.sort(key=lambda r: r['updated_at'], reverse=True)
-    return sorted(result, key=lambda r: r.get('confirmation_required', False))[:limit]
+    # Fresh session reports compete by recency; only old confirmations sink.
+    return sorted(result, key=lambda r: r.get('confirmation_required', False)
+                  and r.get('assertion_kind') != 'assistant_report')[:limit]
 
 
 @h.serialized
