@@ -22,7 +22,7 @@ class SessionViews(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.vault = Path(self.temp.name) / 'vault'
+        self.vault = Path(self.temp.name).resolve() / 'vault'
         self.root = self.vault / views.INBOX
         self.root.mkdir(parents=True)
         (self.root / '.state').mkdir()
