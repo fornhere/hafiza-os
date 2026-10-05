@@ -244,6 +244,10 @@
     {
       "path": "araclar/test_jev_procedures.py",
       "mode": "shared"
+    },
+    {
+      "path": "araclar/hook_health.py",
+      "mode": "shared"
     }
   ]
 }

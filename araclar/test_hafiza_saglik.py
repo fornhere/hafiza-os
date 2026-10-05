@@ -8,7 +8,7 @@ from hafiza_saglik import snapshot, RUN_PATH
 class HealthTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
-        self.v = Path(self.tmp.name)
+        self.v = Path(self.tmp.name).resolve()
         self.now = dt.datetime(2026, 9, 15, 12, tzinfo=dt.timezone.utc)
     def write(self, path, value):
         p=self.v/path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps(value))
@@ -17,6 +17,19 @@ class HealthTests(unittest.TestCase):
         self.write(Path('günlük/hafıza-makbuzları/2026-audit-test.json'), dict(at=(self.now-dt.timedelta(hours=hours)).isoformat(),payload=p))
     def scan(self, hours=0, **extra):
         data=dict(status='complete',finished_at=(self.now-dt.timedelta(hours=hours)).isoformat(),parse_errors=0);data.update(extra);self.write(RUN_PATH,data)
+    def test_hook_health_summary_has_no_content(self):
+        from hook_health import record_failure
+        from client_transcripts import SourceError
+        record_failure(self.v, 'claude', 'Stop', SourceError('registry_limit'))
+        record_failure(self.v, 'codex', 'UserPromptSubmit', RuntimeError('NEVER STORE THIS'))
+        report = snapshot(self.v)
+        self.assertEqual(report['hook_runtime']['total'], 2)
+        self.assertEqual(report['hook_runtime']['stop_failures'], 1)
+        self.assertEqual(report['hook_runtime']['by_code']['registry_limit'], 1)
+        self.assertEqual('failed', report['status'])
+        self.assertNotIn('NEVER STORE THIS', json.dumps(report))
+        self.assertIn('registry_limit=1', next(c['reason'] for c in report['checks'] if c['name'] == 'hook_runtime'))
+
     def test_missing_is_unknown_not_healthy(self):
         self.assertEqual('unknown',snapshot(self.v,self.now)['status'])
     def test_recent_generation_does_not_refresh_old_audit(self):

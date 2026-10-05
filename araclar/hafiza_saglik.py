@@ -157,10 +157,16 @@ def snapshot(vault, now=None):
         f"İncelenmemiş aday: {candidate_queue['pending_count']}; engellenen aday: {candidate_queue['blocked_count']}. " +
         ('İncelenmemiş aday 24 saatten eski.' if any(seconds > 86400 for seconds in pending_ages)
          else 'Engellenen adaylar tek başına sağlık hatası sayılmaz.'))
+    from hook_health import summary
+    hooks = summary(vault, now)
+    add('hook_runtime', 'failed' if hooks['total'] or hooks['read_failed'] else 'healthy',
+        'Hook sağlık kaydı okunamadı.' if hooks['read_failed'] else
+        f"Son 24 saatte hook hatası: {hooks['total']}; Stop başarısızlığı: {hooks['stop_failures']}. " +
+        ', '.join(f'{code}={count}' for code, count in hooks['by_code'].items()))
     rank = {'healthy': 0, 'unknown': 1, 'stale': 2, 'failed': 3}
     return dict(status=max((c['status'] for c in checks), key=rank.get),
                 checked_at=now.isoformat(), checks=checks, catalog=catalog,
-                candidate_queue=candidate_queue,
+                candidate_queue=candidate_queue, hook_runtime=hooks,
                 limits='Veri hattı kontrolüdür; modelin uygulaması ve kullanıcı faydası ayrı ölçülür.')
 
 
@@ -169,7 +175,7 @@ def notice(vault):
     # Static catalog diagnostics belong in status, not every task's opening.
     # Runtime scan/scheduler/remote audit failures keep their existing notices.
     checks = [c for c in report['checks']
-              if c['name'] not in {'catalog_validation', 'retrieval_eligibility'}]
+              if c['name'] not in {'catalog_validation', 'retrieval_eligibility', 'hook_runtime'}]
     rank = {'healthy': 0, 'unknown': 1, 'stale': 2, 'failed': 3}
     status = max((c['status'] for c in checks), key=rank.get, default='healthy')
     if status == 'healthy':
