@@ -33,6 +33,7 @@ def query_words(text):
     text = re.sub(r"(?<=\w)['’](?=\w)", '', text)
     return re.findall(r"[^\W_]+", text)
 
+@functools.lru_cache(maxsize=65536)
 def inflected(base, word):
     if base == word: return True
     if len(base) < 4: return False
@@ -77,12 +78,18 @@ _SYNONYMS = ({'kapak', 'thumbnail'}, {'sunum', 'slayt', 'slideshow'},
 def content_words(text):
     return set(query_words(text)) - _STOPWORDS
 
+@functools.lru_cache(maxsize=8192)
+def _synonym_groups(word):
+    # Membership depends on one word, not every term/record pair. Keep the
+    # same directional inflection rule as the original nested comparisons.
+    return frozenset(index for index, group in enumerate(_SYNONYMS)
+                     if any(inflected(term, word) for term in group))
+
 # Pure function of two words; ranking calls it terms x words x records times.
 @functools.lru_cache(maxsize=65536)
 def word_match(left, right):
     if inflected(left, right) or inflected(right, left): return True
-    return any(any(inflected(term, left) for term in group) and
-               any(inflected(term, right) for term in group) for group in _SYNONYMS)
+    return bool(_synonym_groups(left) & _synonym_groups(right))
 
 def search_text(row):
     """Statement plus optional reviewed search keys; keys never enter context text."""
