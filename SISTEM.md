@@ -87,7 +87,14 @@ kurulum, kayıt, yayın veya dışa veri aktarımı yetkisi değildir.
 Kurucu zamanlayıcı kurmaz. İsteğe bağlı saatlik bakımın sözleşmesi
 [komuta/hafıza-konsolidasyonu.md](komuta/hafıza-konsolidasyonu.md) içindedir:
 Codex için `sessions --scheduled`; native istemci kuyruğu için ayrıca
-`client_review.py` gerekir. Projede bulunmayan kişisel zamanlayıcı kurulmuş
+`client_review.py` gerekir. `sessions --scheduled`, tarama öncesinde native
+oturum kayıt kökündeki sayı `MAX_REGISTRY` sınırının %70'ini aşarsa mevcut
+kilitli `client_sessions.maintain(apply=True)` bakımını çalıştırır. Yalnız
+`superseded` kayıtlar makbuzla arşivlenir; sonuç zamanlanmış tarama makbuzuna
+eklenir. Manuel `sessions` bu bakımı çalıştırmaz. `status.client_registry`
+aktif/arşiv sayısı, doluluk oranı ve sayımın tamlığını gösterir; %90 üstünde
+status ve hook-health aynı `registry_capacity_high` uyarısını verir.
+Projede bulunmayan kişisel zamanlayıcı kurulmuş
 sayılmaz. Son başarılı tarama/audit zamanı `status.operational_health` ile
 kontrol edilir. Uygulama kapalıyken kesintisiz çalışma garantisi yoktur.
 Gelişim deneyleri ayrıca yapılandırılır; çekirdek yakalama için önkoşul değildir.

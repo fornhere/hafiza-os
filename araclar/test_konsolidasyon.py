@@ -250,7 +250,7 @@ class ScheduledScan(unittest.TestCase):
     def test_manual_scan_never_refreshes_scheduled_receipt(self):
         from hafiza_saglik import RUN_PATH
         with tempfile.TemporaryDirectory() as directory:
-            vault=Path(directory)
+            vault=Path(directory).resolve()
             since=dt.datetime(1970,1,1,tzinfo=dt.timezone.utc)
             target=vault/RUN_PATH.with_name('scheduled-scan.json')
             k.scan_with_receipt(vault,vault/'empty',since)
@@ -260,5 +260,109 @@ class ScheduledScan(unittest.TestCase):
             self.assertEqual(since.isoformat(),json.loads(before)['since'])
             k.scan_with_receipt(vault,vault/'empty',since)
             self.assertEqual(before,target.read_bytes())
+
+
+class AutomaticRegistryMaintenance(unittest.TestCase):
+    def setUp(self):
+        import client_sessions
+        self.client = client_sessions
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.vault = Path(directory.name).resolve()
+        _, self.state = self.client.layout(self.vault)
+        self.since = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+        limit = patch.object(self.client, 'MAX_REGISTRY', 10)
+        limit.start(); self.addCleanup(limit.stop)
+
+    def fill(self, statuses):
+        for index, status in enumerate(statuses):
+            self.client.atomic(self.state / (f'{index:064x}.json'),
+                               dict(status=status, created_ns=1))
+
+    def run_scan(self, scheduled=True):
+        k.scan_with_receipt(self.vault, self.vault / 'empty', self.since, scheduled)
+        from hafiza_saglik import RUN_PATH
+        return json.loads((self.vault / RUN_PATH).read_text())
+
+    def test_below_and_exact_threshold_do_not_call_maintenance(self):
+        for count in (6, 7):
+            with self.subTest(count=count):
+                self.fill(['superseded'] * count)
+                with patch.object(self.client, 'maintain') as maintain:
+                    receipt = self.run_scan()
+                maintain.assert_not_called()
+                self.assertEqual('below_threshold', receipt['client_registry_maintenance']['status'])
+                self.assertEqual(0, self.client.registry_status(self.vault)['archive_count'])
+
+    def test_above_threshold_archives_only_terminals_and_is_idempotent(self):
+        self.fill(['superseded'] * 5 + ['pending', 'record', 'skip'])
+        original = (self.state / (f'{0:064x}.json')).read_bytes()
+        with patch.object(self.client, 'maintain', wraps=self.client.maintain) as maintain:
+            receipt = self.run_scan()
+        maintain.assert_called_once_with(self.vault, apply=True)
+        result = receipt['client_registry_maintenance']
+        self.assertEqual(5, len(result['receipts']))
+        self.assertEqual(8, result['before']['active_count'])
+        self.assertEqual(3, result['after']['active_count'])
+        move = next(r for r in result['receipts'] if r['source'] == f'{0:064x}.json')
+        destination = self.state / move['destination']
+        self.assertEqual(original, destination.read_bytes())
+        self.assertEqual(move, json.loads(destination.with_suffix('.move.json').read_text()))
+        from hafiza_saglik import RUN_PATH
+        scheduled = json.loads((self.vault / RUN_PATH.with_name('scheduled-scan.json')).read_text())
+        self.assertEqual(result, scheduled['client_registry_maintenance'])
+        registry = k.status(self.vault)['client_registry']
+        self.assertEqual(5, registry['archive_count'])
+        self.assertEqual(0.3, registry['occupancy_ratio'])
+        before = {p: p.read_bytes() for p in self.state.rglob('*.json')}
+        with patch.object(self.client, 'maintain') as maintain:
+            self.run_scan()
+        maintain.assert_not_called()
+        self.assertEqual(before, {p: p.read_bytes() for p in self.state.rglob('*.json')})
+
+    def test_manual_scan_does_not_maintain_above_threshold(self):
+        self.fill(['superseded'] * 8)
+        with patch.object(self.client, 'maintain') as maintain:
+            receipt = self.run_scan(scheduled=False)
+        maintain.assert_not_called()
+        self.assertNotIn('client_registry_maintenance', receipt)
+        self.assertEqual(8, self.client.registry_status(self.vault)['active_count'])
+
+    def test_repeated_maintenance_above_threshold_has_no_new_moves(self):
+        self.fill(['superseded'] + ['pending'] * 8)
+        self.assertEqual(1, len(self.run_scan()['client_registry_maintenance']['receipts']))
+        before = {p: p.read_bytes() for p in self.state.rglob('*.json')}
+        with patch.object(self.client, 'maintain', wraps=self.client.maintain) as maintain:
+            receipt = self.run_scan()
+        maintain.assert_called_once_with(self.vault, apply=True)
+        self.assertEqual([], receipt['client_registry_maintenance']['receipts'])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.state.rglob('*.json')})
+
+    def test_status_and_hook_warning_use_same_capacity(self):
+        from hook_health import warning
+        self.fill(['pending'] * 9)
+        self.assertEqual('', warning(self.vault))
+        self.fill(['pending'] * 10)
+        before = {p: p.read_bytes() for p in self.vault.rglob('*') if p.is_file()}
+        report = k.status(self.vault)
+        registry = report['client_registry']
+        self.assertEqual(10, registry['active_count'])
+        self.assertEqual(0, registry['archive_count'])
+        self.assertEqual(1.0, registry['occupancy_ratio'])
+        check = next(c for c in report['operational_health']['checks'] if c['name'] == 'client_registry')
+        self.assertEqual('stale', check['status'])
+        self.assertEqual(warning(self.vault), check['reason'])
+        self.assertIn('registry_capacity_high', check['reason'])
+        self.assertEqual(before, {p: p.read_bytes() for p in self.vault.rglob('*') if p.is_file()})
+
+    def test_failed_maintenance_marks_scheduled_run_failed(self):
+        self.fill(['superseded'] * 8)
+        with patch.object(self.client, 'maintain', side_effect=OSError('fixture')):
+            with self.assertRaises(OSError):
+                self.run_scan()
+        from hafiza_saglik import RUN_PATH
+        receipt = json.loads((self.vault / RUN_PATH.with_name('scheduled-scan.json')).read_text())
+        self.assertEqual('failed', receipt['status'])
+        self.assertEqual('OSError', receipt['error_code'])
 
 if __name__ == '__main__': unittest.main()

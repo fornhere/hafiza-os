@@ -313,6 +313,55 @@ def maintain(vault, apply=False):
         return {'status': 'archived' if apply else 'dry_run', 'receipts': receipts}
 
 
+def registry_status(vault):
+    """Read-only counts; active means files in the root, including terminals.
+
+    Do not call layout/scan here: status must neither create nor archive files.
+    Counts are lower bounds when directory enumeration reaches its hard budget.
+    """
+    state = safe_path(Path(vault) / INBOX / '.state')
+    counts = dict(active_count=0, archive_count=0, complete=True)
+
+    def count(directory, key, budget):
+        if not directory.exists():
+            return
+        with os.scandir(safe_path(directory)) as entries:
+            for entry in entries:
+                if budget[0] <= 0:
+                    counts['complete'] = False
+                    break
+                budget[0] -= 1
+                if re.fullmatch(r'[0-9a-f]{64}\.json', entry.name):
+                    safe_path(directory / entry.name)
+                    if entry.is_file(follow_symlinks=False):
+                        counts[key] += 1
+
+    count(state, 'active_count', [MAX_STATE_ENTRIES])
+    archive = safe_path(state / 'arsiv')
+    if archive.exists():
+        budget = [MAX_STATE_ENTRIES]
+        with os.scandir(archive) as months:
+            for index, month in enumerate(months):
+                if index >= 1200 or budget[0] <= 0:
+                    counts['complete'] = False
+                    break
+                if re.fullmatch(r'\d{4}-\d{2}', month.name):
+                    count(archive / month.name, 'archive_count', budget)
+    counts.update(max_registry=MAX_REGISTRY,
+                  occupancy_ratio=counts['active_count'] / MAX_REGISTRY,
+                  maintenance_due=counts['active_count'] * 10 > MAX_REGISTRY * 7,
+                  capacity_warning=counts['active_count'] * 10 > MAX_REGISTRY * 9)
+    return counts
+
+
+def registry_warning(data):
+    if not data['capacity_warning']:
+        return ''
+    return (f"Hafıza uyarısı: oturum kayıt dizini %{data['occupancy_ratio'] * 100:.1f} dolu "
+            '(registry_capacity_high); bakım: python3 araclar/client_sessions.py '
+            '--vault /KASA maintain --apply')
+
+
 def restore_archive(vault, relative):
     with locked(vault) as (_, state):
         parts = Path(relative).parts

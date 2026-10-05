@@ -404,12 +404,33 @@ Restore kilit altında makbuz hash'ini denetler ve aktif dosyayı ezmez.
 Restore idempotenttir; sonraki normal scan superseded kaydı yeniden arşivler.
 Eski skip kayıtları otomatik taşınmaz; aynı incelenmiş kaydın replay davranışı
 korunur. Arşivleme başarısızsa tanı üretilir ve terminal kayıt atlanır.
-1000 aktif kayıt yumuşak sınırdır: aşım stderr üzerinde JSON tanısıyla devam
+5000 aktif kayıt (`MAX_REGISTRY`) yumuşak sınırdır: aşım stderr üzerinde JSON tanısıyla devam
 eder. Güvenlik için tek tarama en fazla 20000 kök girdisini inceler; bu
 sınırda `registry_scan_limit_partial` tanısı verir ve bulunanlarla devam eder.
 Eksik kalan aktif kayıtlar için dizin bakımı gerekir; bu sonuç tam tarama değildir.
 Tanılar: `registry_limit_terminal_skipped`, `registry_active_limit_exceeded`,
 `registry_archive_failed`. Arşivde snapshot araması en fazla 1200 ay girdisidir.
+
+Mevcut saatlik bakım rolünün `konsolidasyon.py --vault /KASA sessions
+--scheduled` adımı, taramadan önce aktif kökteki kayıt sayısı `MAX_REGISTRY`'nin
+%70'ini **aşınca** `client_sessions.maintain(apply=True)` çağırır (varsayılan
+sınırda 3501 kayıt). Kökte bekleyen terminal kayıtlar da bu sayıya dahildir.
+Bakım mevcut kilidi ve taşıma makbuzlarını kullanır; tekrarlı koşu yeni taşıma
+üretmez. Önce/sonra sayıları ve taşıma makbuzları mevcut
+`gelen-kutusu/codex-oturumları/.state/scheduled-scan.json` tarama makbuzunun
+`client_registry_maintenance` alanına yazılır. Bakım hatası bu koşuyu failed
+yapar. Manuel tarama ve salt okunur status bakım yapmaz.
+
+`status.client_registry` aktif/arşiv sayısını, `occupancy_ratio` oranını
+(0–1; sınır aşılırsa 1 üstü), `max_registry` sınırını ve `complete` bayrağını
+gösterir. Aktif kök ve arşiv sayımı ayrı ayrı en fazla 20000 girdidir;
+arşivde en fazla 1200 ay girdisi gezilir. Kısmi sayımlar alt sınırdır.
+%90 üstünde (4501 kayıt) `operational_health` stale kapasite uyarısı ve
+hook-health aynı `registry_capacity_high` metnini üretir. Hook hatası
+varsa hook-health önce mevcut hata uyarısını gösterir. Kapasite uyarısı
+uydurulmuş bir hook hata olayı yazmaz. Elle bakım için yukarıdaki
+`client_sessions.py --vault /KASA maintain --apply` komutu kullanılır.
+Yeni servis/timer kurulmaz; bu kodun varlığı canlı zamanlayıcı kanıtı değildir.
 
 Kaçırılmış Claude Stop için ana `~/.claude/projects/*/*.jsonl` dosyalarının
 mtime penceresini aktif ve arşiv kayıtlarının `(client, session)` kimliğiyle

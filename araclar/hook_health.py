@@ -113,7 +113,11 @@ def warning(vault, now=None):
     eligible = {code: count for code, count in data['by_code'].items()
                 if count >= 3 or code in data['stop_by_code']}
     if not eligible:
-        return ''
+        try:
+            from client_sessions import registry_status, registry_warning
+            return registry_warning(registry_status(vault))[:240]
+        except Exception:
+            return ''  # Capacity telemetry must never interrupt a hook.
     code = max(eligible, key=lambda c: (c in data['stop_by_code'], eligible[c], c))
     count = data['stop_by_code'].get(code, eligible[code])
     activity = 'oturum yakalama' if code in data['stop_by_code'] else 'hook çalışması'
