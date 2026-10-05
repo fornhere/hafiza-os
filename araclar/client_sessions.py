@@ -4,6 +4,7 @@ No canonical or Mem0 writes. Public operations serialize on the portable lock.
 Persistent state contains identifiers and hashes only; review packets are ephemeral.
 """
 import argparse
+from datetime import datetime, timezone
 from contextlib import contextmanager
 import json
 import os
@@ -19,6 +20,8 @@ from client_transcripts import CLIENTS, SourceError, parse, private, read_bytes,
 
 INBOX = Path('gelen-kutusu/ajan-oturumlari')
 MAX_REGISTRY = 5000
+# Hard bound includes policies and junk; archive contents are never enumerated.
+MAX_STATE_ENTRIES = 20000
 MAX_PACKET = 24000
 
 
@@ -201,10 +204,28 @@ def _validate(item, state):
     return source
 
 
+def registry_path(state, ident):
+    target = state / (ident + '.json')
+    if target.exists():
+        return target
+    archive = safe_path(state / 'arsiv')
+    if archive.exists():
+        with os.scandir(archive) as months:
+            for index, month in enumerate(months):
+                if index >= 1200:
+                    registry_diagnostic('registry_archive_lookup_limit')
+                    raise SourceError('archive_lookup_limit')
+                if re.fullmatch(r'\d{4}-\d{2}', month.name):
+                    candidate = safe_path(archive / month.name / target.name)
+                    if candidate.exists():
+                        return candidate
+    return target
+
+
 def _item(state, ident):
     if not isinstance(ident, str) or len(ident) != 64 or any(c not in '0123456789abcdef' for c in ident):
         raise SourceError('invalid_snapshot_id')
-    return load(state / (ident + '.json'))
+    return load(registry_path(state, ident))
 
 
 def register(vault, client, session, path, payload):
@@ -217,7 +238,7 @@ def register(vault, client, session, path, payload):
         if source['count'] <= 5:
             return {'status': 'below_threshold', 'count': source['count']}
         ident = snapshot_id(source)
-        target = state / (ident + '.json')
+        target = registry_path(state, ident)
         if target.exists():
             item = load(target)
             _validate(item, state)
@@ -235,15 +256,110 @@ def register(vault, client, session, path, payload):
         return {'status': 'pending', 'id': ident}
 
 
+def registry_diagnostic(reason):
+    print(json.dumps({'diagnostic': reason}, ensure_ascii=False), file=sys.stderr)
+
+
+def archive_terminal(state, path, item, apply=True):
+    """Caller holds the state lock. A durable intent receipt precedes atomic rename.
+
+    The receipt plus the byte-identical archived file also supports undo after a
+    crash between receipt creation and rename. Never overwrite differing bytes.
+    Skip stays active to preserve reviewed replay semantics.
+    """
+    if item.get('status') != 'superseded':
+        return None
+    stamp = item.get('created_ns')
+    if type(stamp) is not int or stamp < 0:
+        raise SourceError('invalid_archive_timestamp')
+    month = datetime.fromtimestamp(stamp / 1e9, timezone.utc).strftime('%Y-%m')
+    destination = safe_path(state / 'arsiv' / month / path.name)
+    receipt_path = safe_path(destination.with_suffix('.move.json'))
+    digest = sha(read_bytes(path, 128000))
+    receipt = dict(version=1, source=path.name,
+                   destination=str(destination.relative_to(state)), sha256=digest)
+    if not apply:
+        return receipt
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and sha(read_bytes(destination, 128000)) != digest:
+        raise SourceError('archive_conflict')
+    if receipt_path.exists() and load(receipt_path) != receipt:
+        raise SourceError('archive_receipt_conflict')
+    atomic(receipt_path, receipt)
+    os.replace(safe_path(path), destination)
+    return receipt
+
+
+def state_entries(state):
+    # scandir's iterator is closed even when the hard limit is hit.
+    with os.scandir(safe_path(state)) as entries:
+        for index, entry in enumerate(entries):
+            if index >= MAX_STATE_ENTRIES:
+                registry_diagnostic('registry_scan_limit_partial')
+                break
+            path = state / entry.name
+            if re.fullmatch(r'[0-9a-f]{64}\.json', entry.name):
+                yield path
+
+
+def maintain(vault, apply=False):
+    """Bounded, locked, idempotent maintenance; defaults to a dry run."""
+    with locked(vault) as (_, state):
+        receipts = []
+        for path in state_entries(state):
+            receipt = archive_terminal(state, path, load(path), apply)
+            if receipt:
+                receipts.append(receipt)
+        return {'status': 'archived' if apply else 'dry_run', 'receipts': receipts}
+
+
+def restore_archive(vault, relative):
+    with locked(vault) as (_, state):
+        parts = Path(relative).parts
+        if (len(parts) != 3 or parts[0] != 'arsiv' or
+                not re.fullmatch(r'\d{4}-\d{2}', parts[1]) or
+                not re.fullmatch(r'[0-9a-f]{64}\.move\.json', parts[2])):
+            raise SourceError('invalid_archive_receipt')
+        receipt = load(safe_path(state / relative))
+        name = parts[2].replace('.move.json', '.json')
+        destination = state / 'arsiv' / parts[1] / name
+        target = state / name
+        if (receipt.get('source') != name or
+                receipt.get('destination') != str(destination.relative_to(state))):
+            raise SourceError('invalid_archive_receipt')
+        if target.exists():
+            if sha(read_bytes(target, 128000)) != receipt['sha256']:
+                raise SourceError('archive_conflict')
+        else:
+            if sha(read_bytes(destination, 128000)) != receipt['sha256']:
+                raise SourceError('archive_mutated')
+            os.replace(safe_path(destination), safe_path(target))
+        return {'status': 'restored', 'id': target.stem}
+
+
 def scan(state):
-    paths = []
-    for index, path in enumerate(state.iterdir()):
-        if index >= MAX_REGISTRY * 4:
-            raise SourceError('registry_limit')
-        if path.suffix == '.json' and not path.name.startswith('context-'):
-            paths.append(path)
-            if len(paths) > MAX_REGISTRY:
-                raise SourceError('registry_limit')
+    """Called under the state lock; terminal history is drained, not counted.
+
+    The soft active limit is diagnostic, never a hook outage. Enumeration and
+    JSON reads remain capped by MAX_STATE_ENTRIES even for hostile directories.
+    """
+    paths, terminal_count = [], 0
+    for path in state_entries(state):
+        try:
+            item = load(path)
+            if item.get('status') == 'superseded':
+                terminal_count += 1
+                try:
+                    archive_terminal(state, path, item)
+                except (ValueError, OSError, KeyError, TypeError, OverflowError):
+                    registry_diagnostic('registry_archive_failed')
+                continue
+        except (ValueError, OSError, KeyError, TypeError):
+            pass  # Existing consumers handle invalid active records.
+        paths.append(path)
+    if len(paths) + terminal_count > MAX_REGISTRY:
+        registry_diagnostic('registry_limit_terminal_skipped' if terminal_count
+                            else 'registry_active_limit_exceeded')
     return sorted(paths)
 
 
@@ -560,12 +676,16 @@ def main():
     parser.add_argument('--vault', type=Path, required=True)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('pending')
+    p = commands.add_parser('maintain'); p.add_argument('--apply', action='store_true')
+    p = commands.add_parser('restore-archive'); p.add_argument('--receipt', required=True)
     p = commands.add_parser('packet'); p.add_argument('--id', required=True)
     p = commands.add_parser('review'); p.add_argument('--id', required=True); p.add_argument('--input-json', required=True, help='JSON object text or path to a UTF-8 JSON decision file'); p.add_argument('--apply', action='store_true')
     commands.add_parser('recall')
     args = parser.parse_args()
     try:
-        if args.command == 'pending': result = pending(args.vault)
+        if args.command == 'maintain': result = maintain(args.vault, args.apply)
+        elif args.command == 'restore-archive': result = restore_archive(args.vault, args.receipt)
+        elif args.command == 'pending': result = pending(args.vault)
         elif args.command == 'packet': result = packet(args.vault, args.id)
         elif args.command == 'recall': result = {'context': recall(args.vault)}
         else:

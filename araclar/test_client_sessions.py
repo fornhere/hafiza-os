@@ -89,6 +89,86 @@ class NativeFixture(unittest.TestCase):
         return json.loads(process.stdout), process.stderr
 
 
+class RegistryMaintenance(NativeFixture):
+    def fill_terminal(self, state, count=1005):
+        for index in range(count):
+            ident = f'{index:064x}'
+            sessions.atomic(state / (ident + '.json'),
+                            {'id': ident, 'status': 'superseded', 'created_ns': 1})
+
+    def test_thousand_terminal_scan_register_recall(self):
+        # Exercise the overflow path at the historical limit; production allows more.
+        limit = patch.object(sessions, 'MAX_REGISTRY', 1000); limit.start(); self.addCleanup(limit.stop)
+        ident = self.register()['id']
+        sessions.review(self.vault, ident, self.judgment(ident), apply=True)
+        _, state = sessions.layout(self.vault)
+        self.fill_terminal(state)
+        with sessions.locked(self.vault), patch('sys.stderr') as stderr:
+            self.assertEqual(sessions.scan(state), [state / (ident + '.json')])
+        self.assertTrue(stderr.write.called)
+        self.assertIn('registry_limit_terminal_skipped',
+                      ''.join(c.args[0] for c in stderr.write.call_args_list))
+        self.fill_terminal(state)
+        with patch('sys.stderr'):
+            self.assertIn('Episodic candidate', sessions.recall(self.vault))
+        self.fill_terminal(state)
+        self.rows = self.claude_rows(7); self.write()
+        with patch('sys.stderr'):
+            self.assertEqual(self.register()['status'], 'pending')
+        self.assertEqual(sessions.maintain(self.vault, apply=True)['receipts'], [])
+        self.assertTrue((state / (ident + '.json')).exists())
+
+    def test_archive_dry_run_idempotence_restore_and_replay(self):
+        old = self.register()['id']
+        self.rows = self.claude_rows(7); self.write()
+        current = self.register()['id']
+        _, state = sessions.layout(self.vault)
+        before = (state / (old + '.json')).read_bytes()
+        dry = sessions.maintain(self.vault)
+        self.assertEqual(dry['status'], 'dry_run')
+        self.assertEqual((state / (old + '.json')).read_bytes(), before)
+        receipt = sessions.maintain(self.vault, apply=True)['receipts'][0]
+        archived = state / receipt['destination']
+        self.assertEqual(archived.read_bytes(), before)
+        self.assertTrue((state / (current + '.json')).exists())
+        self.assertEqual(sessions.maintain(self.vault, apply=True)['receipts'], [])
+        self.rows = self.claude_rows(); self.write()
+        self.assertEqual(self.register(), {'status': 'superseded', 'id': old})
+        relative = str(archived.with_suffix('.move.json').relative_to(state))
+        self.assertEqual(sessions.restore_archive(self.vault, relative)['status'], 'restored')
+        self.assertEqual(sessions.restore_archive(self.vault, relative)['status'], 'restored')
+        self.assertEqual((state / (old + '.json')).read_bytes(), before)
+
+    def test_active_overflow_and_hard_bound_continue_with_diagnostic(self):
+        _, state = sessions.layout(self.vault)
+        for index in range(5):
+            sessions.atomic(state / (f'{index:064x}' + '.json'),
+                            {'status': 'pending', 'created_ns': 1})
+        with sessions.locked(self.vault), patch.object(sessions, 'MAX_REGISTRY', 2), patch('sys.stderr') as stderr:
+            self.assertEqual(len(sessions.scan(state)), 5)
+        self.assertIn('registry_active_limit_exceeded',
+                      ''.join(c.args[0] for c in stderr.write.call_args_list))
+        with sessions.locked(self.vault), patch.object(sessions, 'MAX_STATE_ENTRIES', 3), patch('sys.stderr') as stderr:
+            self.assertLessEqual(len(sessions.scan(state)), 3)
+        self.assertIn('registry_scan_limit_partial',
+                      ''.join(c.args[0] for c in stderr.write.call_args_list))
+
+    def test_skip_and_archive_conflict_remain_untouched(self):
+        ident = self.register()['id']
+        sessions.review(self.vault, ident, self.judgment(ident, record=False), apply=True)
+        _, state = sessions.layout(self.vault)
+        self.fill_terminal(state, 1)
+        terminal = state / ('0' * 64 + '.json')
+        dest = state / 'arsiv/1970-01' / terminal.name
+        dest.parent.mkdir(parents=True)
+        dest.write_text('{}', encoding='utf-8')
+        with sessions.locked(self.vault), patch('sys.stderr') as stderr:
+            self.assertEqual(sessions.scan(state), [state / (ident + '.json')])
+        self.assertTrue(terminal.exists())
+        self.assertTrue(stderr.write.called)
+        self.assertEqual(self.register()['status'], 'skip')
+
+
 class ProjectState(NativeFixture):
     def setUp(self):
         super().setUp()

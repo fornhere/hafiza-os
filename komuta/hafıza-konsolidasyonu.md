@@ -380,3 +380,52 @@ referans ve hash taşınır. Delta önceki önerilere göre yalnız yeni occurre
 referanslarını ve koşul iskeletini ekler; mevcut dersin metnini yeniden yazmaz.
 Talimat dosyası hedefli öneri yalnız “boşluk not edildi, uygulanmadı”dır
 (`application=gap_noted_not_applied`); hedef dosyaya değişiklik uygulamaz.
+
+
+## Native oturum dizini bakımı ve kaçırılmış Stop kurtarma
+
+`client_sessions.py` aktif `.state` kökünü tarar; `arsiv` içeriğini taramaz.
+`superseded` kayıtları kilit altında `.state/arsiv/YYYY-MM/` içine atomik
+rename ile taşır. UTC ayı `created_ns` üzerinden seçilir. `record`, `pending`
+ve `skip` aktif kalır; record makbuzları recall için korunur. Kaynak JSON
+baytları değişmez. Her taşımanın yanında `.move.json` makbuzu (kaynak, hedef,
+SHA-256) önce atomik yazılır; kesilen taşıma tekrar çalıştırılabilir.
+Arşivdeki aynı snapshot yeniden register edilirse mevcut durum döner.
+
+Bakım önizlemesi ve uygulaması (kurulumun araç dizininden):
+
+```sh
+python3 -X utf8 araclar/client_sessions.py --vault /KASA maintain
+python3 -X utf8 araclar/client_sessions.py --vault /KASA maintain --apply
+python3 -X utf8 araclar/client_sessions.py --vault /KASA restore-archive --receipt arsiv/2026-10/SNAPSHOT.move.json
+```
+
+Restore kilit altında makbuz hash'ini denetler ve aktif dosyayı ezmez.
+Restore idempotenttir; sonraki normal scan superseded kaydı yeniden arşivler.
+Eski skip kayıtları otomatik taşınmaz; aynı incelenmiş kaydın replay davranışı
+korunur. Arşivleme başarısızsa tanı üretilir ve terminal kayıt atlanır.
+1000 aktif kayıt yumuşak sınırdır: aşım stderr üzerinde JSON tanısıyla devam
+eder. Güvenlik için tek tarama en fazla 20000 kök girdisini inceler; bu
+sınırda `registry_scan_limit_partial` tanısı verir ve bulunanlarla devam eder.
+Eksik kalan aktif kayıtlar için dizin bakımı gerekir; bu sonuç tam tarama değildir.
+Tanılar: `registry_limit_terminal_skipped`, `registry_active_limit_exceeded`,
+`registry_archive_failed`. Arşivde snapshot araması en fazla 1200 ay girdisidir.
+
+Kaçırılmış Claude Stop için ana `~/.claude/projects/*/*.jsonl` dosyalarının
+mtime penceresini aktif ve arşiv kayıtlarının `(client, session)` kimliğiyle
+karşılaştır. Alt ajan JSONL dosyalarını listeye katma. Mtime eşleşmesi tek
+başına başarılı Stop veya kayıt uygunluğu kanıtı değildir. Mevcut native akış
+`client_sessions.register(vault, 'claude', session, path, {})` ile yalnız
+pending aday üretir; kaynak tamamlama, ilk beş mesaj, worker, hash ve mahremiyet
+kontrollerini kullanır. Ardından `pending`, `packet`, bağımsız inceleme ve
+`review` dry-run/`--apply` akışı izlenir. Register çağrısını kanonik record veya
+Mem0 yazısı gibi raporlama. Eski `recovery-v2` akışı yukarıdaki ayrı inceleme
+sürecidir; native adayla aynı oturumu iki kez özetleme.
+
+T33 için liste ve salt okunur dry-run aracı çalışma çıktısındaki `eksik.json`,
+`recovery.py`, `dry-run.json` dosyalarıdır. `python3 recovery.py` hiçbir kasa
+layout/kilit/policy yazma işlevini çağırmaz. İncelemeden sonra
+`python3 recovery.py --apply` mevcut register akışını çağırır; bu seçenek
+pending kayıt ve gerekli policy/arşiv bakımını yazabilir. T33 çalışmasında
+bu seçenek uygulanmamıştır. Çalıştırmadan önce düzeltmenin kullanılan araç
+kopyasında bulunduğunu ve liste penceresini kontrol et.
