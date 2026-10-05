@@ -19,6 +19,14 @@ def rows():
 
 
 class CatalogCompletion(unittest.TestCase):
+    def test_current_topic_excludes_competing_context_completion(self):
+        data = rows() + [dict(memory_id='direct', statement='Kapak renk tipografi')]
+        query = 'Kapak renk tipografiyi hazırlayalım'
+        expected = g.rank_records(data, query)
+        self.assertEqual([r['memory_id'] for r in expected], ['direct'])
+        for order in (data, data[::-1]):
+            self.assertEqual(g.rank_records(order, query, context='referans kompozisyon'), expected)
+
     def test_previous_turn_completes_but_never_starts_a_match(self):
         data = rows()
         current = 'kanka bunlara bak bakalım yine kapak aynı olmuş çok sıkıcı'
