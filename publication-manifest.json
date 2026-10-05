@@ -52,8 +52,8 @@
       "path": "araclar/is_ve_ders.py",
       "mode": "reviewed-variant",
       "reason": "Only the historical archive link differs in the installed vault; missing-ledger protection is identical.",
-      "local_sha256": "42673f8a5a6432290feb3828d503b6eb73e97f900fb07a3817d3b000f85b949a",
-      "public_sha256": "3f3ca672210c0a64a225bdd5137a3f18913e98bd27cb7659c8dfb77ce3219660"
+      "local_sha256": "c5541eabc74c5f81d442c1c95e5fe0aec5dd6479755a5edacddd02c65dbe3a78",
+      "public_sha256": "a67f2a0f466e20206796803852a616b4a1dce0a7fa764663c67f6f31c5288a69"
     },
     {
       "path": "araclar/kayit_denetimi.py",
