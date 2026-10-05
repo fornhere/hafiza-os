@@ -509,7 +509,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     wants_reuse=any(requested_phrase(p) for p in ('yeniden kullan','yeniden kullanım','yeniden kullanabiliriz','yeniden kullanabilirim','başka nerede','hangi çıktıyı'))
     project_tasks = []
     if project:
-        for task in brief(vault,limit=10000,include_stale=True):
+        def belongs_to_project(task):
             belongs = task.get('project_id')==project['id'] or task['id'] in project.get('task_ids',[])
             if not task.get('project_id') and not belongs:
                 # Legacy cards have no project_id. Only a unique specific title
@@ -522,7 +522,12 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                                       if p.get('status', 'active') not in ('arsiv', 'arşiv', 'archived')
                                       and area_topic(p, query_words(task['title']))]
                 belongs = len(title_projects)==1 and title_projects[0]['id']==project['id']
-            if belongs: project_tasks.append(task)
+            return belongs
+        diagnostics = []
+        for task in brief(vault,limit=10000,include_stale=True,diagnostics=diagnostics):
+            if belongs_to_project(task): project_tasks.append(task)
+        omitted.extend(item['id']+':'+item['reason'] for item in diagnostics
+                       if belongs_to_project(item))
     task_rows = [dict(t, statement=t['title']+' '+t['next_step'], memory_id=t['id'])
                  for t in project_tasks]
     expansion_tasks = rank_records(task_rows, query, ignore=project_terms(project) if project else (), context=previous_user)
@@ -758,7 +763,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             visible_count += 1
             if pinned and not stale: current_tasks.append(task)
             source_versions[task['source_path']]=digest(source)
-            date = task.get('last_verified') or (str(task.get('updated_at', ''))[:10]
+            date = task.get('last_verified') or (str(task.get('content_updated_at', task.get('updated_at', '')))[:10]
                    if task.get('verification_missing') else '') or 'tarih yok'
             report = task.get('assistant_report') if task.get('assertion_kind') == 'assistant_report' else None
             state_label = ('oturum kapanış bildirimi ('+date+', doğrulanmış sonuç değil)' if report else

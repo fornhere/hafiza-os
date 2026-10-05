@@ -646,6 +646,36 @@ class RankRelevance(unittest.TestCase):
 class ProjectStatusTests(unittest.TestCase):
     setUp = ScopeContextPackageTests.setUp
 
+    def test_invalid_cards_expose_scoped_omission_reasons(self):
+        from is_ve_ders import TASKS
+        for changes, reason in ((dict(source_path='missing.md'), 'source_missing'),
+                                (dict(evidence='Kaynakta olmayan sonuç'), 'evidence_missing'),
+                                (dict(source_content_hash='wrong'), 'source_changed')):
+            with self.subTest(reason=reason):
+                task = self.task()
+                h._write_jsonl(self.vault/TASKS, [dict(task, **changes),
+                    dict(task, id='foreign', project_id='beta', **changes)])
+                result = build_task_package(self.vault, 'alpha ne durumda')
+                self.assertIn('work:'+reason, result['omitted_reasons'])
+                self.assertNotIn('foreign:'+reason, result['omitted_reasons'])
+                self.assertNotIn('work', result['selected_ids'])
+                h._write_jsonl(self.vault/TASKS, [])
+
+    def test_metadata_version_keeps_history_date_and_card_order(self):
+        from is_ve_ders import TASKS, put
+        first = self.task(last_verified=None)
+        second = self.task('second', last_verified=None)
+        metadata = put(self.vault, 'task', dict(first, project_id=None, expected_version=1))
+        h._write_jsonl(self.vault/TASKS, [dict(first, updated_at='2026-10-01T10:00:00+00:00'),
+            dict(second, updated_at='2026-10-02T10:00:00+00:00'),
+            dict(metadata, updated_at='2026-10-03T10:00:00+00:00')])
+        result = build_task_package(self.vault, 'alpha ne durumda')
+        self.assertLess(result['selected_ids'].index('second'), result['selected_ids'].index('work'))
+        self.assertIn('son bilinen durum (2026-10-01, teyit kaydı yok)', result['text'])
+        put(self.vault, 'task', dict(metadata, next_step='Yeni adımı uygula', expected_version=2))
+        result = build_task_package(self.vault, 'alpha ne durumda')
+        self.assertLess(result['selected_ids'].index('work'), result['selected_ids'].index('second'))
+
     def task(self, ident='work', days=0, **extra):
         from is_ve_ders import put
         data = dict(id=ident, title='Alpha iş kartı', status='active', project_id='alpha',

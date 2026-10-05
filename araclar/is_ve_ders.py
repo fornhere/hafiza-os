@@ -153,28 +153,58 @@ def put_project_state(vault, state, receipt_id, source_path, transcript_source):
     return put.__wrapped__(vault, 'task', data)
 
 
-def brief(vault, limit=3, include_stale=False):
-    """Verified current work; status views may also request dated confirmation hints."""
+CONTENT_FIELDS = ('title', 'status', 'next_step', 'evidence', 'source_path',
+                  'last_verified', 'goal', 'last_result', 'open_work', 'blocker',
+                  'outputs', 'assertion_kind', 'assistant_report', 'verified_outcome')
+
+
+def content_updates(vault):
+    """Derive meaningful recency from append order, including legacy ledgers."""
+    previous, dates = {}, {}
+    for row in h.load_jsonl(vault / TASKS):
+        ident = row['id']
+        content = tuple(row.get(key) for key in CONTENT_FIELDS)
+        if ident not in previous or previous[ident] != content:
+            dates[ident] = row.get('updated_at', '')
+        previous[ident] = content
+    return dates
+
+
+def brief(vault, limit=3, include_stale=False, diagnostics=None):
+    """Return cards; optionally append excluded card IDs and reasons to a list.
+
+    Diagnostics cover validation/verification exclusions, not status or limits.
+    content_updated_at is derived; updated_at and latest() retain ledger semantics.
+    """
     result = []
+    dates = content_updates(vault)
+    def omit(row, reason):
+        if diagnostics is not None:
+            diagnostics.append(dict(id=row['id'], reason=reason,
+                                    project_id=row.get('project_id'), title=row['title']))
     try:
         registry = json.loads((vault / 'komuta/gorev-baglam.json').read_text(encoding='utf-8'))
         archived = {p['id'] for p in registry.get('projects', []) if p.get('status') == 'archived'}
     except (OSError, ValueError, KeyError, TypeError):
         archived = set()
     for row in latest(vault, 'task').values():
+        row = dict(row, content_updated_at=dates.get(row['id'], row.get('updated_at', '')))
         report = row.get('assertion_kind') == 'assistant_report'
         if row['status'] not in ('active', 'blocked') and not (report and include_stale): continue
         if row.get('project_id') in archived: continue
         try:
             source = h.source_file(vault, row['source_path'])
             content=source.read_text()
-            if row.get('evidence', '') not in content: continue
-            if row.get('source_content_hash') and row['source_content_hash'] != h.statement_hash(content): continue
-        except (OSError, ValueError): continue
+        except (OSError, ValueError):
+            omit(row, 'source_missing'); continue
+        if not row.get('evidence') or row['evidence'] not in content:
+            omit(row, 'evidence_missing'); continue
+        if row.get('source_content_hash') and row['source_content_hash'] != h.statement_hash(content):
+            omit(row, 'source_changed'); continue
         if report:
             # Session close reports are dated hints, never verified current work.
             result.append(dict(row, confirmation_required=True,
-                               last_verified=str(row.get('updated_at', ''))[:10] or None))
+                               last_verified=str(row['content_updated_at'])[:10] or None))
             continue
         verified = row.get('last_verified')
         if not verified:
@@ -183,15 +213,18 @@ def brief(vault, limit=3, include_stale=False):
             if include_stale and row.get('source_content_hash') == h.statement_hash(content):
                 result.append(dict(row, status='needs_confirmation',
                                    confirmation_required=True, verification_missing=True))
+            else:
+                omit(row, 'unverified')
             continue
         try:
             stale = (dt.date.today() - dt.date.fromisoformat(verified)).days > STALE_DAYS
         except (ValueError, TypeError):
-            continue
-        if stale and not include_stale: continue
+            omit(row, 'unverified'); continue
+        if stale and not include_stale:
+            omit(row, 'stale'); continue
         # Derived visibility only: an old confirmation never becomes a current action.
         result.append(dict(row, status='needs_confirmation', confirmation_required=True) if stale else row)
-    result.sort(key=lambda r: r['updated_at'], reverse=True)
+    result.sort(key=lambda r: r['content_updated_at'], reverse=True)
     # Fresh session reports compete by recency. Dated confirmations precede
     # never-confirmed history so missing dates cannot displace existing cards.
     return sorted(result, key=lambda r: (

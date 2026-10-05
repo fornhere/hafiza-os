@@ -120,6 +120,46 @@ class Work(unittest.TestCase):
         source=self.vault/'kaynak.md';source.write_text(source.read_text()+' Ancak önceki iş iptal edildi.')
         self.assertEqual([],w.brief(self.vault))
 
+    def test_brief_optional_exclusion_diagnostics(self):
+        saved = w.put(self.vault, 'task', self.row)
+        cases = [(dict(source_path='missing.md'), 'source_missing'),
+                 (dict(evidence='Kaynakta olmayan sonuç'), 'evidence_missing'),
+                 (dict(evidence=''), 'evidence_missing'),
+                 (dict(source_content_hash='wrong'), 'source_changed'),
+                 (dict(last_verified=None), 'unverified'),
+                 (dict(last_verified='invalid'), 'unverified'),
+                 (dict(last_verified='2020-01-01'), 'stale')]
+        for changes, reason in cases:
+            with self.subTest(reason=reason, changes=changes), patch.object(
+                    w, 'latest', return_value={'test': dict(saved, **changes)}):
+                diagnostics = []
+                self.assertEqual([], w.brief(self.vault, diagnostics=diagnostics))
+                self.assertEqual([('test', reason)], [(d['id'], d['reason']) for d in diagnostics])
+        diagnostics = []
+        self.assertEqual(w.brief(self.vault), w.brief(self.vault, diagnostics=diagnostics))
+        self.assertEqual([], diagnostics)
+
+    def test_metadata_versions_preserve_content_recency_and_latest(self):
+        registry = self.vault/'komuta/gorev-baglam.json'
+        registry.parent.mkdir()
+        registry.write_text(json.dumps({'projects': [dict(id='alpha')]}))
+        first = w.put(self.vault, 'task', self.row)
+        second = w.put(self.vault, 'task', dict(self.row, id='second'))
+        metadata = w.put(self.vault, 'task', dict(first, project_id='alpha',
+                         actor='new actor', tags=['new'], expected_version=1))
+        rows = [dict(first, updated_at='2026-10-01T10:00:00+00:00'),
+                dict(second, updated_at='2026-10-02T10:00:00+00:00'),
+                dict(metadata, updated_at='2026-10-03T10:00:00+00:00')]
+        h._write_jsonl(self.vault/w.TASKS, rows)
+        self.assertEqual(rows[-1], w.latest(self.vault, 'task')['test'])
+        cards = w.brief(self.vault)
+        self.assertEqual(['second', 'test'], [r['id'] for r in cards])
+        self.assertEqual(rows[0]['updated_at'], cards[1]['content_updated_at'])
+        self.assertEqual(rows[-1]['updated_at'], cards[1]['updated_at'])
+        changed = w.put(self.vault, 'task', dict(metadata, next_step='Yeni adımı uygula', expected_version=2))
+        self.assertEqual('test', w.brief(self.vault)[0]['id'])
+        self.assertEqual(changed['updated_at'], w.brief(self.vault)[0]['content_updated_at'])
+
     def test_stale_writer_and_missing_source_rejected(self):
         w.put(self.vault, 'task', self.row)
         with self.assertRaisesRegex(ValueError, 'sürüm'):
