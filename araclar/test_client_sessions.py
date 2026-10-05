@@ -137,6 +137,53 @@ class ProjectState(NativeFixture):
         sessions.review(self.vault, newer, self.decision(newer), True)
         self.assertEqual(self.work.latest(self.vault, 'task')['project-state:demo']['version'], 2)
 
+    def test_recall_suppresses_state_already_delivered_by_task_card(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        sessions.review(self.vault, ident, decision, True)
+        card = self.work.latest(self.vault, 'task')['project-state:demo']
+        self.assertEqual(sessions.recall(self.vault, exclude_cards=[card]), '')
+
+    def test_opening_receipt_does_not_repeat_as_first_prompt_state_card(self):
+        ident = self.register()['id']
+        sessions.review(self.vault, ident, self.decision(ident), True)
+        card = self.work.latest(self.vault, 'task')['project-state:demo']
+        segment = 'İş durum kartı: ' + '; '.join(sessions.state_values(card))
+        with (patch('codex_hafiza.opening_brief', return_value='Brief'),
+              patch('codex_hafiza.latest_session_section', return_value='Latest'),
+              patch.object(hooks,'claude_task_package',return_value=dict(
+                  text=segment,selected_ids=[card['id']],delivered_segments={card['id']:segment}))):
+            start = hooks.context(self.vault,'claude','new-reader',None,{},'SessionStart')
+            self.assertIn('Asistan bildirimi',start)
+            prompt = hooks.context(self.vault,'claude','new-reader',None,
+                                   {'prompt':'Demo durumunu göster'},'UserPromptSubmit')
+            self.assertNotIn(segment,prompt)
+            marker_path = sessions.policy_path(self.vault / sessions.INBOX / '.state','claude','new-reader')
+            self.assertNotIn('Uygulama tamamlandı',marker_path.read_text())
+
+    def test_two_sessions_reporting_same_state_recall_once(self):
+        ident = self.register()['id']
+        sessions.review(self.vault, ident, self.decision(ident), True)
+        self.session = 'conversation-other'
+        self.rows = self.claude_rows()
+        self.path = self.root / (self.session+'.jsonl')
+        self.write()
+        newer = self.register()['id']
+        sessions.review(self.vault, newer, self.decision(newer), True)
+        text = sessions.recall(self.vault)
+        self.assertEqual(text.count('Asistan bildirimi'),1)
+        self.assertIn(newer,text)
+        self.assertNotIn(ident,text)
+
+    def test_same_session_different_jobs_do_not_match(self):
+        base = dict(project_id='demo', assertion_kind='assistant_report',
+                    transcript_source=dict(client='claude',session='fixture'),
+                    assistant_report=dict(outcome='Kaynak kontrolü tamamlandı.'))
+        self.assertFalse(sessions.same_state(dict(base,next_step='Kapak hazırla.'),
+                                            dict(base,next_step='Mikrofonu yapılandır.')))
+        self.assertFalse(sessions.same_state(dict(base,project_id='other',next_step='Kapak hazırla.'),
+                                            dict(base,next_step='Kapak hazırla.')))
+
     def test_user_semantic_candidate_still_accepted_with_project_state(self):
         self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
         self.write()
