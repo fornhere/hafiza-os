@@ -365,10 +365,17 @@ def hook(vault, data):
     if event == 'UserPromptSubmit':
         # Stop devam istemi gerçek kullanıcı mesajı değildir.
         from konsolidasyon import clean_user
-        from capture_source import apply_prompt_policy
+        from capture_source import apply_prompt_policy, excluded
+        from client_transcripts import private
         apply_prompt_policy(vault, session, str(data.get('prompt', '')))
         if CONTINUATION in str(data.get('prompt', '')) or not clean_user(str(data.get('prompt', ''))):
             return {}
+        current_user = clean_user(str(data.get('prompt', '')))
+        private_scope = contains_secret(current_user) or private(current_user) or excluded(vault, session)
+        if private_scope:
+            state.pop('session_project_id', None)
+            state.pop('previous_user', None)
+            atomic(state_path, json.dumps(state))
         turn = data.get('turn_id')
         if not isinstance(turn, str) or not turn:
             raise ValueError('UserPromptSubmit turn_id gerekli')
@@ -386,11 +393,9 @@ def hook(vault, data):
         previous_user = state.get('previous_user') if new_turn else None
         with advisor:
             package = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'), budget=2000,
-                                         previous_user=previous_user)
-        current_user = clean_user(str(data.get('prompt', '')))
-        from client_transcripts import private
+                                         previous_user=previous_user, session_project_id=state.get('session_project_id'))
         if new_turn:
-            if not contains_secret(current_user) and not private(current_user):
+            if not private_scope:
                 state['previous_user'] = current_user[:800]
             else:
                 state.pop('previous_user', None)
@@ -405,6 +410,8 @@ def hook(vault, data):
         suppress = bool(lesson_text and package_hash == cache.get('hash') and not cache.get('suppressed'))
         original_chars = len(lesson_text)
         if suppress: lesson_text = ''
+        if lesson_text and not private_scope:
+            state['session_project_id'] = package.get('project_id')
         state['package_cache'] = {'hash': package_hash, 'suppressed': suppress}
         parts = ([opening_brief(vault)] if state['count'] == 1 and not state.get('opening_brief_sent') else [])
         if lesson_text:
