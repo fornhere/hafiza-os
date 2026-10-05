@@ -223,7 +223,7 @@ def retrieve(vault,query,project_id=None,budget=1800,context=None):
                      lambda: _retrieve_local(vault, query, project_id, budget, context=context))
 
 
-def _retrieve_local(vault,query,project_id=None,budget=1800,context=None):
+def _retrieve_local(vault,query,project_id=None,budget=1800,context=None,expansion=None,linked_paths=()):
     from gorev_baglam import content_words,word_match
     def note_match(left,right):
         # Apostrophized three-letter names keep their Turkish case ending after
@@ -243,6 +243,20 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None):
     # The previous user turn can complete, never start, a topical match.
     extra={t for t in (content_words(context) if context else set())-terms
            if not any(note_match(t,u) for u in terms) and not any(note_match(t,w) for w in generic)}
+    expanded = content_words(expansion or '') - terms
+    # Read only validated notes and safe, source-pinned task paths. Edges are
+    # one hop: neighbors never recursively seed more neighbors.
+    seeds = set()
+    for relative in linked_paths:
+        try:
+            text = _safe(vault, relative).read_text()
+        except (OSError, ValueError): continue
+        for target in re.findall(r'\[\[([^]|]+)(?:\|[^]]*)?\]\]', text):
+            seeds.add(target.removesuffix('.md'))
+    direct = {d['id'] for d in rows if d['scope'] in ('user', f'project:{project_id}') and
+              (f"bilgi/{d['id']}" in seeds or d['id'] in seeds or
+               any(s['path'] in linked_paths for s in d['sources']))}
+    neighbors = direct | {r['target'] for d in rows if d['id'] in direct for r in d.get('relations', [])}
     ranked=[]
     # These are candidate analogies, never new user preferences. Only features
     # actually named in the reviewed statement can support a transfer.
@@ -255,6 +269,12 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None):
               ('hareket',('animasyon','hareket'))]
     for d in rows:
         scoped=d['scope'] not in ('user',f'project:{project_id}')
+        # Expansion may not introduce historical examples from another project.
+        related = set()
+        if not scoped:
+            note_words = content_words(d['title']+' '+d['statement'])
+            related = {w for w in note_words if any(note_match(t,w) for t in expanded)}
+        expanded_match = len(related) >= 2 or (not scoped and d['id'] in neighbors)
         transfer=None
         if requested and 'all' not in d['domains'] and not requested.intersection(d['domains']):
             targets=sorted({target for source in d['domains'] for target in requested if (source,target) in bridges})
@@ -268,6 +288,7 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None):
         matched={t for t in terms if any(note_match(t,w) for w in words)}
         topical={min(w for w in words if note_match(t,w)) for t in matched
                  if not any(note_match(t,w) for w in generic)}
+        expanded_match = expanded_match and (bool(topical) or bool(requested.intersection(d['domains'])) or d['id'] in neighbors)
         # Scoped notes outside the selected project are only historical evidence
         # for a concrete matching topic. They never become a general preference.
         if scoped and (len(topical)<2 if project_id is None else
@@ -275,13 +296,17 @@ def _retrieve_local(vault,query,project_id=None,budget=1800,context=None):
         # Without an explicit domain, require two independent topical anchors.
         if not requested and 'all' not in d['domains'] and len(topical)<2:
             completed={min(w for w in words if note_match(t,w)) for t in extra if any(note_match(t,w) for w in words)}
-            if not topical or len(topical|completed)<2:continue
-        if len(terms)>8 and not topical and not transfer:continue
-        score=len(matched)
-        if score or transfer:ranked.append((score,d,transfer))
+            if not expanded_match and (not topical or len(topical|completed)<2):continue
+        if len(terms)>8 and not topical and not transfer and not expanded_match:continue
+        score=4*len(matched) + (min(len(related),4)/4 if expanded_match else 0)
+        if score or transfer or expanded_match:ranked.append((score,d,transfer))
     ranked.sort(key=lambda item:(item[2] is not None,-item[0],item[1]['id']))
     selected=[];transfers=[];cards=[];versions={};valid_ids={d['id'] for d in rows}
-    for _,d,transfer in ranked:
+    expansion_count = 0
+    for score,d,transfer in ranked:
+        if score < 4:
+            if expansion_count >= 1: continue
+            expansion_count += 1
         try: revision=note_version(vault,d)
         except (OSError,ValueError):
             diagnostics.append(d['id']+':source_changed_during_read');continue

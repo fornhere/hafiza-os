@@ -8,10 +8,51 @@ import bilgi_agi as b
 class KnowledgeTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-        self.v=Path(self.tmp.name);(self.v/'gelen-kutusu').mkdir()
+        self.v=Path(self.tmp.name).resolve();(self.v/'gelen-kutusu').mkdir()
         self.source=self.v/'gelen-kutusu/source.md';self.source.write_text('Kullanıcı: Bu sunumun tipografisini beğendim ve koruyalım.')
         self.d=dict(id='sunum-tercihi',title='Sunum tipografisi',kind='preference',statement='Sunum tipografisini koru.',scope='user',domains=['sunum'],status='reviewed',sources=[dict(path='gelen-kutusu/source.md',sha256=b.digest(self.source),evidence='Bu sunumun tipografisini beğendim ve koruyalım.')],reviewed_by='review-agent',review_note='Exact user feedback reviewed.')
     def register(self):return b.register(self.v,self.d,True)
+    def test_expanded_note_keeps_scope_and_current_anchor(self):
+        self.d.update(id='layout', title='Ekran planı', scope='project:one',
+                      statement='Ekran hiyerarşisini boşluklarla düzenle.')
+        self.register()
+        other=copy.deepcopy(self.d);other.update(id='foreign',scope='project:two')
+        b.register(self.v,other,True)
+        query='Ekranı hazırlayalım'
+        self.assertFalse(b._retrieve_local(self.v,query,project_id='one')['records'])
+        result=b._retrieve_local(self.v,query,project_id='one',expansion='hiyerarşi boşluk')
+        self.assertEqual([r['id'] for r in result['records']],['layout'])
+        self.assertFalse(b._retrieve_local(self.v,'devam',project_id='one',
+                                          expansion='ekran hiyerarşi boşluk')['records'])
+        self.source.write_text('Changed source')
+        self.assertFalse(b._retrieve_local(self.v,query,project_id='one',
+                                          expansion='hiyerarşi boşluk')['records'])
+
+    def test_graph_neighbors_are_bounded_scoped_and_revalidated(self):
+        self.d.update(id='direct', title='Ekran düzeni', scope='project:one',
+                      statement='Ekran hiyerarşisini boşluklarla düzenle.')
+        self.register()
+        neighbor=copy.deepcopy(self.d)
+        neighbor.update(id='neighbor',title='Okuma düzeni',statement='Okuma sırasını sadeleştir.')
+        b.register(self.v,neighbor,True)
+        foreign=copy.deepcopy(neighbor);foreign.update(id='foreign',scope='project:two')
+        b.register(self.v,foreign,True)
+        deep=copy.deepcopy(neighbor);deep['id']='deep';b.register(self.v,deep,True)
+        neighbor['relations']=[dict(target='deep',reason='Related reading')]
+        neighbor['expected_version']=b.digest(self.v/'bilgi/neighbor.md')
+        b.register(self.v,neighbor,True)
+        self.d['relations']=[dict(target='neighbor',reason='Related layout'),
+                             dict(target='foreign',reason='Other project')]
+        self.d['expected_version']=b.digest(self.v/'bilgi/direct.md');self.register()
+        task=self.v/'task.md';task.write_text('[[bilgi/direct.md|Düzen]]')
+        result=b._retrieve_local(self.v,'Ekranı hazırlayalım',project_id='one',
+                                 linked_paths=['task.md'],budget=5000)
+        self.assertEqual({r['id'] for r in result['records']},{'direct','neighbor'})
+        (self.v/'bilgi/neighbor.md').write_text('Unreviewed edit')
+        result=b._retrieve_local(self.v,'Ekranı hazırlayalım',project_id='one',
+                                 linked_paths=['task.md'],budget=5000)
+        self.assertEqual([r['id'] for r in result['records']],['direct'])
+
     def test_writer_persists_exact_utf8_lf_bytes_and_declared_version(self):
         target=self.v/'exact.md'
         text='Türkçe bilgi ağı\nİkinci satır\n'
