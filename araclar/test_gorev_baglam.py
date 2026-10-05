@@ -836,9 +836,32 @@ class BoundedStatusRegressionTests(unittest.TestCase):
             self.task(ident, project_id=None, title='Kurgu videosu '+ident)
         package=build_task_package(self.vault, 'video planlayalım', history='never')
         self.assertEqual('area_topic', package['match_reason'])
-        self.assertEqual(2, len(set(package['selected_ids']) & {'one','two','three'}))
+        self.assertEqual(3, len(set(package['selected_ids']) & {'one','two','three'}))
         self.assertEqual([], package['assets'])
         self.assertNotIn('irrelevant-cover', package['text'])
+
+    def test_compact_card_preserves_claim_warning_and_source_binding(self):
+        path = 'gelen-kutusu/' + 'a'*90 + '.md'
+        (self.vault/'gelen-kutusu').mkdir()
+        (self.vault/path).write_text((self.vault/'source.md').read_text())
+        self.task('history', days=60, source_path=path,
+                  last_result='Kaynaklı ayrıntı. '*30)
+        package=build_task_package(self.vault, 'alpha devam', budget=2000, history='never')
+        self.assertIn('history', package['selected_ids'])
+        self.assertIn('teyit gerekli', package['text'])
+        self.assertIn('Sonraki adım: Testleri doğrula', package['text'])
+        reference='zihin/is-durumu.jsonl#history'
+        self.assertIn(reference, package['text'])
+        self.assertEqual(dict(path=path, sha256=digest(self.vault/path)),
+                         package['source_references'][reference])
+        self.assertEqual(digest(self.vault/path), package['source_versions'][path])
+        self.assertNotIn('Son sonuç:', package['text'])
+        self.assertIsNone(package['capsule']['suggested_next_step'])
+        full=build_task_package(self.vault, 'alpha devam', budget=5000, history='never')
+        self.assertIn('Son sonuç: Kaynaklı ayrıntı.', full['text'])
+        self.assertIn(path, full['text'])
+        small=build_task_package(self.vault, 'alpha devam', budget=20, history='never')
+        self.assertEqual({}, small['source_references'])
 
     def test_previous_scope_only_for_safe_unambiguous_continuation(self):
         from gorev_baglam import select_projects
