@@ -94,6 +94,38 @@ def semantic_results(decision, source, vault=None):
     return results
 
 
+def project_state_result(decision, source):
+    """Operational evidence is assistant-authored; semantic gates stay separate."""
+    if 'project_state' not in decision:
+        return None
+    value = decision['project_state']
+    fields = {'project_id', 'outcome', 'rationale', 'open_items', 'next_step', 'evidence'}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SourceError('invalid_project_state')
+    if value['project_id'] is not None and (not isinstance(value['project_id'], str) or
+            not re.fullmatch(r'[\w-]{1,100}', value['project_id'])):
+        raise SourceError('invalid_project_state')
+    texts = [value[k] for k in ('outcome', 'rationale', 'next_step')]
+    items = value['open_items']
+    if not isinstance(items, list) or len(items) > 20:
+        raise SourceError('invalid_project_state')
+    texts += items
+    if any(not isinstance(t, str) or not t.strip() or len(t) > 1000 for t in texts):
+        raise SourceError('invalid_project_state')
+    if any(private(t) for t in texts):
+        raise SourceError('unsafe_project_state')
+    ref = value['evidence']
+    if (not isinstance(ref, dict) or set(ref) != {'line', 'line_sha256', 'quote'} or
+            type(ref['line']) is not int or not isinstance(ref['quote'], str) or
+            not 10 <= len(ref['quote']) <= 6000):
+        raise SourceError('invalid_project_state_evidence')
+    entry = next((e for e in source['entries'] if e['line'] == ref['line']), None)
+    if (not entry or entry['role'] != 'assistant' or ref['quote'] not in entry['quote'] or
+            ref['line_sha256'] != entry['line_sha256'] or private(ref['quote'])):
+        raise SourceError('project_state_evidence_mismatch')
+    return dict(value, assertion_kind='assistant_report')
+
+
 def semantic_note(ident, decision, results):
     accepted = [decision['semantic_candidates'][result['index']] for result in results
                 if result['status'] == 'accepted']
@@ -267,7 +299,7 @@ def review(vault, ident, decision, apply=False):
     with locked(vault) as (root, state):
         item = _item(state, ident)
         source = _validate(item, state)
-        if not isinstance(decision, dict) or set(decision) - {'decision', 'meaningful', 'reviewer_role', 'reason', 'summary', 'evidence', 'semantic_candidates'}:
+        if not isinstance(decision, dict) or set(decision) - {'decision', 'meaningful', 'reviewer_role', 'reason', 'summary', 'evidence', 'semantic_candidates', 'project_state'}:
             raise SourceError('invalid_review_schema')
         if len(json.dumps(decision, ensure_ascii=False).encode('utf-8')) > 32000:
             raise SourceError('review_too_large')
@@ -294,6 +326,7 @@ def review(vault, ident, decision, apply=False):
             if not entry or not isinstance(ref['quote'], str) or not ref['quote'].strip() or len(ref['quote']) > 6000 or ref['quote'] not in entry['quote'] or ref['line_sha256'] != entry['line_sha256']:
                 raise SourceError('evidence_mismatch')
             refs.append(dict(line=ref['line'], line_sha256=ref['line_sha256'], quote_sha256=sha(ref['quote'].encode())))
+        operational = project_state_result(decision, source)
         candidate_results = semantic_results(decision, source, vault)
         note = semantic_note(ident, decision, candidate_results)
         note_path = root / (ident + '.md')
@@ -317,6 +350,7 @@ def review(vault, ident, decision, apply=False):
                     **({'semantic_candidates': candidate_results} if 'semantic_candidates' in decision else {})}
         # Re-read the original source immediately before publishing the receipt.
         source = _validate(item, state)
+        operational = project_state_result(decision, source)
         candidate_results = semantic_results(decision, source, vault)
         note = semantic_note(ident, decision, candidate_results)
         receipt = dict(version=1, id=ident, scope='episodic_candidate', decision=decision['decision'],
@@ -324,6 +358,8 @@ def review(vault, ident, decision, apply=False):
                        reason=decision['reason'], summary=decision['summary'], evidence=refs,
                        semantic_candidates=[dict(result) for result in candidate_results],
                        decision_sha256=decision_hash, reviewed_ns=time.time_ns())
+        if operational is not None:
+            receipt['project_state'] = operational
         if target.exists():
             previous_receipt = load(target)
             if any(previous_receipt.get(k) != value for k, value in receipt.items() if k != 'reviewed_ns'):
@@ -346,6 +382,23 @@ def review(vault, ident, decision, apply=False):
                     confidence='explicit-user', sensitivity='normal', proposed_by='claude-review',
                     evidence=candidate['evidence'], category=None if result.get('category_dropped') else candidate.get('category'))
                 result['queue_result'] = queued['result']
+        if operational is not None and decision['decision'] == 'record':
+            # Immutable source note for the existing ledger source/hash contract.
+            project_path = root / (ident + '.project.md')
+            project_text = ('# Proje durumu — asistan bildirimi\n\n'
+                            + json.dumps(operational, ensure_ascii=False, sort_keys=True)
+                            + '\n\n' + operational['evidence']['quote'] + '\n')
+            if project_path.exists():
+                if read_bytes(project_path, 128000) != project_text.encode('utf-8'):
+                    raise SourceError('project_state_source_mutated')
+            else:
+                atomic_text(project_path, project_text)
+            from is_ve_ders import put_project_state
+            put_project_state(Path(vault).absolute(), operational, ident,
+                              project_path.relative_to(Path(vault).absolute()).as_posix(),
+                              dict(client=item['client'], session=item['session'],
+                                   path=item['path'], end_line=item['end_line'],
+                                   prefix_sha256=item['prefix_sha256']))
         if not target.exists():
             atomic(target, receipt)
         item.update(status=decision['decision'], decision_sha256=decision_hash,
@@ -408,6 +461,17 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7):
                 summary = receipt['summary']
                 if not isinstance(summary, str) or contains_secret(summary) or private(summary):
                     continue
+                report = receipt.get('project_state')
+                if isinstance(report, dict) and report.get('assertion_kind') == 'assistant_report':
+                    # Shown by session recall independent of the next user's question.
+                    report_text = ('Asistan bildirimi (doğrulanmış sonuç değildir) — proje: '
+                                   + str(report.get('project_id')) + '\nSonuç: ' + report['outcome']
+                                   + '\nGerekçe: ' + report['rationale']
+                                   + '\nAçık işler: ' + '; '.join(report['open_items'])
+                                   + '\nSonraki adım: ' + report['next_step'])
+                    if contains_secret(report_text) or private(report_text):
+                        continue
+                    summary = report_text + '\n' + summary
                 header = f"Episodic candidate ({item['client']}, {item['id']}): "
                 available = budget - used - len(header) - (1 if parts else 0)
                 if available < 80:

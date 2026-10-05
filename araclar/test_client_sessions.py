@@ -89,6 +89,155 @@ class NativeFixture(unittest.TestCase):
         return json.loads(process.stdout), process.stderr
 
 
+class ProjectState(NativeFixture):
+    def setUp(self):
+        super().setUp()
+        import hafiza as h
+        self.h = h
+        import is_ve_ders
+        self.work = is_ve_ders
+        registry = self.vault / 'komuta/gorev-baglam.json'
+        registry.parent.mkdir()
+        registry.write_text(json.dumps({'projects': [{'id': 'demo', 'status': 'active'}]}))
+
+    def decision(self, ident):
+        value = self.judgment(ident)
+        value['project_state'] = dict(project_id='demo', outcome='Uygulama tamamlandı.',
+            rationale='Kaynak kontrolü tamamlandı.', open_items=['Kullanıcı kabulü bekleniyor.'],
+            next_step='Kullanıcı kabulünü doğrula.', evidence=value['evidence'][0])
+        return value
+
+    def test_project_card_versions_dry_run_replay_and_semantic_separation(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        decision['semantic_candidates'] = [dict(statement='Kullanıcı uygulamayı tercih eder.',
+            subject_key='user.preference', evidence=decision['project_state']['evidence']['quote'])]
+        sessions.review(self.vault, ident, decision)
+        self.assertEqual(self.work.latest(self.vault, 'task'), {})
+        result = sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(result['semantic_candidates'][0]['reasons'], ['evidence_not_user_message'])
+        row = self.work.latest(self.vault, 'task')['project-state:demo']
+        self.assertEqual(row['version'], 1)
+        recalled = sessions.recall(self.vault)
+        self.assertIn('Asistan bildirimi (doğrulanmış sonuç değildir)', recalled)
+        for field in ('outcome', 'rationale', 'next_step'):
+            self.assertIn(decision['project_state'][field], recalled)
+        self.assertEqual(row['assertion_kind'], 'assistant_report')
+        self.assertIsNone(row['verified_outcome'])
+        self.assertNotIn('last_verified', row)
+        self.assertEqual(row['status'], 'needs_confirmation')
+        self.assertEqual(row['transcript_source']['prefix_sha256'], sessions.load(self.vault / sessions.INBOX / '.state' / (ident + '.json'))['prefix_sha256'])
+        self.assertTrue(row['source_content_hash'].startswith('sha256:'))
+        self.assertEqual(self.h.load_jsonl(self.vault / self.h.CANDIDATE_PATH), [])
+        sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(len(self.h.load_jsonl(self.vault / self.work.TASKS)), 1)
+        self.rows += self.claude_rows(7)[-2:]
+        self.write()
+        newer = self.register()['id']
+        sessions.review(self.vault, newer, self.decision(newer), True)
+        self.assertEqual(self.work.latest(self.vault, 'task')['project-state:demo']['version'], 2)
+
+    def test_user_semantic_candidate_still_accepted_with_project_state(self):
+        self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
+        self.write()
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        decision['semantic_candidates'] = self.semantic_decision(ident)['semantic_candidates']
+        result = sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(result['semantic_candidates'][0]['status'], 'accepted')
+        self.assertEqual(len(self.h.load_jsonl(self.vault / self.h.CANDIDATE_PATH)), 1)
+        self.assertEqual(len(self.h.load_jsonl(self.vault / self.work.TASKS)), 1)
+
+    def test_changed_transcript_and_interrupted_receipt_retry(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        original_atomic = sessions.atomic
+        def fail_receipt(path, value):
+            if path == self.vault / sessions.INBOX / (ident + '.json'):
+                raise OSError('receipt write fixture')
+            return original_atomic(path, value)
+        with patch.object(sessions, 'atomic', side_effect=fail_receipt), self.assertRaises(OSError):
+            sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(len(self.h.load_jsonl(self.vault / self.work.TASKS)), 1)
+        sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(len(self.h.load_jsonl(self.vault / self.work.TASKS)), 1)
+        self.rows[-1]['message']['content'][1]['text'] = 'Değişmiş asistan sonucu'
+        self.write()
+        with self.assertRaisesRegex(SourceError, 'source_mutated'):
+            sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(len(self.h.load_jsonl(self.vault / self.work.TASKS)), 1)
+
+    def test_unknown_ambiguous_or_archived_project_logs_without_card(self):
+        for project in (None, 'unknown', 'demo', 'archived'):
+            with self.subTest(project=project):
+                if project == 'demo':
+                    registry = self.vault / 'komuta/gorev-baglam.json'
+                    registry.write_text(json.dumps({'projects': [{'id': 'demo'}, {'id': 'demo'}]}))
+                if project == 'archived':
+                    (self.vault / 'komuta/gorev-baglam.json').write_text(
+                        json.dumps({'projects': [{'id': 'archived', 'status': 'archived'}]}))
+                ident = self.register()['id']
+                decision = self.decision(ident)
+                decision['project_state']['project_id'] = project
+                # Each completed prefix has its own receipt.
+                sessions.review(self.vault, ident, decision, True)
+                self.assertEqual(self.work.latest(self.vault, 'task'), {})
+                events = self.h.load_jsonl(self.vault / self.h.EVENT_PATH)
+                self.assertEqual(events[-1]['reason'], 'project_unresolved')
+                self.assertEqual(events[-1]['receipt_id'], ident)
+                index = len(self.rows) // 2
+                extra = self.claude_rows(index + 1)[-2:]
+                self.rows += extra
+                self.write()
+
+    def test_policy_and_source_gates_prevent_project_writes(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        original = json.loads(json.dumps(self.rows))
+        for text, error in [('Bu oturumu kaydetme.', 'privacy_blocked'),
+                            ('İŞÇİ KOŞUSU. Görevi uygula.', 'worker_source'),
+                            ('api_key=sk-' + 'a' * 48, 'secret_source')]:
+            with self.subTest(error=error):
+                self.rows = json.loads(json.dumps(original))
+                self.rows[0]['message']['content'] = text
+                self.write()
+                # Privacy exclusion is sticky; use an isolated session policy for each check.
+                for policy in (self.vault / sessions.INBOX / '.state').glob('context-*.json'):
+                    policy.unlink()
+                with self.assertRaises(SourceError):
+                    sessions.review(self.vault, ident, decision, True)
+                self.assertEqual(self.work.latest(self.vault, 'task'), {})
+        self.rows = self.claude_rows(5)
+        self.write()
+        for policy in (self.vault / sessions.INBOX / '.state').glob('context-*.json'):
+            policy.unlink()
+        self.assertEqual(self.register()['status'], 'below_threshold')
+        with self.assertRaises(SourceError):
+            sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(self.work.latest(self.vault, 'task'), {})
+
+    def test_invalid_evidence_skip_and_private_report_do_not_write(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        decision['decision'] = 'skip'
+        sessions.review(self.vault, ident, decision, True)
+        self.assertEqual(self.work.latest(self.vault, 'task'), {})
+        self.rows += self.claude_rows(7)[-2:]
+        self.write()
+        ident = self.register()['id']
+        for change in ('user', 'hash', 'private', 'secret'):
+            value = self.decision(ident)
+            if change == 'user':
+                value['project_state']['evidence'] = {k: sessions.packet(self.vault, ident)['evidence'][0][k]
+                                                     for k in ('line', 'line_sha256', 'quote')}
+            elif change == 'hash': value['project_state']['evidence']['line_sha256'] = '0' * 64
+            elif change == 'private': value['project_state']['next_step'] = 'Bu oturumu kaydetme.'
+            else: value['project_state']['outcome'] = 'api_key=sk-' + 'a' * 48
+            with self.subTest(change=change), self.assertRaises(SourceError):
+                sessions.review(self.vault, ident, value, True)
+        self.assertEqual(self.work.latest(self.vault, 'task'), {})
+
+
 class NativeSessions(NativeFixture):
     def test_verified_semantic_candidate_queues_and_source_note_replays(self):
         from hafiza import CANDIDATE_PATH, load_jsonl

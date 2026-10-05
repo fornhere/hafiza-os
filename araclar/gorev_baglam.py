@@ -535,12 +535,16 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             if pinned and not stale: current_tasks.append(task)
             source_versions[task['source_path']]=digest(source)
             date = task.get('last_verified') or 'tarih yok'
-            state_label = ('son bilinen durum ('+date+', teyit gerekli)' if stale else
+            report = task.get('assistant_report') if task.get('assertion_kind') == 'assistant_report' else None
+            state_label = ('oturum kapanış bildirimi ('+date+', doğrulanmış sonuç değil)' if report else
+                           'son bilinen durum ('+date+', teyit gerekli)' if stale else
                            'engelli' if task['status']=='blocked' else 'devam edilebilir')
             prefix = ('Kaynağı yeniden doğrulanacak iş:' if not pinned else
                       'Devam kartı' if resume else 'İş durum kartı')
+            report_fields = dict(last_result=report.get('outcome'),
+                                 open_work='; '.join(report.get('open_items') or [])) if isinstance(report, dict) else {}
             def field(name, fallback):
-                value = task.get(name)
+                value = task.get(name) or report_fields.get(name)
                 return value if isinstance(value, str) and value and not h.contains_secret(value) else fallback
             text = (prefix+' ['+state_label+']: '+task['title']+
                     '; Hedef: '+field('goal', task['title'])+

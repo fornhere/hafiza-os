@@ -549,3 +549,17 @@ class ProjectStatusTests(unittest.TestCase):
                 result=build_task_package(self.vault,query)
                 self.assertEqual('orvant',result['project_id'])
                 self.assertNotIn('ambiguous_project',result['omitted_reasons'])
+
+    def test_session_close_report_card_reaches_short_status_prompt(self):
+        from is_ve_ders import put_project_state
+        quote = (self.vault/'source.md').read_text()
+        state = dict(project_id='alpha', outcome='Kök satırları teke indi', rationale='Bağlam gürültüsü',
+                     open_items=['Ölçüm setini koş'], next_step='Taban ölçümle karşılaştır',
+                     evidence=dict(line=1, line_sha256='0'*64, quote=quote))
+        put_project_state(self.vault, state, 'r1', 'source.md', dict(client='claude', session='s'))
+        result = build_task_package(self.vault, 'alpha ne durumda')
+        self.assertIn('project-state:alpha', result['selected_ids'])
+        for label in ('oturum kapanış bildirimi (', 'doğrulanmış sonuç değil', 'Son sonuç: Kök satırları teke indi',
+                      'Açık iş/engel: Ölçüm setini koş', 'Sonraki adım: Taban ölçümle karşılaştır'):
+            self.assertIn(label, result['text'])
+        self.assertIsNone(result['capsule']['suggested_next_step'])

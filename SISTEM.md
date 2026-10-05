@@ -10,6 +10,7 @@ Claude oturumu
   → client_hafiza.py (SessionStart / UserPromptSubmit: bağlam; Stop: yakalama)
   → client_sessions kuyruğu (.state) → packet → client_review / review
   → incelenmiş episodik makbuz + varsa semantik aday
+  → ayrı project_state varsa: is_ve_ders → asistan bildirimi iş kartı sürümü
                                                     ↘
                                                       hafıza-adayları.jsonl
                                                     ↗

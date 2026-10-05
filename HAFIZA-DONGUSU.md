@@ -29,6 +29,29 @@ Makbuz `günlük/hafıza-makbuzları/lifecycle-review.jsonl` içindedir. Kaynak 
 
 Bilgi kartları isteğe bağlı `rationale`, `conditions`, `exceptions` alır; kaynaklardan doğrulanır ve hem yerel hem Jev seçimi sonrası bağlama taşınır. Eski kayıtlar geçerlidir; eksik gerekçe uydurulmaz. Koşulun bulunması makine tarafından her dünyasal koşulun değerlendirildiği anlamına gelmez; ajan göreve uygunluğu inceler.
 
+## Oturum kapanışında proje durum kartı
+
+Native `client_review` çıktısı semantik adaylardan ayrı, isteğe bağlı
+`project_state={project_id, outcome, rationale, open_items[], next_step,
+evidence:{line,line_sha256,quote}}` alanını taşır. Kanıt özgün transkriptteki
+asistan mesajına birebir bağlanır; alan **asistan bildirimi** olarak etiketlenir.
+Kullanıcı tercihi veya doğrulanmış sonuç sayılmaz. Semantik adayların birebir
+kullanıcı beyanı kapıları değişmez.
+
+Anlamlı `record --apply` incelemesi, tek ve aktif proje kimliği çözülürse
+`is_ve_ders` tek yazıcısıyla `project-state:<project_id>` iş kartına tarihli yeni
+sürüm ekler. Kart `needs_confirmation`, `assistant_report` ve ayrı
+`verified_outcome=null` taşır; son teyit tarihi üretilmez. Kaynak değişmez
+`.project.md` makbuzudur; kaynak hash'i ile transkript satırı/hash'i ve tamamlanan
+prefix hash'i saklanır. Aynı makbuzun tekrarı yeni sürüm üretmez.
+Çözülemeyen/çoklu/arşivlenmiş proje için iş kartı yazılmaz;
+`project_state.skipped / project_unresolved` olayı içeriksiz tanı bırakır.
+İlk beş mesaj, kaydetmeme, sır ve işçi dışlamaları incelemeden önce uygulanır.
+Dry-run ve skip iş defterine yazmaz. Native oturum açılışının `recall` çıktısı
+sonuç, gerekçe, açık işler ve sonraki adımı asistan bildirimi etiketiyle gösterir.
+Codex Stop boş dönüşü değişmez; bu alan
+native reviewer yolundadır, Codex konsolidasyonuna otomatik eklenmiş değildir.
+
 ## İş sonucundan ders
 
 Önce mevcut `is_ve_ders task` ile kaynaklı işi `done` durumuna getir. Sonuç kaydı JSON örneği:

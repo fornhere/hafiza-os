@@ -36,6 +36,12 @@ from a user message in the packet; never infer or guess. Never include secrets.
 Write reason, summary and every statement in Turkish, matching the vault language.
 Phrase each statement as one third-person sentence about the user (e.g. "Kullanıcı ... tercih eder.").
 Prefer skip over a candidate that only applies to the current task.
+You may separately include project_state with exactly project_id (an active_projects
+id, or null when unresolved), outcome, rationale, open_items (0-20 strings),
+next_step, and evidence (one exact object with line, line_sha256, quote from an
+assistant message). Use nonempty Turkish text, <=1000 chars per field/item.
+This operational state is an assistant report, never a user preference or a
+verified result. Do not put temporary task status into semantic_candidates.
 This is an episodic candidate, not canonical truth.
 '''
 
