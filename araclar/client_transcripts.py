@@ -76,6 +76,12 @@ def strict_json(text):
         raise SourceError('invalid_json') from exc
 
 
+def worker_prompt(text):
+    """Explicit worker prefixes are operational instructions, never user memory."""
+    return (isinstance(text, str) and clean_user(text).casefold().replace('\u0307', '')
+            .startswith(('işçi koşusu', 'isci kosusu')))
+
+
 def private(text):
     return privacy_command(text) or privacy_ambiguous(text) or bool(re.search(
         r"\b(?:do not|don't|never) (?:save|record|remember|store)|\b(?:off the record|keep this private|forget this)\b",
@@ -119,7 +125,8 @@ def source_path(client, session, path):
     return path
 
 
-def parse(client, session, path, end_line=None):
+def parse(client, session, path, end_line=None, *, reject_workers=False):
+    # Capture rejects worker sessions; offline readers may filter individual turns.
     path = source_path(client, session, path)
     data = read_bytes(path)
     if not data or not data.endswith(b'\n'):
@@ -130,6 +137,7 @@ def parse(client, session, path, end_line=None):
     boundary = end_line or len(lines)
     entries, ids, seen, user_count, prefix_count = [], [], {}, 0, 0
     terminal, prefix_terminal, previous_step = False, False, -1
+    worker = False
     for number, raw in enumerate(lines, 1):
         if len(raw) > MAX_LINE:
             raise SourceError('line_too_large')
@@ -223,6 +231,7 @@ def parse(client, session, path, end_line=None):
             user_count += 1
             if private(text):
                 raise SourceError('privacy_blocked')
+            worker = worker or (reject_workers and worker_prompt(text))
         if role and contains_secret(text):
             raise SourceError('secret_source')
         if number <= boundary and role and text:
@@ -231,6 +240,9 @@ def parse(client, session, path, end_line=None):
                 ids.append(ident)
         if number == boundary:
             prefix_terminal, prefix_count = terminal, user_count
+    # Scan the whole source first so later privacy requests remain sticky.
+    if worker:
+        raise SourceError('worker_source')
     return dict(client=client, session=session, path=str(path), end_line=boundary,
                 prefix_sha256=sha(b''.join(lines[:boundary])), count=prefix_count,
                 message_ids=ids, terminal=prefix_terminal, entries=entries,
