@@ -316,6 +316,90 @@ def task_intent(text):
                   lambda match: match.group(1), text, flags=re.I)
 
 
+_VISUAL_TERMS = ('kapak','thumbnail','maskot','logo','banner','görsel','render')
+
+# Full-word forms keep verb roots from matching nouns (yaz != yazıları).
+_ACTION_SUFFIXES = ('', 'ın', 'in', 'un', 'ün', 'ınız', 'iniz', 'unuz', 'ünüz',
+                    'sana', 'sene', 'alım', 'elim', 'manı', 'meni', 'manızı', 'menizi',
+                    'ar', 'er', 'ır', 'ir', 'ur', 'ür', 'yın', 'yin', 'yınız', 'yiniz',
+                    'yalım', 'yelim', 'yabilir', 'abilir', 'ebilir', 'ıver', 'iver',
+                    'ıverin', 'iverin')
+_VISUAL_ROOTS = ('üret', 'hazırla', 'oluştur', 'çiz', 'tasarla', 'yenile',
+                 'düzenle', 'değiştir', 'düzelt', 'yap', 'al')
+_NONVISUAL_ROOTS = ('araştır', 'incele', 'sil', 'derle', 'yaz', 'kullan')
+_NEGATIVE_SUFFIXES = ('ma', 'me', 'mayın', 'meyin', 'mayınız', 'meyiniz',
+                      'mamanı', 'memeni', 'mamanızı', 'memenizi', 'mamak', 'memek',
+                      'mıyorum', 'miyorum', 'mayalım', 'meyelim')
+
+def action_form(word, roots, suffixes=_ACTION_SUFFIXES):
+    return any(word == root + suffix for root in roots for suffix in suffixes)
+
+def positive_visual_action(words):
+    return (any(action_form(w, _VISUAL_ROOTS) for w in words) or
+            any(w == 'revize' and i+1 < len(words) and
+                action_form(words[i+1], ('et', 'ed')) for i, w in enumerate(words)))
+
+def visual_intent(query, previous_user=None):
+    """Sentence-local production intent plus bounded noun/continuation requests."""
+    intent = task_intent(query)
+    words = query_words(intent)
+    for clause in re.split(r'[\n.!?;,]+', intent):
+        part = query_words(clause)
+        negative = (any(action_form(w, _VISUAL_ROOTS + ('iste', 'et'),
+                                    _NEGATIVE_SUFFIXES) for w in part) or
+                    'istemiyorum' in part)
+        if negative:
+            continue
+        visual = any(inflected(term, word) or one_typo(term, word)
+                     for term in _VISUAL_TERMS for word in part)
+        if visual and positive_visual_action(part):
+            return True
+        information = ('hakkında' in part or 'nedir' in part or
+                       any(part[i:i+2] == ['bilgi', 'ver'] for i in range(len(part))))
+        if visual and len(part) <= 6 and not information and not any(
+                action_form(w, _NONVISUAL_ROOTS) or w == 'teşhis' or
+                w.startswith(('skill', 'silindi', 'sildi', 'silinmiş')) for w in part):
+            return True
+        # Existing bare drawing commands remain a concise request for artwork.
+        if len(part) <= 4 and any(action_form(w, ('çiz',)) for w in part):
+            return True
+    if not previous_user or len(words) > 12 or len(intent) > 140:
+        return False
+    allowed = set(query_words('tamam evet devam et edelim kaldık nerede şimdi '
+                             'sonraki adım son durum ne durumda kaldığımız yer '
+                             'bunu onu biraz daha parlak koyu açık büyük küçük '
+                             'olsun yap yenile düzenle revize renkleri'))
+    allowed.update(query_words(task_intent(previous_user)))
+    short_followup = (continuation_request(query) or
+                      any(w in {'yenile', 'düzenle', 'revize', 'parlak', 'koyu', 'büyük', 'küçük'} for w in words))
+    return bool(short_followup and all(w in allowed for w in words) and
+                not any(action_form(w, _NONVISUAL_ROOTS) or w in
+                        {'senaryo', 'araştırma', 'açıklama', 'etiket', 'altyazı',
+                         'üret', 'hazırla', 'oluştur', 'tasarla'} for w in words) and
+                visual_intent(previous_user))
+
+def visual_record(row):
+    """Gate only explicit catalog identity or cover-design purposes.
+
+    Domains, tags, paths and prose describe context, not a visual-task need.
+    """
+    for key in ('subject_key', 'kind', 'role'):
+        value = row.get(key)
+        if not isinstance(value, str):
+            continue
+        words = set(query_words(value))
+        if value == 'identity' or words & {'maskot', 'mascot'}:
+            return True
+        if (words & {'karakter', 'character'} and
+                words & {'kimlik', 'identity'}):
+            return True
+        if (words & {'kapak', 'thumbnail'} and
+                words & {'tasarım', 'tasarımı', 'design', 'choice', 'style',
+                         'stil', 'stili', 'renk', 'palette', 'typography'}):
+            return True
+    return False
+
+
 def shared_workspace(root, vault=None):
     """A vault is a shared launch directory, including a relocated snapshot's origin.
 
@@ -662,6 +746,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
     if view not in ("auto", "standard", "resume"): raise ValueError("invalid view")
     query = task_intent(query)
+    visual = visual_intent(query, previous_user)
     resume = view == "resume" or (view == "auto" and continuation_request(query))
     resume_tasks = []; card_facts = []; task_duplicates = {}
     vault = Path(vault).resolve(); words = tokens(query)
@@ -789,7 +874,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
                     'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'suppressed-history':6, 'decision-history':4, 'knowledge':0.5, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
-        if any(ident == asset.get('id') for asset in (project or {}).get('assets', [])): priority=2
+        for asset in (project or {}).get('assets', []):
+            if ident == asset.get('id'):
+                priority = 0.25 if visual and asset.get('role') == 'identity' else 2
+                break
         if ident in task_ids: priority=-2
         if ident.startswith('output:'): priority=5
         candidates.append((priority, len(candidates), ident, text))
@@ -825,7 +913,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             if rank_records([row], query): omitted.append(row['memory_id']+':'+overrides[row['memory_id']])
             continue
         if h.context_record_errors(vault,row):
-            if rank_records([row], query): omitted.append(row.get('memory_id','unknown')+':invalid')
+            if rank_records([row], query): omitted.append(str(row.get('memory_id') or 'unknown')+':invalid')
+            continue
+        if not visual and visual_record(row):
+            omitted.append(str(row.get('memory_id') or 'unknown')+':visual_intent_required')
             continue
         eligible.append(row)
         eligible_versions[row['source_path']]=digest(h.source_file(vault,row['source_path']))
@@ -925,6 +1016,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if workflows: add('workflow', 'Bu projedeki üretim yöntemi: '+', '.join(w['id'] for w in workflows)+'. Yöntem referansları proje seçimini değiştirmez.')
         for issue in project.get('unresolved',[]): add('unresolved', 'Teyit gerekli: '+issue)
         for ref in project.get('working_sources',[]):
+            if not visual and visual_record({'role': ref.get('role')}):
+                omitted.append('working-source:visual_intent_required'); continue
             path=Path(ref['path']).resolve()
             if path.is_file():
                 source_versions[str(path)]=digest(path)
@@ -1019,7 +1112,12 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             primary = visible_count==1 and (resume or bool(task_focus) or bool(topical_ids) or not knowledge_data or not knowledge_data['text'])
             priority,sequence,ident,text=candidates[-1]
             candidates[-1]=(-2 if primary else 2,sequence,ident,text)
-        for asset in project.get('assets',[]):
+        identity_assets = [a for a in project.get('assets', []) if a.get('role') == 'identity']
+        if not visual and identity_assets:
+            add('visual-assets', 'Görsel varlıklar: '+str(len(identity_assets))+' adet, gerektiğinde.')
+        for asset in project.get('assets', []):
+            if not visual and asset.get('role') == 'identity':
+                continue
             try: path=validate_asset(asset)
             except (ValueError,OSError,KeyError) as e: omitted.append(asset.get('id','asset')+':'+str(e)); continue
             if add(asset['id'], 'Onaylı '+asset['role']+': '+str(path)+'; hash: '+asset['sha256']+'. Gerçek araç girdisini validate_inputs ile doğrula; dosyanın bulunması kullanıldığını kanıtlamaz.'): assets.append(asset)
@@ -1114,7 +1212,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             omitted.append('input-check:budget')
     # Failed optional inference reports diagnostics without adding a context card
     # to a selection that previously stayed empty.
-    errors=[reason for reason in omitted if not reason.endswith((':budget', ':card_limit', ':subtask_focus'))
+    errors=[reason for reason in omitted
+            if not reason.endswith((':budget', ':card_limit', ':subtask_focus', ':visual_intent_required'))
             and not reason.startswith('implicit_project:')]
     if errors:
         detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'
