@@ -1508,3 +1508,266 @@ class ImplicitProjectTests(unittest.TestCase):
         (self.vault/row['source_path']).write_text(row['evidence'])
         put(self.vault, 'task', dict(row, status='done', expected_version=row['version']))
         self.assertIsNone(self.package(cwd)['project_id'])
+
+
+class VisualIntentTests(unittest.TestCase):
+ def setUp(self):
+  self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+  self.v=Path(self.tmp.name).resolve();(self.v/'komuta').mkdir()
+  self.image=self.v/'ref.png';self.image.write_bytes(b'image')
+  source=self.v/'approval.md';source.write_text('Onaylı kimlik referansı.')
+  self.asset=dict(id='ref',role='identity',path=str(self.image),allowed_roots=[str(self.v)],
+      status='approved',sha256=digest(self.image),approval_source=str(source),approval_evidence=source.read_text())
+  cfg=dict(projects=[dict(id='proj-a',aliases=['proj-a'],assets=[self.asset])])
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps(cfg))
+ def catalog_row(self, **changes):
+  text='Kapak renk seçimi tercih edilir.'
+  (self.v/'preference.md').write_text(text)
+  row=dict(memory_id='visual-choice',kind='semantic',scope='project:proj-a',
+      subject_key='thumbnail.choice',statement=text,status='active',source_path='preference.md',
+      source_anchor=text,source_hash=h.statement_hash(text),source_content_hash=h.statement_hash(text),
+      observed_at='2020-01-01',valid_from='2020-01-01',valid_to=None,confidence='explicit-user',
+      sensitivity='normal',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
+  return dict(row,**changes)
+ def test_visual_omission_is_not_a_source_error(self):
+  h._write_jsonl(self.v/h.CATALOG_PATH,[self.catalog_row()])
+  p=build_task_package(self.v,'proj-a senaryo yaz')
+  self.assertIn('visual-choice:visual_intent_required',p['omitted_reasons'])
+  self.assertNotIn('context-check',p['selected_ids'])
+  for query in ('hava nasıl', 'proj-b senaryo yaz'):
+   with self.subTest(query=query):
+    p=build_task_package(self.v,query)
+    self.assertEqual('',p['text'])
+    self.assertNotIn('visual-choice:visual_intent_required',p['omitted_reasons'])
+  cfg=json.loads((self.v/'komuta/gorev-baglam.json').read_text())
+  cfg['projects'].append(dict(id='proj-b',aliases=['proj-b']))
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps(cfg))
+  p=build_task_package(self.v,'proj-b senaryo yaz')
+  self.assertIn('project',p['selected_ids'])
+  self.assertNotIn('context-check',p['selected_ids'])
+  self.assertNotIn('visual-choice:visual_intent_required',p['omitted_reasons'])
+ def test_visual_filter_follows_source_validation(self):
+  h._write_jsonl(self.v/h.CATALOG_PATH,[self.catalog_row(source_content_hash='changed')])
+  p=build_task_package(self.v,'proj-a kapak renk seçimi araştır')
+  self.assertIn('visual-choice:invalid',p['omitted_reasons'])
+  self.assertNotIn('visual-choice:visual_intent_required',p['omitted_reasons'])
+  self.assertIn('context-check',p['selected_ids'])
+ def test_null_optional_fields_do_not_drop_package(self):
+  from gorev_baglam import visual_record
+  self.assertFalse(visual_record(dict(statement='kapak',domains=None,memory_id=None)))
+  for changes in (dict(domains=None,memory_id='invalid'),dict(memory_id=None)):
+   for scope in ('project:other','project:proj-a'):
+    with self.subTest(changes=changes,scope=scope):
+     h._write_jsonl(self.v/h.CATALOG_PATH,[self.catalog_row(scope=scope,**changes)])
+     p=build_task_package(self.v,'proj-a senaryo yaz')
+     self.assertIn('project',p['selected_ids'])
+     self.assertEqual([],p['assets'])
+ def test_mentions_and_negative_requests_do_not_deliver_identity(self):
+  for query in ('proj-a açıklama video etiketleri ve altyazı hazırla\n'
+                'seo skillini kullan, bir ajan onu sildi thumbnail skillini de sildi yanlışlıkla',
+                'proj-a görsel üretme, senaryo yaz', 'proj-a logo derleyicisini araştır',
+                'proj-a thumbnail skillini kullan'):
+   with self.subTest(query=query):
+    p=build_task_package(self.v,query)
+    self.assertEqual([],p['assets'])
+    self.assertNotIn('Onaylı identity:',p['text'])
+ def test_followup_requires_short_request_without_new_task(self):
+  previous='proj-a kapak üret'
+  for query in ('proj-a tamam devam, şimdi senaryo yaz',
+                'proj-a devam şimdi araştırma yap',
+                'proj-a devam '+ 'tamam '*30):
+   with self.subTest(query=query):
+    self.assertEqual([],build_task_package(self.v,query,previous_user=previous)['assets'])
+  for query in ('proj-a Çizin.', 'proj-a Çiziver.', 'proj-a Çizer misin?',
+                'proj-a kapağındaki renkleri yenile', 'proj-a daha parlak olsun'):
+   with self.subTest(query=query):
+    self.assertEqual(['ref'],[a['id'] for a in build_task_package(
+        self.v,query,previous_user=previous)['assets']])
+ def test_second_review_s2_01_through_06(self):
+  from gorev_baglam import visual_intent
+  cases = (
+      ('S2-01', 'proj-a thumbnail skillini kullanarak kapak üret', True),
+      ('S2-02', 'proj-a kapaktaki yazıları değiştir', True),
+      ('S2-03', 'proj-a kapağı incele ve yenile', True),
+      ('S2-04', 'proj-a kapak üretmeyin', False),
+      ('S2-05', 'proj-a kapak istemiyorum', False),
+      ('S2-06', 'proj-a kapak hakkında bilgi ver', False))
+  for ident, query, expected in cases:
+   with self.subTest(case=ident):
+    self.assertEqual(expected, visual_intent(query))
+    p=build_task_package(self.v,query,budget=5000)
+    self.assertEqual(['ref'] if expected else [], [a['id'] for a in p['assets']])
+    self.assertEqual(expected, str(self.image) in p['text'])
+ def test_second_review_s2_07_catalog_and_note(self):
+  cfg=json.loads((self.v/'komuta/gorev-baglam.json').read_text())
+  cfg['projects'].append(dict(id='proj-b',aliases=['proj-b']))
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps(cfg))
+  text='Kapak sensörü açıksa motoru çalıştırma.'
+  row=self.catalog_row(memory_id='sensor-rule',subject_key='device.sensor',
+      scope='project:proj-b',statement=text,source_anchor=text,
+      source_hash=h.statement_hash(text),source_content_hash=h.statement_hash(text))
+  (self.v/'preference.md').write_text(text)
+  h._write_jsonl(self.v/h.CATALOG_PATH,[row])
+  p=build_task_package(self.v,'proj-b kapak sensörünü teşhis et',budget=5000)
+  self.assertIn('sensor-rule',p['selected_ids'])
+  self.assertIn(text,p['text'])
+  self.assertNotIn('sensor-rule:visual_intent_required',p['omitted_reasons'])
+  sensor=dict(id='sensor-note',statement=text,domains=['device'],sources=[])
+  data=dict(text='Bilgi [rule; device; project:proj-b]: '+text+
+      '\nKaynak: bilgi/sensor-note.md',records=[sensor],source_versions={},transfers=[])
+  (self.v/'bilgi').mkdir()
+  with patch('konu_sentezi.retrieve',return_value=data):
+   p=build_task_package(self.v,'proj-b kapak sensörünü teşhis et',budget=5000)
+  self.assertIn('knowledge',p['selected_ids'])
+  self.assertEqual(['sensor-note'],[r['id'] for r in p['knowledge']['records']])
+ def test_structured_visual_evidence_only(self):
+  from gorev_baglam import visual_record
+  for row in (dict(statement='Kapak sensörü.'),dict(title='Kapak sensörü.'),
+              dict(statement='thumbnail logo maskot',domains=None),
+              dict(domain='görsel'),dict(subject='logo'),dict(tags=['maskot']),
+              dict(domains=['thumbnail']),dict(source_path='bilgi/kapak-stili.md'),
+              dict(subject_key='device.kapak.sensor'),
+              dict(kind='decision',subject_key='title.selection',domains=['thumbnail'],
+                   source_path='bilgi/kapak-maskot.md'),
+              dict(role='reference',path='ref.png',sha256='hash')):
+   with self.subTest(row=row): self.assertFalse(visual_record(row))
+  for row in (dict(role='identity'),dict(kind='mascot'),
+              dict(subject_key='thumbnail.choice'),dict(subject_key='kapak.tasarımı'),
+              dict(subject_key='character.identity')):
+   with self.subTest(row=row): self.assertTrue(visual_record(row))
+ def test_bounded_action_forms_and_short_noun_requests(self):
+  from gorev_baglam import visual_intent, action_form
+  self.assertTrue(action_form('yaz',('yaz',)))
+  self.assertFalse(action_form('yazıları',('yaz',)))
+  for query in ('kapak üretin','kapak üretiniz','kapak tasarlayın',
+                'kapak düzelt','kapak revize et','kapak revize edin','kapak seçimi','thumbnail?',
+                'kapak değiştirir misin','maskot çiziniz','kapak üretmeni istiyorum'):
+   with self.subTest(query=query): self.assertTrue(visual_intent(query))
+  for query in ('kapak üretme','kapak yapmayın','kapak çizmeyiniz',
+                'kapak yenileme','kapak üretmemeni istiyorum','thumbnail nedir','logo hakkında bilgi ver',
+                'kapak yazıları incele','logo derleyicisini araştır'):
+   with self.subTest(query=query): self.assertFalse(visual_intent(query))
+ def test_visual_working_source_is_gated(self):
+  cfg=json.loads((self.v/'komuta/gorev-baglam.json').read_text())
+  cfg['projects'][0]['working_sources']=[dict(path=str(self.image),role='identity',evidence_source='approval.md')]
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps(cfg))
+  p=build_task_package(self.v,'proj-a araştır')
+  self.assertNotIn('Onaylı identity:',p['text']);self.assertNotIn(str(self.image),p['text'])
+  p=build_task_package(self.v,'proj-a kapak üret',budget=5000)
+  self.assertIn('identity: '+str(self.image),p['text'])
+ def test_nonvisual_work_only_gets_count(self):
+  for query in ('proj-a senaryo yaz','proj-a araştır','proj-a teşhis yap','proj-a başlık üret'):
+   with self.subTest(query=query):
+    p=build_task_package(self.v,query)
+    self.assertEqual([],p['assets']);self.assertNotIn(str(self.image),p['text'])
+    self.assertNotIn('identity',p['text']);self.assertNotIn('input-check',p['selected_ids'])
+    self.assertEqual(1,p['text'].count('Görsel varlıklar: 1 adet, gerektiğinde.'))
+ def test_visual_terms_and_followup_deliver_identity(self):
+  for query in ('kapak üret','thumbnail üret','maskotu çiz','logo üret','banner üret',
+                'görsel üret','render al','çiz','kapağımızı yenile','thumnail üret'):
+   with self.subTest(query=query):
+    p=build_task_package(self.v,'proj-a '+query)
+    self.assertEqual(['ref'],[a['id'] for a in p['assets']])
+    self.assertIn('Onaylı identity:',p['text'])
+  p=build_task_package(self.v,'proj-a devam et',previous_user='proj-a kapak üret')
+  self.assertEqual(['ref'],[a['id'] for a in p['assets']])
+  p=build_task_package(self.v,'proj-a senaryo yaz',previous_user='proj-a kapak üret')
+  self.assertEqual([],p['assets'])
+ def test_catalog_cover_preference_is_gated_before_ranking(self):
+  text='Başlık araştırması için kapak seçimi ve A/B testi tercih edilir.'
+  (self.v/'preference.md').write_text(text)
+  row=dict(memory_id='cover-choice',kind='semantic',scope='project:proj-a',
+      subject_key='thumbnail.choice',statement=text,status='active',source_path='preference.md',
+      source_anchor=text,source_hash=h.statement_hash(text),source_content_hash=h.statement_hash(text),
+      observed_at='2020-01-01',valid_from='2020-01-01',valid_to=None,confidence='explicit-user',
+      sensitivity='normal',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
+  h._write_jsonl(self.v/h.CATALOG_PATH,[row])
+  p=build_task_package(self.v,'proj-a başlık araştırması')
+  self.assertNotIn('cover-choice',p['selected_ids']);self.assertNotIn('A/B',p['text'])
+  p=build_task_package(self.v,'proj-a kapak seçimi',budget=5000)
+  self.assertIn('cover-choice',p['selected_ids'])
+ def test_skill_reference_path_does_not_activate_visual_intent(self):
+  from gorev_baglam import visual_intent
+  self.assertFalse(visual_intent('[$research](/tmp/thumbnail/SKILL.md) araştır'))
+  self.assertFalse(visual_intent('kabak çorbası üret'))
+ def test_notes_keep_baseline_delivery_regardless_of_domain(self):
+  cover=dict(id='cover-style',statement='Eski kapak stilini kullan.',domains=['thumbnail'],sources=[])
+  script=dict(id='script-style',statement='Kısa cümleleri kullan.',domains=['video'],sources=[])
+  cards=['Bilgi [preference; thumbnail; user]: '+cover['statement']+'\nKaynak: bilgi/cover-style.md',
+         'Bilgi [preference; video; user]: '+script['statement']+'\nKaynak: bilgi/script-style.md']
+  data=dict(text='\n\n'.join(cards),records=[cover,script],source_versions={},transfers=[])
+  with patch('konu_sentezi.retrieve',return_value=data):
+   (self.v/'bilgi').mkdir()
+   p=build_task_package(self.v,'proj-a senaryo yaz')
+   self.assertIn(cover['statement'],p['text']);self.assertIn(script['statement'],p['text'])
+   self.assertEqual(['cover-style','script-style'],[r['id'] for r in p['knowledge']['records']])
+   p=build_task_package(self.v,'proj-a kapak üret',budget=5000)
+   self.assertIn(cover['statement'],p['text'])
+ def test_cover_note_path_does_not_gate_delivery(self):
+  note=dict(id='kapak-stili',statement='Renk tercihi.',domains=[],sources=[])
+  data=dict(text='Bilgi [preference; user]: Renk tercihi.\nKaynak: bilgi/kapak-stili.md',
+      records=[note],source_versions={},transfers=[])
+  (self.v/'bilgi').mkdir()
+  with patch('konu_sentezi.retrieve',return_value=data):
+   p=build_task_package(self.v,'proj-a senaryo yaz')
+   self.assertIn('knowledge',p['selected_ids'])
+   self.assertEqual(['kapak-stili'],[r['id'] for r in p['knowledge']['records']])
+   p=build_task_package(self.v,'proj-a kapak üret',budget=5000)
+   self.assertIn('Renk tercihi.',p['text'])
+ def test_s3_01_catalog_sensor_path_keeps_baseline_delivery(self):
+  text='Kapak sensörü açıksa motoru çalıştırma.'
+  (self.v/'kapak-sensoru.md').write_text(text)
+  row=self.catalog_row(memory_id='sensor-rule',subject_key='device.sensor',
+      statement=text,source_path='kapak-sensoru.md',source_anchor=text,
+      source_hash=h.statement_hash(text),source_content_hash=h.statement_hash(text))
+  h._write_jsonl(self.v/h.CATALOG_PATH,[row])
+  p=build_task_package(self.v,'proj-a kapak sensörünü teşhis et',budget=5000)
+  self.assertIn('sensor-rule',p['selected_ids'])
+ def test_s3_02_sensor_note_path_keeps_baseline_delivery(self):
+  note=dict(id='kapak-sensoru',statement='Kapak sensörünü denetle.',domains=['device'],sources=[])
+  data=dict(text='Bilgi [rule; device]: '+note['statement']+'\nKaynak: bilgi/kapak-sensoru.md',
+      records=[note],source_versions={},transfers=[])
+  (self.v/'bilgi').mkdir()
+  with patch('konu_sentezi.retrieve',return_value=data):
+   p=build_task_package(self.v,'proj-a kapak sensörünü teşhis et',budget=5000)
+  self.assertIn(note['statement'],p['text'])
+  self.assertEqual(['kapak-sensoru'],[r['id'] for r in p['knowledge']['records']])
+ def test_s3_03_script_working_source_with_hash_is_delivered(self):
+  script=self.v/'script.md';script.write_text('Kısa senaryo taslağı.')
+  cfg=json.loads((self.v/'komuta/gorev-baglam.json').read_text())
+  cfg['projects'][0]['working_sources']=[dict(path=str(script),role='Senaryo taslağı',
+      evidence_source='approval.md',sha256=digest(script)),
+      dict(path=str(self.image),role='Maskot kimlik referansı',evidence_source='approval.md')]
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps(cfg))
+  p=build_task_package(self.v,'proj-a senaryo yaz',budget=5000)
+  self.assertIn('Senaryo taslağı: '+str(script),p['text'])
+  self.assertNotIn('Maskot kimlik referansı: '+str(self.image),p['text'])
+  p=build_task_package(self.v,'proj-a kapak üret',budget=5000)
+  self.assertIn('Maskot kimlik referansı: '+str(self.image),p['text'])
+ def test_title_decision_note_in_thumbnail_domain_is_preserved(self):
+  note=dict(id='title-decision',kind='decision',statement='Üç başlıktan ikinci başlığı seç.',
+      domains=['thumbnail'],sources=[])
+  data=dict(text='Bilgi [decision; thumbnail]: '+note['statement']+'\nKaynak: bilgi/title-decision.md',
+      records=[note],source_versions={},transfers=[])
+  (self.v/'bilgi').mkdir()
+  with patch('konu_sentezi.retrieve',return_value=data):
+   for query in ('proj-a üç başlık öner','proj-a hangi başlığı seçelim'):
+    with self.subTest(query=query):
+     p=build_task_package(self.v,query,budget=2000)
+     self.assertIn(note['statement'],p['text'])
+     self.assertEqual(['title-decision'],[r['id'] for r in p['knowledge']['records']])
+ def test_nonidentity_asset_keeps_baseline_delivery(self):
+  cfg=json.loads((self.v/'komuta/gorev-baglam.json').read_text())
+  cfg['projects'][0]['assets'].append(dict(self.asset,id='reference',role='reference'))
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps(cfg))
+  p=build_task_package(self.v,'proj-a araştır',budget=5000)
+  self.assertEqual(['reference'],[a['id'] for a in p['assets']])
+  self.assertIn('Görsel varlıklar: 1 adet, gerektiğinde.',p['text'])
+ def test_asset_fits_before_large_visual_note(self):
+  text='Bilgi [preference; thumbnail; user]: '+('Kapak stili. '*70)+'\nKaynak: bilgi/style.md'
+  data=dict(text=text,records=[],source_versions={},transfers=[])
+  (self.v/'bilgi').mkdir()
+  with patch('konu_sentezi.retrieve',return_value=data):
+   p=build_task_package(self.v,'proj-a kapak üret',budget=1000)
+  self.assertIn('ref',p['selected_ids'])
+  self.assertNotIn('knowledge',p['selected_ids'])
