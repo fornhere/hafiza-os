@@ -1513,7 +1513,7 @@ class ImplicitProjectTests(unittest.TestCase):
 class VisualIntentTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-  self.v=Path(self.tmp.name);(self.v/'komuta').mkdir()
+  self.v=Path(self.tmp.name).resolve();(self.v/'komuta').mkdir()
   self.image=self.v/'ref.png';self.image.write_bytes(b'image')
   source=self.v/'approval.md';source.write_text('Onaylı kimlik referansı.')
   self.asset=dict(id='ref',role='identity',path=str(self.image),allowed_roots=[str(self.v)],
