@@ -47,6 +47,45 @@ class Work(unittest.TestCase):
         w.render(self.vault)
         self.assertIn('Kapanan işler', (self.vault / 'zihin/açık-işler.md').read_text())
 
+    def test_pending_opt_in_preserves_confirmation_and_source_checks(self):
+        w.put(self.vault, 'task', dict(self.row, status='needs_confirmation'))
+        self.assertEqual([], w.brief(self.vault, include_stale=True))
+        self.assertEqual([], w.brief(self.vault, include_pending=True))
+        card = w.brief(self.vault, include_stale=True, include_pending=True)[0]
+        self.assertEqual('needs_confirmation', card['status'])
+        self.assertTrue(card['confirmation_required'])
+        (self.vault/'kaynak.md').write_text('Kaynak sonradan değişti.')
+        self.assertEqual([], w.brief(self.vault, include_stale=True, include_pending=True))
+
+    def test_pending_optional_next_step_keeps_recorded_state(self):
+        for value in ('missing', None):
+            with self.subTest(next_step=value):
+                row = dict(self.row, id='pending-'+str(value), status='needs_confirmation')
+                if value == 'missing': row.pop('next_step')
+                else: row['next_step'] = value
+                stored = w.put(self.vault, 'task', row)
+                card = w.brief(self.vault, include_stale=True, include_pending=True,
+                               card_ids={stored['id']})[0]
+                self.assertEqual('needs_confirmation', card['status'])
+                self.assertTrue(card['confirmation_required'])
+                self.assertEqual(stored.get('next_step'), card.get('next_step'))
+                self.assertEqual('next_step' in stored, 'next_step' in card)
+                self.assertEqual([], w.brief(self.vault))
+
+    def test_pending_opt_in_uses_latest_card_and_excludes_closed_status(self):
+        w.put(self.vault, 'task', dict(self.row, status='needs_confirmation'))
+        w.put(self.vault, 'task', dict(self.row, status='done', expected_version=1))
+        self.assertEqual([], w.brief(self.vault, include_stale=True, include_pending=True))
+
+    def test_card_ids_filter_skips_unrelated_source_reads(self):
+        w.put(self.vault, 'task', self.row)
+        w.put(self.vault, 'task', dict(self.row, id='other'))
+        with patch.object(h, 'source_file', wraps=h.source_file) as reader:
+            cards = w.brief(self.vault, card_ids={'test'})
+        self.assertEqual(['test'], [c['id'] for c in cards])
+        self.assertEqual(1, reader.call_count)
+        self.assertEqual([], w.brief(self.vault, card_ids=set()))
+
     def test_stale_and_unconfirmed_not_presented_as_current(self):
         w.put(self.vault, 'task', dict(self.row, last_verified='2020-01-01'))
         old = w.brief(self.vault, include_stale=True)[0]

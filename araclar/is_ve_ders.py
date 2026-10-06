@@ -170,11 +170,13 @@ def content_updates(vault):
     return dates
 
 
-def brief(vault, limit=3, include_stale=False, diagnostics=None):
+def brief(vault, limit=3, include_stale=False, diagnostics=None, *, include_pending=False, card_ids=None):
     """Return cards; optionally append excluded card IDs and reasons to a list.
 
     Diagnostics cover validation/verification exclusions, not status or limits.
     content_updated_at is derived; updated_at and latest() retain ledger semantics.
+    include_pending exposes explicit needs_confirmation cards only with include_stale.
+    card_ids restricts source reads; all selected cards still pass the same checks.
     """
     result = []
     dates = content_updates(vault)
@@ -188,9 +190,11 @@ def brief(vault, limit=3, include_stale=False, diagnostics=None):
     except (OSError, ValueError, KeyError, TypeError):
         archived = set()
     for row in latest(vault, 'task').values():
+        if card_ids is not None and row['id'] not in card_ids: continue
         row = dict(row, content_updated_at=dates.get(row['id'], row.get('updated_at', '')))
         report = row.get('assertion_kind') == 'assistant_report'
-        if row['status'] not in ('active', 'blocked') and not (report and include_stale): continue
+        pending = include_pending and include_stale and row['status'] == 'needs_confirmation'
+        if row['status'] not in ('active', 'blocked') and not (report and include_stale) and not pending: continue
         if row.get('project_id') in archived: continue
         try:
             source = h.source_file(vault, row['source_path'])
@@ -223,7 +227,7 @@ def brief(vault, limit=3, include_stale=False, diagnostics=None):
         if stale and not include_stale:
             omit(row, 'stale'); continue
         # Derived visibility only: an old confirmation never becomes a current action.
-        result.append(dict(row, status='needs_confirmation', confirmation_required=True) if stale else row)
+        result.append(dict(row, status='needs_confirmation', confirmation_required=True) if stale or pending else row)
     result.sort(key=lambda r: r['content_updated_at'], reverse=True)
     # Fresh session reports compete by recency. Dated confirmations precede
     # never-confirmed history so missing dates cannot displace existing cards.
