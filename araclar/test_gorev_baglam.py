@@ -8,6 +8,204 @@ import hafiza as h
 from gorev_baglam import build_task_package, digest, rank_records, validate_inputs
 from codex_hafiza import hook
 
+class SubtaskFocus(unittest.TestCase):
+ def setUp(self):
+  from gorev_baglam import _subfolders
+  self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+  self.v=Path(self.tmp.name).resolve();(self.v/'komuta').mkdir()
+  self.root=self.v/'videolar';self.root.mkdir()
+  for name in ('atlas-mercek','delta-sponsor','nova-kesit'): (self.root/name).mkdir()
+  self.project=dict(id='proj-a',aliases=['videolar'],roots=[str(self.root)])
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project]}))
+  _subfolders.cache_clear();self.addCleanup(_subfolders.cache_clear)
+
+ def tasks(self):
+  return [dict(id='foreign',title='Delta sponsor videosu',next_step='Kapak düzenle'),
+          dict(id='unrelated',title='Önceki prova videosu',next_step='Ses düzenle'),
+          dict(id='plan',title='Genel yayın sırası',next_step='Atlas ve mercek videosunu araştır'),
+          dict(id='focused',title='Atlas ve mercek videosu',next_step='Kapak düzenle')]
+
+ def test_title_beats_plan_and_siblings_are_removed(self):
+  from gorev_baglam import subtask_focus
+  tasks,focus,omitted=subtask_focus(self.tasks(),self.project,self.root/'atlas-mercek/arastirma')
+  self.assertEqual([t['id'] for t in tasks],['plan','focused'])
+  self.assertLess(focus['focused'],focus['plan'])
+  self.assertEqual(omitted,['foreign:subtask_focus','unrelated:subtask_focus'])
+
+ def test_root_outside_and_no_cwd_preserve_cards_without_scan(self):
+  from gorev_baglam import subtask_focus
+  tasks=self.tasks()
+  with patch('gorev_baglam.os.scandir') as scan:
+   for cwd in (self.root,self.v/'outside',None):
+    self.assertEqual(subtask_focus(tasks,self.project,cwd),(tasks,{},[]))
+   scan.assert_not_called()
+
+ def test_temporary_cwd_components_preserve_cards_without_scan(self):
+  from gorev_baglam import subtask_focus
+  tasks=self.tasks()
+  with patch('gorev_baglam.os.scandir') as scan:
+   for name in ('.atlas-mercek','_atlas-mercek','tmp','temp','cache','scratch',
+                'temporary','scratchpad','tmp-atlas','cache_mercek'):
+    for relative in (name,name+'/atlas-mercek','atlas-mercek/'+name+'/ses'):
+     with self.subTest(cwd=relative):
+      self.assertEqual(subtask_focus(tasks,self.project,self.root/relative),(tasks,{},[]))
+   scan.assert_not_called()
+
+ def test_temporary_cwd_package_preserves_root_delivery(self):
+  self.write_tasks(self.tasks())
+  root=build_task_package(self.v,'devam',cwd=self.root,budget=2000,history='never')
+  for relative in ('.atlas-mercek','_atlas-mercek','tmp/atlas-mercek',
+                   'atlas-mercek/cache','scratch'):
+   with self.subTest(cwd=relative):
+    package=build_task_package(self.v,'devam',cwd=self.root/relative,budget=2000,history='never')
+    self.assertEqual(package['project_id'],root['project_id'])
+    self.assertEqual(package['selected_ids'],root['selected_ids'])
+    self.assertEqual(package['omitted_reasons'],root['omitted_reasons'])
+
+ def test_temporary_siblings_cannot_exclude_cards(self):
+  from gorev_baglam import subtask_focus
+  for name in ('.delta-sponsor','_delta-sponsor','tmp','temp','cache','scratch'):
+   (self.root/name).mkdir()
+  tasks=[dict(id='neutral',title='Tmp temp cache scratch',next_step='Ses düzenle')]
+  self.assertEqual(subtask_focus(tasks,self.project,self.root/'new-work'),(tasks,{},[]))
+
+ def test_sibling_inflections_in_title_next_step_and_evidence(self):
+  from gorev_baglam import subtask_focus
+  for suffix in ('sponsor','sponsoru','sponsorun','sponsoruna'):
+   for field in ('title','next_step','evidence'):
+    with self.subTest(suffix=suffix,field=field):
+     foreign=dict(id='foreign',title='Genel durum',next_step='Ses düzenle')
+     foreign[field]='Delta '+suffix
+     for cwd in ('atlas-mercek','new-work'):
+      kept,_,omitted=subtask_focus([foreign],self.project,self.root/cwd)
+      self.assertEqual(kept,[]);self.assertEqual(omitted,['foreign:subtask_focus'])
+     foreign['evidence']=foreign.get('evidence','')+' Atlas merceği'
+     self.assertIn(foreign,subtask_focus([foreign],self.project,self.root/'atlas-mercek')[0])
+
+ def test_sibling_inflections_require_every_distinct_name_word(self):
+  from gorev_baglam import subtask_focus
+  tasks=[dict(id='partial',title='Sponsoruna sponsorun sponsoru',next_step='Ses düzenle'),
+         dict(id='lookalike',title='Delta sponsorluk',next_step='Ses düzenle')]
+  self.assertEqual(subtask_focus(tasks,self.project,self.root/'new-work'),(tasks,{},[]))
+
+ def test_no_focus_only_strong_sibling_is_removed(self):
+  from gorev_baglam import subtask_focus
+  tasks=[dict(id='partial',title='Delta videosu',next_step='Kapak düzenle'),self.tasks()[0],self.tasks()[1]]
+  kept,focus,omitted=subtask_focus(tasks,self.project,self.root/'new-work')
+  self.assertEqual([t['id'] for t in kept],['partial','unrelated'])
+  self.assertEqual(focus,{})
+  self.assertEqual(omitted,['foreign:subtask_focus'])
+
+ def test_underscore_and_second_component_break_ties(self):
+  from gorev_baglam import subtask_focus
+  tasks=[dict(id='cover',title='Atlas mercek kapak',next_step='Renk düzenle'),
+         dict(id='audio',title='Atlas mercek ses',next_step='Ses düzenle')]
+  kept,focus,_=subtask_focus(tasks,self.project,self.root/'atlas_mercek/ses/v4')
+  self.assertEqual(kept,tasks);self.assertLess(focus['audio'],focus['cover'])
+
+ def test_sibling_scan_is_cached_and_missing_root_is_safe(self):
+  import gorev_baglam as g
+  scan=g.os.scandir
+  with patch.object(g.time,'monotonic',return_value=60),patch.object(g.os,'scandir',wraps=scan) as mock:
+   for _ in range(3): g.subtask_focus(self.tasks(),self.project,self.root/'atlas-mercek')
+   self.assertEqual(mock.call_count,1)
+  with patch.object(g.time,'monotonic',return_value=120),patch.object(g.os,'scandir',side_effect=OSError):
+   self.assertEqual(g.subtask_focus(self.tasks(),self.project,self.root/'atlas-mercek')[0],self.tasks()[2:])
+
+ def test_deepest_configured_root_has_no_subtask_at_its_root(self):
+  from gorev_baglam import subtask_focus
+  project=dict(self.project,roots=[str(self.root),str(self.root/'atlas-mercek')])
+  tasks=self.tasks()
+  self.assertEqual(subtask_focus(tasks,project,self.root/'atlas-mercek'),(tasks,{},[]))
+
+ def write_tasks(self,tasks):
+  from is_ve_ders import put
+  for task in reversed(tasks):
+   source=task['id']+'.md';(self.v/source).write_text('Sentetik iş kanıtı.')
+   data=dict(task,project_id='proj-a',status='active',source_path=source,
+       evidence='Sentetik iş kanıtı.',actor='reviewer')
+   data.setdefault('last_verified',dt.date.today().isoformat())
+   put(self.v,'task',data)
+
+ def test_query_orders_cards_with_equal_folder_evidence(self):
+  self.write_tasks([dict(id='cover',title='Atlas mercek kapak',next_step='Renk düzenle'),
+                    dict(id='audio',title='Atlas mercek ses',next_step='Ses düzenle')])
+  package=build_task_package(self.v,'ses',cwd=self.root/'atlas-mercek',budget=2000,history='never')
+  self.assertEqual([i for i in package['selected_ids'] if i in ('cover','audio')],['audio','cover'])
+
+ def test_focus_never_delivers_changed_source(self):
+  self.write_tasks(self.tasks())
+  (self.v/'focused.md').write_text('Değişmiş kaynak.')
+  package=build_task_package(self.v,'devam',cwd=self.root/'atlas-mercek',budget=2000,history='never')
+  self.assertNotIn('focused',package['selected_ids'])
+  self.assertIn('focused:evidence_missing',package['omitted_reasons'])
+  self.assertNotIn('foreign',package['selected_ids'])
+
+ def test_package_focus_first_and_root_keeps_previous_order(self):
+  self.write_tasks(self.tasks())
+  root=build_task_package(self.v,'devam',cwd=self.root,budget=2000,history='never')
+  self.assertEqual([i for i in root['selected_ids'] if i in {t['id'] for t in self.tasks()}],
+                   ['foreign','unrelated','plan'])
+  for cwd in ('atlas-mercek','atlas-mercek/arastirma','atlas-mercek/motion/b1','atlas-mercek/paket/thumbnail/v4'):
+   package=build_task_package(self.v,'devam',cwd=self.root/cwd,budget=2000,history='never')
+   ids=[i for i in package['selected_ids'] if i in {t['id'] for t in self.tasks()}]
+   self.assertEqual(package['project_id'],'proj-a')
+   self.assertEqual(ids,['focused','plan'])
+   self.assertNotIn('Bağlam kontrolü',package['text'])
+
+ def test_project_state_and_legacy_session_project_name_survive_focus(self):
+  from gorev_baglam import subtask_focus
+  states=[dict(id='project-state:proj-a',title='Proj A oturum durumu',next_step='Tam sürümün ses kabulü'),
+          dict(id='proj-a',title='Son durum',next_step='Tam sürümü incele',transcript_source={'session':'test'}),
+          dict(id='legacy',title='Proj A',next_step='Ses kabulü',assertion_kind='assistant_report')]
+  plain=dict(id='plain',title='Proj A',next_step='Eski genel iş')
+  kept,focus,omitted=subtask_focus(self.tasks()+states+[plain],self.project,self.root/'atlas-mercek')
+  for state in states:
+   self.assertIn(state,kept);self.assertIn(state['id'],focus)
+  self.assertNotIn(plain,kept)
+  self.assertIn('plain:subtask_focus',omitted)
+
+ def test_project_state_sibling_evidence_can_exclude_but_focus_evidence_protects(self):
+  from gorev_baglam import subtask_focus
+  for field in ('next_step','evidence'):
+   state=dict(id='project-state:proj-a',title='Proj A oturum durumu',next_step='Tam sürümün ses kabulü')
+   state[field]='delta-sponsor dizininde çalış'
+   kept,_,omitted=subtask_focus(self.tasks()+[state],self.project,self.root/'atlas-mercek')
+   self.assertNotIn(state,kept);self.assertIn(state['id']+':subtask_focus',omitted)
+   state[field]+='; atlas-mercek dizini de ilgili'
+   self.assertIn(state,subtask_focus(self.tasks()+[state],self.project,self.root/'atlas-mercek')[0])
+
+ def test_fresh_session_state_precedes_old_focused_demo_in_package(self):
+  today=dt.date.today()
+  self.write_tasks([dict(id='demo',title='Atlas mercek prova',next_step='Demoyu incele',
+                        last_verified=(today-dt.timedelta(days=4)).isoformat()),
+                    dict(id='project-state:proj-a',title='Proj A oturum durumu',
+                         next_step='Tam sürümün ses kabulünü incele',last_verified=today.isoformat())])
+  package=build_task_package(self.v,'prova',cwd=self.root/'atlas-mercek',budget=2000,history='never')
+  self.assertEqual([i for i in package['selected_ids'] if i in ('demo','project-state:proj-a')],
+                   ['project-state:proj-a','demo'])
+
+ def test_fresh_partial_focus_precedes_old_title_and_query_match(self):
+  today=dt.date.today()
+  self.write_tasks([dict(id='old',title='Atlas mercek prova',next_step='Demoyu incele',
+                        last_verified=(today-dt.timedelta(days=5)).isoformat()),
+                    dict(id='new',title='Yeni ses kabulü',next_step='Atlas sürümünü incele',
+                         last_verified=today.isoformat())])
+  package=build_task_package(self.v,'prova',cwd=self.root/'atlas-mercek',budget=2000,history='never')
+  self.assertEqual([i for i in package['selected_ids'] if i in ('old','new')],['new','old'])
+
+ def test_freshness_fallback_invalid_dates_and_no_focus(self):
+  from gorev_baglam import _task_focus_order
+  focus={'new':(0,-1,0),'old':(-2,-2,0)}
+  old=dict(id='old',last_verified='2026-01-01',updated_at='2026-01-09')
+  for fields in (dict(updated_at='2026-01-05T10:00:00Z'),
+                 dict(last_verified='invalid',content_updated_at='2026-01-05T10:00:00Z',updated_at='2026-01-01')):
+   new=dict(id='new',**fields)
+   self.assertLess(_task_focus_order(new,focus),_task_focus_order(old,focus))
+   self.assertEqual(_task_focus_order(new,{}),())
+  self.assertGreater(_task_focus_order(dict(id='new',last_verified=None,updated_at='invalid'),focus),
+                     _task_focus_order(old,focus))
+
 class Package(unittest.TestCase):
  def test_expansion_requires_current_anchor_and_preserves_order(self):
   rows=[dict(memory_id='direct',statement='Kapak renk tipografi'),
