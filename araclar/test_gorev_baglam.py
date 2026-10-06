@@ -1308,3 +1308,203 @@ class SharedWorkspaceRoutingTests(unittest.TestCase):
             self.assertEqual([], select_projects(projects, 'devam', cwd=str(base/'proof-engine-video'))[0])
             rows, reason = select_projects(projects, 'devam', cwd=str(base/'proof-video'))
             self.assertEqual((['studio'], 'cwd'), ([p['id'] for p in rows], reason))
+
+
+class ImplicitProjectTests(unittest.TestCase):
+    def setUp(self):
+        # A neutral workspace fixture must not itself live under a filtered /tmp.
+        self.tmp = tempfile.TemporaryDirectory(prefix='fixture-', dir=Path(__file__).resolve().parent.parent)
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name).resolve()
+        self.vault = self.base/'vault'; (self.vault/'komuta').mkdir(parents=True)
+        self.registry = self.vault/'komuta/gorev-baglam.json'
+        self.registry.write_text(json.dumps({'projects': []}))
+        self.home = self.base/'user'; self.home.mkdir()
+        self.home_patch = patch('gorev_baglam.Path.home', return_value=self.home)
+        self.home_patch.start(); self.addCleanup(self.home_patch.stop)
+
+    def card(self, ident='proj-a-plan', evidence='Kaynakta doğrulanmış proje durumu.', **extra):
+        from is_ve_ders import put
+        source = ident+'.md'; (self.vault/source).write_text(evidence)
+        return put(self.vault, 'task', dict(id=ident, title='İş planı', status='active',
+            next_step='Sıradaki adımı doğrula.', source_path=source, evidence=evidence,
+            actor='test', last_verified=dt.date.today().isoformat(), **extra))
+
+    def package(self, cwd, query='devam edelim'):
+        return build_task_package(self.vault, query, cwd=str(cwd), budget=2000)
+
+    def test_directory_prefix_delivers_legacy_card_without_config(self):
+        self.card(); cwd = self.home/'projects/proj-a'; cwd.mkdir(parents=True)
+        p = self.package(cwd)
+        self.assertEqual('proj-a', p['project_id'])
+        self.assertEqual('cwd-implicit', p['project_source'])
+        self.assertIn('proj-a-plan', p['selected_ids'])
+        self.assertIn('proj-a-plan', p['summary']['task_ids'])
+
+    def test_small_parent_directory_finds_unique_child_project(self):
+        self.card(); cwd = self.home/'workspace'; (cwd/'proj-a').mkdir(parents=True)
+        (cwd/'calisma').mkdir()
+        p = self.package(cwd)
+        self.assertEqual('proj-a', p['project_id'])
+        self.assertIn('proj-a-plan', p['selected_ids'])
+
+    def test_pending_legacy_card_is_delivered_as_confirmation_hint(self):
+        from is_ve_ders import put
+        row = self.card(); cwd = self.home/'proj-a'; cwd.mkdir()
+        put(self.vault, 'task', dict(row, status='needs_confirmation', expected_version=row['version']))
+        p = self.package(cwd)
+        self.assertEqual('proj-a', p['project_id'])
+        self.assertIn('proj-a-plan', p['selected_ids'])
+        self.assertIn('teyit gerekli', p['text'])
+        self.assertEqual([], p['summary']['task_ids'])
+
+    def test_pending_missing_or_null_next_step_is_safe_in_package(self):
+        from is_ve_ders import put, latest
+        cwd = self.home/'proj-a'; cwd.mkdir()
+        row = self.card()
+        for value in ('missing', None):
+            with self.subTest(next_step=value):
+                row = dict(row, status='needs_confirmation', expected_version=row['version'])
+                if value == 'missing': row.pop('next_step', None)
+                else: row['next_step'] = value
+                row = put(self.vault, 'task', row)
+                for query in ('devam edelim', 'iş planı durumunu incele'):
+                    p = self.package(cwd, query)
+                    self.assertEqual('proj-a', p['project_id'])
+                    self.assertIn('proj-a-plan', p['selected_ids'])
+                    self.assertIn('teyit gerekli', p['text'])
+                    self.assertIn('Kaydedilmiş sonraki adım yok', p['text'])
+                    self.assertEqual([], p['summary']['task_ids'])
+                    self.assertEqual([], p['capsule']['tasks'])
+                    self.assertIsNone(p['capsule']['suggested_next_step'])
+                recorded = latest(self.vault, 'task')['proj-a-plan']
+                self.assertIsNone(recorded.get('next_step'))
+                self.assertEqual(value is None, 'next_step' in recorded)
+
+    def test_implicit_bad_json_and_schema_preserve_empty_selection_with_diagnostic(self):
+        from is_ve_ders import TASKS
+        cwd = self.home/'proj-a'; cwd.mkdir()
+        ledger = self.vault/TASKS; ledger.parent.mkdir()
+        for content, error in [('{broken\n', 'JSONDecodeError'), ('{}\n', 'KeyError'),
+                               ('[]\n', 'ValueError'),
+                               ('{"id": "proj-a-plan", "status": []}\n', 'ValueError'),
+                               ('{"id": "proj-a-plan", "status": "active"}\n', 'ValueError'),
+                               ('{"id": "proj-a-plan", "title": null, "status": "active"}\n', 'ValueError')]:
+            with self.subTest(content=content):
+                ledger.write_text(content)
+                p = self.package(cwd)
+                self.assertIsNone(p['project_id'])
+                self.assertEqual('unresolved', p['match_reason'])
+                self.assertEqual([], p['selected_ids'])
+                self.assertEqual('', p['text'])
+                self.assertIn('implicit_project:'+error, p['omitted_reasons'])
+
+    def test_implicit_read_errors_preserve_empty_selection_with_diagnostic(self):
+        self.card(); cwd = self.home/'proj-a'; cwd.mkdir()
+        for reader in ('latest', 'brief'):
+            with self.subTest(reader=reader), patch('gorev_baglam.'+reader, side_effect=PermissionError('fixture')):
+                p = self.package(cwd)
+                self.assertIsNone(p['project_id'])
+                self.assertEqual([], p['selected_ids'])
+                self.assertIn('implicit_project:PermissionError', p['omitted_reasons'])
+        original = Path.resolve
+        def resolve(path, *args, **kwargs):
+            if path == cwd: raise OSError('fixture resolution failure')
+            return original(path, *args, **kwargs)
+        with patch('gorev_baglam.Path.resolve', resolve):
+            p = self.package(cwd)
+        self.assertIsNone(p['project_id'])
+        self.assertEqual([], p['selected_ids'])
+        self.assertIn('implicit_project:OSError', p['omitted_reasons'])
+
+    def test_implicit_programming_error_is_not_silenced(self):
+        cwd = self.home/'proj-a'; cwd.mkdir()
+        with patch('gorev_baglam.implicit_project', side_effect=RuntimeError('fixture bug')):
+            with self.assertRaisesRegex(RuntimeError, 'fixture bug'):
+                self.package(cwd)
+
+    def test_temporary_components_cannot_be_bypassed_by_project_or_git_root(self):
+        self.card()
+        for component in ('tmp', 'temp', '.cache', 'scratch', 'scratch-workspaces'):
+            root = self.home/component/'proj-a'; (root/'src').mkdir(parents=True)
+            (root/'.git').mkdir()
+            for cwd in (root, root/'src'):
+                with self.subTest(cwd=cwd):
+                    p = self.package(cwd)
+                    self.assertIsNone(p['project_id'])
+                    self.assertEqual([], p['selected_ids'])
+        if Path('/tmp').is_dir():
+            with tempfile.TemporaryDirectory(dir='/tmp', prefix='fixture-') as directory:
+                cwd = Path(directory)/'proj-a'; cwd.mkdir(); (cwd/'.git').mkdir()
+                p = self.package(cwd)
+                self.assertIsNone(p['project_id'])
+                self.assertEqual([], p['selected_ids'])
+
+    def test_first_two_home_levels_find_project_from_nested_cwd(self):
+        self.card(); cwd = self.home/'projects/proj-a/src/module'; cwd.mkdir(parents=True)
+        self.assertEqual('proj-a', self.package(cwd)['project_id'])
+
+    def test_git_root_finds_project_outside_home(self):
+        if any(p.casefold() in {'tmp', 'temp'} for p in self.base.parts):
+            self.skipTest('ev dışı geçici dizinler bilerek örtük proje üretmez')
+        self.card(); root = self.base/'repos/proj-a'; cwd = root/'src/module'
+        cwd.mkdir(parents=True); (root/'.git').write_text('gitdir: elsewhere')
+        self.assertEqual('proj-a', self.package(cwd)['project_id'])
+
+    def test_evidence_whole_slug_and_source_path_match(self):
+        cwd = self.home/'proj-a'; cwd.mkdir()
+        for field in ('evidence', 'source_path', 'project_id'):
+            with self.subTest(field=field):
+                row = dict(id='neutral-plan', title='İş planı', status='active', evidence='', source_path='', project_id=None)
+                row[field] = {'evidence':'Kaynak proj-a durumunu doğrular.',
+                              'source_path':'notes/proj-a/state.md', 'project_id':'proj-a'}[field]
+                with patch('gorev_baglam.latest', return_value={row['id']:row}), patch('gorev_baglam.brief', return_value=[row]):
+                    from gorev_baglam import select_projects
+                    rows, reason = select_projects([], 'devam', cwd=cwd, vault=self.vault)
+                self.assertEqual(('proj-a', 'cwd-implicit'), (rows[0]['id'], reason))
+
+    def test_partial_slug_and_other_project_owner_do_not_match(self):
+        from gorev_baglam import select_projects
+        cwd = self.home/'proj-a'; cwd.mkdir()
+        for row in [dict(id='proj-ab-plan', evidence='proj-ab durumu', source_path='proj-ab.md'),
+                    dict(id='proj-a-plan', evidence='proj-a durumu', project_id='proj-b')]:
+            with self.subTest(row=row), patch('gorev_baglam.latest', return_value={row['id']:row}):
+                self.assertEqual(([], 'unresolved'), select_projects([], 'devam', cwd=cwd, vault=self.vault))
+
+    def test_generic_short_shared_and_scratch_directories_are_excluded(self):
+        from gorev_baglam import select_projects
+        for name in ('calisma', 'youtube', 'abc', 'scratch-workspaces/proj-a', 'tmp-build/proj-a'):
+            cwd = self.home/name; cwd.mkdir(parents=True)
+            with self.subTest(name=name), patch('gorev_baglam.brief') as reader:
+                self.assertEqual(([], 'unresolved'), select_projects([], 'devam', cwd=cwd, vault=self.vault))
+                reader.assert_not_called()
+        for cwd in (self.home, self.vault):
+            self.assertIsNone(self.package(cwd)['project_id'])
+
+    def test_ambiguous_siblings_and_many_children_do_not_guess(self):
+        self.card(); self.card('proj-b-plan')
+        cwd = self.home/'workspace'; cwd.mkdir()
+        (cwd/'proj-a').mkdir(); (cwd/'proj-b').mkdir()
+        self.assertIsNone(self.package(cwd)['project_id'])
+        for i in range(7): (cwd/('child-'+str(i))).mkdir()
+        self.assertIsNone(self.package(cwd)['project_id'])
+
+    def test_configured_scope_and_explicit_name_keep_precedence(self):
+        self.card(); cwd = self.home/'proj-a'; cwd.mkdir()
+        configured = dict(id='proj-b', aliases=['proj-b'], roots=[str(cwd)])
+        self.registry.write_text(json.dumps({'projects':[configured]}))
+        self.assertEqual('proj-b', self.package(cwd)['project_id'])
+        configured['roots'] = []; self.registry.write_text(json.dumps({'projects':[configured]}))
+        self.assertEqual('proj-b', self.package(cwd, 'proj-b devam')['project_id'])
+        configured['id'] = 'proj-a'; configured['status'] = 'archived'
+        self.registry.write_text(json.dumps({'projects':[configured]}))
+        self.assertIsNone(self.package(cwd)['project_id'])
+
+    def test_latest_closed_and_changed_sources_cannot_establish_scope(self):
+        from is_ve_ders import put
+        row = self.card(); cwd = self.home/'proj-a'; cwd.mkdir()
+        (self.vault/row['source_path']).write_text('Kaynak sonradan değişti.')
+        self.assertIsNone(self.package(cwd)['project_id'])
+        (self.vault/row['source_path']).write_text(row['evidence'])
+        put(self.vault, 'task', dict(row, status='done', expected_version=row['version']))
+        self.assertIsNone(self.package(cwd)['project_id'])

@@ -9,7 +9,7 @@ import re
 import time
 from pathlib import Path
 import hafiza as h
-from is_ve_ders import brief
+from is_ve_ders import brief, latest
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -342,7 +342,75 @@ def area_topic(project, words):
             any(alias_inflected(term, word) for term in vocabulary for word in words))
 
 
-def select_projects(projects, query, cwd=None, previous_user=None, session_project_id=None, *, vault=None):
+def implicit_project(projects, cwd, vault):
+    # Dizin adı tek başına kanıt değil; yalnız kaynak doğrulamalı kartla kapsam kur.
+    if not cwd or vault is None: return None
+    root = Path(cwd).resolve(); home = Path.home().resolve()
+    if root == home or root == Path(root.anchor) or shared_workspace(root, vault): return None
+    # Ev altındaki yolda yalnız evden sonraki bileşenler; ev dışı yolda hepsi denetlenir.
+    parts = root.relative_to(home).parts if root.is_relative_to(home) else root.parts
+    if any(p.casefold() in {'tmp', 'temp', '.cache'} or
+           p.casefold().startswith(('scratch', 'tmp-', 'temp-')) for p in parts): return None
+    generic = _GENERIC | {'calisma','çalışma','projects','projeler','scratch','tmp','temp',
+                          'home','videolar','youtube','desktop','downloads','documents','share'}
+    configured = {str(a).casefold() for p in projects
+                  for a in [p.get('id', ''), *p.get('aliases', [])]}
+    candidates = {}
+    def add(path, priority):
+        slug = path.name.casefold()
+        if (len(slug) < 4 or slug in generic or slug in configured or slug == home.name.casefold()
+                or slug.startswith(('scratch', 'tmp-', 'temp-'))
+                or not re.fullmatch(r'[^\W_]+(?:[-_][^\W_]+)*', slug) or slug.isdigit()): return
+        candidates[slug] = min(priority, candidates.get(slug, priority))
+    add(root, 0)
+    # Git süreci başlatma; üst dizin denetimi ve alt dizin taraması sınırlı.
+    for parent in [root, *list(root.parents)[:12]]:
+        if parent == home: break
+        if (parent / '.git').exists():
+            add(parent, 1); break
+    if root.is_relative_to(home):
+        relative = root.relative_to(home).parts
+        for depth in range(1, min(2, len(relative))+1):
+            add(home.joinpath(*relative[:depth]), 2)
+    children = []
+    try:
+        for count, child in enumerate(root.iterdir()):
+            if count >= 32: children = []; break
+            if not child.name.startswith('.') and child.is_dir(): children.append(child)
+            if len(children) > 8: children = []; break
+    except OSError: children = []
+    for child in children: add(child, 3)
+    if not candidates: return None
+    matches = {}
+    # Önce defterdeki son satırları süz; ilgisiz kartların kaynaklarını açma.
+    for card in latest(Path(vault), 'task').values():
+        if (not isinstance(card, dict) or
+                any(not isinstance(card.get(key), str) for key in ('id', 'title', 'status')) or
+                any(key in card and card[key] is not None and not isinstance(card[key], str)
+                    for key in ('source_path', 'evidence', 'project_id', 'next_step'))):
+            raise ValueError('invalid implicit task schema')
+        for slug in candidates:
+            owner = card.get('project_id')
+            if owner and owner != slug: continue
+            text = str(card.get('source_path', ''))+' '+str(card.get('evidence', ''))
+            if (owner == slug or card['id'].casefold().startswith(slug+'-') or
+                    re.search(r'(?<![\w-])'+re.escape(slug)+r'(?![\w-])', text.casefold())):
+                matches.setdefault(slug, set()).add(card['id'])
+    if not matches: return None
+    card_ids = set().union(*matches.values())
+    cards = brief(Path(vault), limit=10000, include_stale=True, include_pending=True, card_ids=card_ids)
+    matches = {slug:[c for c in cards if c['id'] in ids] for slug, ids in matches.items()}
+    matches = {slug:cards for slug, cards in matches.items() if cards}
+    if not matches: return None
+    best = min(candidates[s] for s in matches)
+    slugs = [s for s in matches if candidates[s] == best]
+    if len(slugs) != 1: return None  # Kardeş projeler arasında sıraya göre seçim yapma.
+    slug = slugs[0]
+    return dict(id=slug, aliases=[], roots=[str(root)], task_ids=[t['id'] for t in matches[slug]],
+                _implicit_tasks=matches[slug])
+
+
+def select_projects(projects, query, cwd=None, previous_user=None, session_project_id=None, *, vault=None, diagnostics=None):
     intent = task_intent(query)
     # Explicit replacement names the destination; the abandoned project is not scope.
     replacement = re.search(r'\b(?:bırak(?:ıp)?|yerine)\b(.+)', intent, re.I)
@@ -407,6 +475,16 @@ def select_projects(projects, query, cwd=None, previous_user=None, session_proje
         if len(prior) != 1: prior=[]
     chosen=explicit or topical or located or prior
     reason='explicit' if explicit else ('area_topic' if topical else 'cwd' if located else ('session_project' if session_project_id is not None else 'previous_user') if prior else 'unresolved')
+    if not chosen:
+        try:
+            inferred = implicit_project(projects, cwd, vault)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # Only the optional inference path degrades to the former empty scope.
+            # Preserve a bounded diagnostic without leaking ledger contents.
+            if diagnostics is not None:
+                diagnostics.append('implicit_project:'+type(exc).__name__)
+            inferred = None
+        if inferred: chosen, reason = [inferred], 'cwd-implicit'
     return chosen, reason
 
 def config(vault):
@@ -602,7 +680,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     projects=[]
     cfg=config(vault)
     if cfg.get('invalid'): omitted.append('config_invalid')
-    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd, previous_user, session_project_id, vault=vault)
+    projects, match_reason = select_projects(cfg.get('projects', []), query, cwd, previous_user, session_project_id, vault=vault, diagnostics=omitted)
     project = projects[0] if len(projects)==1 else None
     if project and match_reason == 'area_topic':
         # An area's production topic does not request its cover identity kit.
@@ -645,8 +723,13 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 belongs = len(title_projects)==1 and title_projects[0]['id']==project['id']
             return belongs
         diagnostics = []
-        for task in brief(vault,limit=10000,include_stale=True,diagnostics=diagnostics):
-            if belongs_to_project(task): project_tasks.append(task)
+        cards = (project['_implicit_tasks'] if match_reason == 'cwd-implicit' else
+                 brief(vault,limit=10000,include_stale=True,diagnostics=diagnostics))
+        for task in cards:
+            if belongs_to_project(task):
+                # Confirmation cards may legitimately omit the next action.
+                project_tasks.append(dict(task, next_step=task.get('next_step') or
+                                          'Kaydedilmiş sonraki adım yok; teyit gerekli.'))
         omitted.extend(item['id']+':'+item['reason'] for item in diagnostics
                        if belongs_to_project(item))
     task_focus = {}
@@ -1029,7 +1112,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         instruction += ' Paket varlık rolleri: '+', '.join(sorted({a['role'] for a in assets}))+'. validate-inputs için ilgili --role değerini kullan.'
         if not add('input-check',instruction):
             omitted.append('input-check:budget')
-    errors=[reason for reason in omitted if not reason.endswith((':budget', ':card_limit', ':subtask_focus'))]
+    # Failed optional inference reports diagnostics without adding a context card
+    # to a selection that previously stayed empty.
+    errors=[reason for reason in omitted if not reason.endswith((':budget', ':card_limit', ':subtask_focus'))
+            and not reason.startswith('implicit_project:')]
     if errors:
         detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'
         if len(detail)>min(600,budget): detail='Bağlam kontrolü: Geçersiz veya değişmiş kaynaklar dışlandı; omitted_reasons alanını incele.'
@@ -1067,6 +1153,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             omitted.append('scope-header:budget')
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
+    result['project_source'] = match_reason
     result['source_references'] = {ref: data for ref, data in source_references.items()
                                    if ref in result['text']}
     result['deduplicated_tasks'] = {ident: ids for ident, ids in task_duplicates.items() if ids and ident in selected}
