@@ -130,7 +130,7 @@ def snapshot(vault, now=None):
             data = json.loads(audits[-1].read_text()); report = data['payload']
             elapsed = age(data['at'])
             fields = ('catalog_errors', 'missing_remote', 'drifted', 'orphan_remote_ids', 'duplicate_remote_groups')
-            if any(report.get(k) for k in fields):
+            if any(report.get(k) for k in fields) or report.get('unexpected_remote_ids'):
                 add('remote_audit', 'failed', 'Uzak kayıt denetiminde fark veya bütünlük hatası var.', data['at'])
             elif any(k not in report for k in fields):
                 add('remote_audit', 'unknown', 'Eksik denetim şeması.', data['at'])

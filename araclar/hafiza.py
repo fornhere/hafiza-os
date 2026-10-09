@@ -506,6 +506,38 @@ def memory_metadata(vault: Path, record: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
+def remote_record_groups(vault, records):
+    """Silme kanıtını bir kez oku; eski uzak bağı tarihçe olarak koru."""
+    forgotten = set()
+    for path in (Path(vault) / 'günlük/hafıza-makbuzları').glob('*-forget-*.json'):
+        try:
+            receipt = json.loads(path.read_text(encoding='utf-8'))
+            payload = receipt['payload']
+            if (receipt.get('operation') == 'forget' and payload.get('result') == 'deleted'
+                    and payload.get('approved_by') and payload.get('mem0_id')):
+                forgotten.add(payload['mem0_id'])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue  # Bozuk makbuz beklenen yokluk kanıtı değildir.
+    today = dt.datetime.now(dt.timezone.utc).date()
+    active, absent, passive = [], [], []
+    for record in records:
+        expired = False
+        if record.get('valid_to'):
+            try: expired = dt.date.fromisoformat(str(record['valid_to'])[:10]) <= today
+            except ValueError: pass
+        if record.get('status') == 'deleted' or record.get('mem0_id') in forgotten:
+            absent.append(record)
+        elif record.get('status') in {'superseded', 'quarantined'}:
+            # Supersession also closes valid_to; its existing remote status
+            # still needs to transition out of active.
+            passive.append(record)
+        elif expired:
+            absent.append(record)
+        elif record.get('status') == 'active':
+            active.append(record)
+    return active, absent, passive
+
+
 def sync_existing(vault, records, client, *, apply=False):
     """Serialize index workers, but never hold the canonical lock over network.
 
@@ -568,23 +600,25 @@ def _sync_remote(
     if errors:
         raise ValueError("katalog geçersiz: " + "; ".join(errors))
     remote = {item["id"]: item for item in client.list_memories()}
+    active, absent, passive = remote_record_groups(vault, records)
     receipt = {
         "apply": apply,
-        "total": len(records),
+        "total": len(active),
         "added": 0,
         "updated": 0,
         "unchanged": 0,
-        "skipped": 0,
+        "skipped": len(absent),
+        "drifted": [],
         "missing_remote": 0,
         "verified": 0,
     }
     catalog_changed = False
-    for record in records:
+    for record in active + passive:
+        if record['status'] != 'active' and record.get('mem0_id') not in remote:
+            receipt['skipped'] += 1
+            continue  # Only an existing passive binding may be updated.
         if record["sensitivity"] != "normal" or contains_secret(record["statement"]):
             raise ValueError(f"{record['memory_id']}: gizli bilgi senkronlanamaz")
-        if record["status"] in {"deleted", "superseded"} and not record.get("mem0_id"):
-            receipt["skipped"] += 1
-            continue
         memory_id = record.get("mem0_id")
         if not memory_id:
             matches = [item for item in remote.values() if
@@ -632,7 +666,17 @@ def _sync_remote(
         else:
             receipt["unchanged"] += 1
     verified_remote = {item["id"]: item for item in client.list_memories()}
-    for record in records:
+    receipt['expected_absent'] = sum(1 for r in absent if r.get('mem0_id') not in verified_remote)
+    receipt['unexpected_remote_ids'] = sorted(r['mem0_id'] for r in absent
+                                             if r.get('mem0_id') in verified_remote)
+    for record in passive:
+        current = verified_remote.get(record.get('mem0_id'))
+        if current is not None and (current.get('memory') != record['statement'] or any(
+                (current.get('metadata') or {}).get(k) != v
+                for k, v in memory_metadata(vault, record).items())):
+            receipt['drifted'].append(record['memory_id'])
+    receipt['drifted'].sort()
+    for record in active:
         memory_id = record.get("mem0_id")
         current = verified_remote.get(memory_id)
         if current is None:
@@ -652,11 +696,14 @@ def audit(vault: Path, records: list[dict[str, Any]], client: Any) -> dict[str, 
     remote_items = client.list_memories()
     remote = {item["id"]: item for item in remote_items}
     linked_ids = {record.get("mem0_id") for record in records if record.get("mem0_id")}
+    active, absent, passive = remote_record_groups(vault, records)
     missing_remote: list[str] = []
     drifted: list[str] = []
-    for record in records:
+    verified = 0
+    for record in active:
         memory_id = record.get("mem0_id")
         if not memory_id:
+            missing_remote.append(record["memory_id"])
             continue
         current = remote.get(memory_id)
         if current is None:
@@ -668,6 +715,14 @@ def audit(vault: Path, records: list[dict[str, Any]], client: Any) -> dict[str, 
             current_metadata.get(key) != value for key, value in expected_metadata.items()
         ):
             drifted.append(record["memory_id"])
+        else:
+            verified += 1
+    for record in passive:
+        current = remote.get(record.get('mem0_id'))
+        if current is not None and (current.get('memory') != record['statement'] or any(
+                (current.get('metadata') or {}).get(k) != v
+                for k, v in memory_metadata(vault, record).items())):
+            drifted.append(record['memory_id'])
     groups: dict[str, list[str]] = {}
     for item in remote_items:
         normalized = " ".join(str(item.get("memory", "")).casefold().split())
@@ -680,6 +735,10 @@ def audit(vault: Path, records: list[dict[str, Any]], client: Any) -> dict[str, 
     return {
         "local_count": len(records),
         "remote_count": len(remote_items),
+        "total": len(active),
+        "verified": verified,
+        "expected_absent": sum(1 for r in absent if r.get('mem0_id') not in remote),
+        "unexpected_remote_ids": sorted(r['mem0_id'] for r in absent if r.get('mem0_id') in remote),
         "catalog_errors": errors,
         "missing_remote": sorted(missing_remote),
         "drifted": sorted(drifted),
@@ -1683,14 +1742,14 @@ def main(argv: list[str] | None = None) -> int:
         result = audit(vault, records, client)
         result["receipt"] = str(write_receipt(vault, "audit", result).relative_to(vault))
         _json_print(result)
-        return 1 if any(result[k] for k in ("catalog_errors", "missing_remote", "drifted", "orphan_remote_ids", "duplicate_remote_groups")) else 0
+        return 1 if any(result[k] for k in ("catalog_errors", "missing_remote", "drifted", "orphan_remote_ids", "duplicate_remote_groups", "unexpected_remote_ids")) else 0
 
     if args.command == "sync":
         result = sync_existing(vault, records, client, apply=args.apply)
         result["receipt"] = str(write_receipt(vault, "sync", result).relative_to(vault))
         _json_print(result)
-        expected = sum(1 for record in records if record.get("mem0_id") or (args.apply and record["status"] == "active"))
-        return 0 if result["verified"] == expected and not result.get("reconciliation_required") else 1
+        return 0 if (result["verified"] == result['total'] and not result.get("reconciliation_required")
+                     and not result['unexpected_remote_ids'] and not result['drifted']) else 1
 
     if args.command == "eval":
         path = args.file if args.file.is_absolute() else vault / args.file
