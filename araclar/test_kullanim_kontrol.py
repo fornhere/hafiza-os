@@ -61,6 +61,22 @@ class Usage(unittest.TestCase):
             path.write_text('{broken')
             with self.assertRaises(ValueError): observe(package,path,'c1','main')
 
+    def test_transcript_unicode_and_lf_boundaries(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'source.jsonl'
+            rows=[{'type':'session_meta','payload':{'id':'s','source':'cli'}},
+                  {'type':'response_item','payload':{'type':'function_call','name':'imagegen',
+                   'namespace':'image_gen','call_id':'c','arguments':'{}'}},
+                  {'type':'response_item','payload':{'type':'function_call_output',
+                   'call_id':'c','output':'a\u2028b\u0085c\u2029d'}}]
+            lines=[json.dumps(row,ensure_ascii=False) for row in rows]
+            for ending in ('\n','\r\n'):
+                for final in ('',ending):
+                    path.write_bytes((ending.join(lines)+final).encode())
+                    self.assertEqual(observe({},path,'c','s')['tool_result'],'present_unclassified')
+            path.write_bytes(('\n'.join(lines)+'\n{broken\n').encode())
+            with self.assertRaisesRegex(ValueError,'malformed transcript'): observe({},path,'c','s')
+
     def test_found_asset_is_not_execution_or_acceptance(self):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); asset=root/'asset.png'; asset.write_bytes(b'fixture')

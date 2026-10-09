@@ -8,6 +8,7 @@ import stat
 
 from capture_source import clean_user, privacy_command, privacy_ambiguous
 from hafiza import contains_secret
+from jsonl_lines import split_jsonl
 
 MAX_SOURCE = 64 * 1024 * 1024
 MAX_LINE = 16 * 1024 * 1024
@@ -131,7 +132,8 @@ def parse(client, session, path, end_line=None, *, reject_workers=False):
     data = read_bytes(path)
     if not data or not data.endswith(b'\n'):
         raise SourceError('truncated_source')
-    lines = data.splitlines(keepends=True)
+    try: lines = [line.encode('utf-8') for line in split_jsonl(data.decode('utf-8'), keepends=True)]
+    except UnicodeDecodeError as exc: raise SourceError('invalid_json') from exc
     if len(lines) > MAX_LINES or (end_line is not None and (type(end_line) is not int or not 1 <= end_line <= len(lines))):
         raise SourceError('invalid_source_boundary')
     boundary = end_line or len(lines)

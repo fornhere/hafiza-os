@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from jsonl_lines import split_jsonl
 from gorev_baglam import validate_inputs
 
 
@@ -23,7 +24,7 @@ def observe(package, transcript, call_id, session_id, role='identity'):
     """Read one rollout-owned invocation. Never evaluate wrapper code or copy text."""
     raw = Path(transcript).read_bytes()
     rows = []
-    for line in raw.decode('utf-8').splitlines():
+    for line in split_jsonl(raw.decode('utf-8')):
         try: rows.append(json.loads(line))
         except (ValueError, TypeError):
             raise ValueError('malformed transcript; usage cannot be verified')

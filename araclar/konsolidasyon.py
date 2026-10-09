@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import hafiza as h
+from jsonl_lines import split_jsonl
 
 ACTOR = 'codex-consolidator'
 
@@ -139,7 +140,7 @@ def sessions(vault, root, since, quiet_minutes=20, diagnostics=None):
                 # Subagent ownership is an intentional filter; all other failure is observable.
                 if 'transcript sahibi' in str(error):
                     try:
-                        first = next(json.loads(line).get('payload', {}) for line in path.read_text().splitlines()
+                        first = next(json.loads(line).get('payload', {}) for line in split_jsonl(path.read_bytes().decode('utf-8'))
                                      if json.loads(line).get('type') == 'session_meta')
                     except (ValueError, StopIteration, OSError): first = {}
                     if any((isinstance(first.get(field), dict) and 'subagent' in first[field])
