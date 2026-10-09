@@ -1201,6 +1201,69 @@ class CatalogBudgetFairnessTests(unittest.TestCase):
         self.assertLessEqual(len(small['text']), budget)
 
 
+class AliasRoutingTests(unittest.TestCase):
+    def test_multiword_alias_requires_adjacent_ordered_words(self):
+        from gorev_baglam import alias_match, query_words
+        for query in ('hafıza videosu', 'hafızadan videosunu', "hafıza’nın videosunu"):
+            self.assertTrue(alias_match('hafıza videosu', query_words(query), ordered=True))
+        for query in ('hafızadan örnek videosunu bul', 'videosunu hafızadan bul',
+                      'hafıza', 'video', 'hafıza video videosu'):
+            for fuzzy in (False, True):
+                with self.subTest(query=query, fuzzy=fuzzy):
+                    self.assertFalse(alias_match('hafıza videosu', query_words(query), fuzzy, ordered=True))
+        self.assertFalse(alias_match('video video', ['video'], ordered=True))
+        self.assertTrue(alias_match('video video', ['video', 'video'], ordered=True))
+
+    def test_multiword_fuzzy_match_keeps_adjacency_and_order(self):
+        from gorev_baglam import alias_match, query_words
+        self.assertTrue(alias_match('denemeler çalışması', query_words('denemeler çalıması'), True, ordered=True))
+        for query in ('denemeler için çalıması', 'çalıması denemeler'):
+            self.assertFalse(alias_match('denemeler çalışması', query_words(query), True, ordered=True))
+
+    def test_short_domain_variants_are_finite_and_inflected(self):
+        from gorev_baglam import alias_match, one_typo, word_match, query_words
+        for alias in ('tweet', 'twitter'):
+            for query in ('twit', 'twiti', 'twitler', "TWIT’i"):
+                for ordered in (False, True):
+                    self.assertTrue(alias_match(alias, query_words(query), ordered=ordered))
+            for word in ('twi', 'tw', 'wit', 'twitt', 'twitx', 'tvit', 'twin', 'twitch'):
+                for ordered in (False, True):
+                    self.assertFalse(alias_match(alias, [word], True, ordered=ordered))
+        for left, right in (('abc', 'abd'), ('twit', 'twin'), ('kapak', 'kabak'),
+                            ('tweet', 'twit'), ('twitter', 'twit')):
+            self.assertFalse(one_typo(left, right))
+        self.assertTrue(one_typo('denemeler', 'denemelerx'))
+        self.assertFalse(word_match('tweet', 'twit'))
+        self.assertFalse(alias_match('twit', ['tweet']))
+
+    def test_shared_alias_match_keeps_unordered_nonadjacent_contract(self):
+        from gorev_baglam import alias_match, continuation_request, query_words
+        for alias, query in (('sekme kapat', 'kapat bu sekmeyi'),
+                             ('görsel sunum', 'sunumu sonra görseli düzenle'),
+                             ('denemeler çalışması', 'çalıması için denemeler')):
+            with self.subTest(alias=alias):
+                self.assertTrue(alias_match(alias, query_words(query), True))
+                self.assertFalse(alias_match(alias, query_words(query), True, ordered=True))
+        self.assertTrue(alias_match('video video', ['video']))
+        self.assertTrue(continuation_request('son güncel durum'))
+        self.assertTrue(continuation_request('durum son'))
+
+    def test_routing_regressions_with_neutral_projects(self):
+        from gorev_baglam import select_projects
+        projects=[dict(id='proj-a', aliases=['hafıza videosu']),
+                  dict(id='proj-b', roots=['/tmp/x/videolar']),
+                  dict(id='proj-c', aliases=['tweet', 'twitter'])]
+        cases=[('hafızadan örnek videosunu bul', '/tmp/x/videolar/bolum-1', 'proj-b', 'cwd'),
+               ('hafızadan videosunu bul', '/tmp/x/videolar/bolum-1', 'proj-a', 'explicit'),
+               ('twit şeklimi incele', None, 'proj-c', 'explicit'),
+               ('twin şeklimi incele', None, None, 'unresolved')]
+        for query,cwd,expected,reason in cases:
+            with self.subTest(query=query):
+                chosen,actual=select_projects(projects, query, cwd)
+                self.assertEqual([expected] if expected else [], [p['id'] for p in chosen])
+                self.assertEqual(reason, actual)
+
+
 class SharedWorkspaceRoutingTests(unittest.TestCase):
     def test_alias_possessives_do_not_expand_record_ranking(self):
         from gorev_baglam import alias_match, word_match

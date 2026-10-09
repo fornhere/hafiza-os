@@ -53,7 +53,7 @@ def inflected(base, word):
     return any(word.startswith(stem) and suffix_chain(word[len(stem):]) for stem in variants)
 
 def one_typo(left, right):
-    # Only long tokens: avoid kapak/kabak and short proper-name collisions.
+    # Kısa varyantlar alias sözlüğünde; genel hata toleransı uzun sözcüklerde.
     if min(len(left),len(right)) < 7 or abs(len(left)-len(right)) > 1: return False
     if len(left)==len(right):
         positions=[i for i,(a,b) in enumerate(zip(left,right)) if a!=b]
@@ -61,17 +61,29 @@ def one_typo(left, right):
     short,long=sorted([left,right],key=len)
     return any(long[:i]+long[i+1:]==short for i in range(len(long)))
 
+# Kısa alan varyantları yönlüdür; genel yazım hatası toleransını açmaz.
+_ALIAS_VARIANTS = {'tweet': ('twit',), 'twitter': ('twit',)}
+
 def alias_inflected(base, word):
     # Vowel-final aliases take unbuffered plural possessives (video-muz-a).
     # Keep this routing vocabulary out of general record/lesson ranking.
-    return inflected(base, word) or (base[-1:] in 'aeıioöuü' and bool(base) and
-        any(inflected(base + suffix, word) for suffix in ('mız', 'miz', 'muz', 'müz')))
+    return (inflected(base, word) or
+        any(inflected(variant, word) for variant in _ALIAS_VARIANTS.get(base, ())) or
+        (base[-1:] in 'aeıioöuü' and bool(base) and
+         any(inflected(base + suffix, word) for suffix in ('mız', 'miz', 'muz', 'müz'))))
 
 
-def alias_match(alias, words, fuzzy=False):
+def alias_match(alias, words, fuzzy=False, *, ordered=False):
     parts=query_words(alias)
     if not parts: return False
-    return all(any(alias_inflected(part,word) or (fuzzy and one_typo(part,word)) for word in words) for part in parts)
+    # Dersler ve diğer çağıranlar bütün parçaları herhangi sırada arar.
+    if not ordered:
+        return all(any(alias_inflected(part,word) or (fuzzy and one_typo(part,word))
+                       for word in words) for part in parts)
+    # Yalnız proje seçimi: ayrı konu sözcükleri proje adı değildir.
+    return any(all(alias_inflected(part,word) or (fuzzy and one_typo(part,word))
+                   for part,word in zip(parts,words[start:start+len(parts)]))
+               for start in range(len(words)-len(parts)+1))
 
 # Function words cannot establish a memory match. Domain aliases belong in config.
 _STOPWORDS = set('kanka kanak knk oğlum amk şimdi şuan şuanda tamam tamamdır falan bakalım göre ilgili son artık önemli zaten ya yahu bir bu şu o ve veya ile için gibi daha çok az ne nasıl neden hangi ben benim sen bizim biz bana bunu şunu mı mi mu mü da de ama olarak olan olsun yap yapalım devam et üret'.split())
@@ -627,7 +639,7 @@ def select_projects(projects, query, cwd=None, previous_user=None, session_proje
     words=query_words(intent)
     deictic=any(w in words for w in ('dünkü','o','şu','önceki'))
     def matches(project,fuzzy=False):
-        return any(alias_match(alias,words,fuzzy) and not (deictic and set(query_words(alias)) <= _GENERIC)
+        return any(alias_match(alias,words,fuzzy,ordered=True) and not (deictic and set(query_words(alias)) <= _GENERIC)
                    for alias in [project.get('id', ''), *project.get('aliases',[])])
     # Archived projects answer only an exact alias, never a fuzzy match or cwd.
     # Config uses both Turkish and English status words; both mean archived.
@@ -643,7 +655,7 @@ def select_projects(projects, query, cwd=None, previous_user=None, session_proje
             for root in area.get('roots', []):
                 if not Path(cwd).resolve().is_relative_to(Path(root).resolve()): continue
                 root_words = query_words(Path(root).name)
-                if any(alias_match(alias, root_words)
+                if any(alias_match(alias, root_words, ordered=True)
                        for other in projects if other['id'] != area['id']
                        and other.get('kind') != 'area'
                        for alias in [other.get('id', ''), *other.get('aliases', [])]
@@ -654,7 +666,7 @@ def select_projects(projects, query, cwd=None, previous_user=None, session_proje
                            for word in words)
     explicit=[p for p in projects if matches(p)]
     if not explicit: explicit=[p for p in active if matches(p,True)]
-    specific=[p for p in explicit if any(alias_match(a,words) and not set(query_words(a)) <= _GENERIC for a in [p.get('id', ''), *p.get('aliases',[])])]
+    specific=[p for p in explicit if any(alias_match(a,words,ordered=True) and not set(query_words(a)) <= _GENERIC for a in [p.get('id', ''), *p.get('aliases',[])])]
     if specific: explicit=specific
     located=[p for p in active if cwd and (p['id'] not in mixed_areas or production_topic) and any(
         Path(cwd).resolve().is_relative_to(Path(r).resolve()) and
