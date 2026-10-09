@@ -22,8 +22,17 @@
    audit çalıştır. Uzak başarı mesajıyla yetinme; verified sonucunu kontrol et.
 6. İşleri is_ve_ders.py ile kimlikli ve kaynaklı sürümler halinde güncelle;
    render ile açık iş görünümünü üret. `STALE_DAYS = 7`: son teyidi
-   7 günden eski veya needs_confirmation işi gündeme taşıma; tam 7 gün dahildir.
-   Bu eşik, 14 günlük oturum tarama penceresinden ayrıdır.
+   7 günden eski veya needs_confirmation işi güncel iş olarak gündeme taşıma;
+   tam 7 gün dahildir. Bu eşik, 14 günlük oturum tarama penceresinden ayrıdır.
+   Kaynakta üzerinde çalışılmaya devam edilen iş `active` kalır. Bekleyen
+   kullanıcı kararını `decision_required` (boş olmayan, en fazla 240 karakter
+   metin), doğrulanmamış teslimi `outcome_unverified` (bool) ile belirt; bu
+   alanlar işin sürdüğünü veya kaynak/güncellik kontrolünü değiştirmez.
+   `active → needs_confirmation` yalnız açık ret/vazgeçme, kapsam değişimi
+   veya kaynağı olmayan iddia için uygulanır; gerekçeyi `evidence` içinde
+   kaynaklandır ve `status_reason` (boş olmayan, en fazla 500 karakter metin)
+   ile yaz. Son önerinin kabul edilmemesi veya plan/yayın/harcama kararının
+   beklenmesi tek başına bu düşüşün gerekçesi değildir.
 7. Tekrarlanan hatayı ders adayı yap. Yöntem dosyası ve gerçek test makbuzu
    olmadan verified deme; geniş politika değişikliğini incelemeye bırak.
 8. Health komutuyla sağlık notunu yenile. Boş kuyrukta gereksiz uzak istek

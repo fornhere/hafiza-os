@@ -1378,7 +1378,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         # Routing uncertainty forbids choosing a single next action; it need not
         # hide a third source-backed alternative that fits the same budget.
         card_limit = 3
-        from client_sessions import unique_states, state_values
+        from client_sessions import unique_states, state_values, state_warnings
         # Verify every source before allowing it to displace another card.
         valid_tasks = []
         for task in project_tasks:
@@ -1426,11 +1426,21 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                                  ('Açık iş/engel', field('blocker', field('open_work', ''))))
             for label, value in optional_fields:
                 if value and not (compact and sum(len(v) for _, v in optional_fields) > 200): text += '; '+label+': '+value
+            def warnings(card):
+                result = ''
+                for warning, origin in state_warnings(vault, card):
+                    result += '; '+warning+' (kaynak: '+origin['source_path']+')'
+                    source_versions[origin['source_path']] = digest(h.source_file(vault, origin['source_path']))
+                return result
+            text += warnings(task)
             text += ('; Sonraki adım: '+task['next_step']+'; Tarih: '+date+
                      ' (kaynak: '+source_reference(task, 'zihin/is-durumu.jsonl')+')')
             values = state_values(task)
             duplicates = []
             for older in group[1:]:
+                # Supplements retain their uncertainty and provenance; they do
+                # not verify the representative report or merge distinct decisions.
+                text += warnings(older)
                 extra = [v for v in state_values(older) if v not in values]
                 if extra:
                     text += '; Ek alan: ' + '; '.join(extra) + ' (kaynak: '+older['source_path']+')'

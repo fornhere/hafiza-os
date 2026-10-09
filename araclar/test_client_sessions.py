@@ -238,7 +238,60 @@ class ProjectState(NativeFixture):
         self.write()
         newer = self.register()['id']
         sessions.review(self.vault, newer, self.decision(newer), True)
-        self.assertEqual(self.work.latest(self.vault, 'task')['project-state:demo']['version'], 2)
+        pending = self.work.latest(self.vault, 'task')['project-state:demo']
+        self.assertEqual(pending['version'], 2)
+        self.assertEqual(pending['status'], 'needs_confirmation')
+
+    def test_active_project_close_report_and_interrupted_receipt_replay(self):
+        ident = self.register()['id']
+        sessions.review(self.vault, ident, self.decision(ident), True)
+        first = self.work.latest(self.vault, 'task')['project-state:demo']
+        active = self.work.put(self.vault, 'task', dict(first,
+            status='active', expected_version=first['version'],
+            decision_required='Kabul zamanını kullanıcı seçsin'))
+        reader = 0
+        def assert_hook_warning():
+            nonlocal reader
+            reader += 1
+            import jev_client
+            with jev_client.disabled():
+                output = hooks.context(self.vault, 'claude', 'reader-' + str(reader), None,
+                    dict(prompt='demo devam edelim'), 'UserPromptSubmit')
+            self.assertIn('karar bekliyor: Kabul zamanını kullanıcı seçsin', output)
+            self.assertIn(active['source_path'], output)
+            self.assertIn('sonuç teyitsiz', output)
+        self.rows += self.claude_rows(7)[-2:]
+        self.write()
+        newer = self.register()['id']
+        decision = self.decision(newer)
+        decision['project_state']['outcome'] = 'Yeni uygulama adımı tamamlandı.'
+        expected_report = dict(decision['project_state'], assertion_kind='assistant_report')
+        original_atomic = sessions.atomic
+        def fail_receipt(path, value):
+            if path == self.vault / sessions.INBOX / (newer + '.json'):
+                raise OSError('receipt write fixture')
+            return original_atomic(path, value)
+        with patch.object(sessions, 'atomic', side_effect=fail_receipt), self.assertRaises(OSError):
+            sessions.review(self.vault, newer, decision, True)
+        row = self.work.latest(self.vault, 'task')['project-state:demo']
+        self.assertEqual('active', row['status'])
+        self.assertTrue(row['outcome_unverified'])
+        self.assertEqual(active['version'] + 1, row['version'])
+        self.assertEqual(expected_report, row['assistant_report'])
+        self.assertEqual(newer, row['receipt_id'])
+        self.assertIsNone(row['verified_outcome'])
+        self.assertNotIn('last_verified', row)
+        self.assertEqual(active['decision_required'], row['decision_required'])
+        self.assertEqual(active['source_path'], row['decision_source']['source_path'])
+        assert_hook_warning()
+        for _ in range(2):
+            result = sessions.review(self.vault, newer, decision, True)
+            self.assertEqual('record', result['status'])
+            self.assertEqual(row, self.work.latest(self.vault, 'task')[row['id']])
+            assert_hook_warning()
+        self.assertEqual(3, len(self.h.load_jsonl(self.vault / self.work.TASKS)))
+        receipt = sessions.load(self.vault / sessions.INBOX / (newer + '.json'))
+        self.assertEqual(expected_report, receipt['project_state'])
 
     def test_recall_suppresses_state_already_delivered_by_task_card(self):
         ident = self.register()['id']

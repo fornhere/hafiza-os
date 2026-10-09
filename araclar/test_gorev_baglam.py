@@ -416,6 +416,37 @@ class Package(unittest.TestCase):
   package=build_task_package(self.v,'kapak durumu',budget=5000)
   self.assertEqual(package['text'].count('İş durum kartı'),2)
 
+ def test_merged_cards_keep_distinct_decisions_and_unverified_source_notices(self):
+  from is_ve_ders import latest, put
+  self.state_fixture()
+  work=latest(self.v,'task')['work']
+  work=put(self.v,'task',dict(work,expected_version=work['version'],
+      decision_required='Yayın zamanını kullanıcı seçsin',outcome_unverified=True))
+  other=dict(work,id='other',source_path='other.md',decision_required='Kabul biçimini kullanıcı seçsin')
+  other.pop('expected_version',None)
+  (self.v/'other.md').write_text(work['evidence'])
+  put(self.v,'task',other)
+  report=latest(self.v,'task')['project-state:youtube']
+  put(self.v,'task',dict(report,expected_version=report['version']))
+  for budget in (2000,5000):
+   with self.subTest(budget=budget):
+    package=build_task_package(self.v,'kapak durumu',budget=budget)
+    self.assertEqual(package['text'].count('İş durum kartı'),1)
+    self.assertIn('karar bekliyor: Yayın zamanını kullanıcı seçsin (kaynak: work.md)',package['text'])
+    self.assertIn('karar bekliyor: Kabul biçimini kullanıcı seçsin (kaynak: other.md)',package['text'])
+    self.assertIn('sonuç teyitsiz (kaynak: work.md)',package['text'])
+    self.assertIn('sonuç teyitsiz (kaynak: other.md)',package['text'])
+    self.assertIn('doğrulanmış sonuç değil',package['text'])
+    self.assertEqual(package['capsule']['tasks'],[])
+  stored=latest(self.v,'task')[report['id']]
+  self.assertNotIn('decision_required',stored)
+  self.assertNotIn('last_verified',stored)
+  self.assertNotIn('verified_outcome',stored)
+  (self.v/'other.md').write_text('Kaynak değişti.')
+  package=build_task_package(self.v,'kapak durumu',budget=2000)
+  self.assertNotIn('Kabul biçimini kullanıcı seçsin',package['text'])
+  self.assertIn('Yayın zamanını kullanıcı seçsin',package['text'])
+
  def test_changed_newer_source_cannot_displace_work(self):
   self.state_fixture(changed=True)
   package=build_task_package(self.v,'kapak durumu',budget=5000)
@@ -1501,6 +1532,40 @@ class ImplicitProjectTests(unittest.TestCase):
     def package(self, cwd, query='devam edelim'):
         return build_task_package(self.vault, query, cwd=str(cwd), budget=2000)
 
+    def test_pending_v5_v6_rewritten_as_active_with_separate_uncertainty(self):
+        from is_ve_ders import put, brief
+        # Tarihsel iki sürümün nötr eşdeğeri: çalışma sürüyor, rapor teyitsiz.
+        for version in (5, 6):
+            with self.subTest(version=version):
+                ident = 'proj-a-v'+str(version)
+                row = self.card(ident=ident)
+                for current in range(1, version):
+                    row = put(self.vault, 'task', dict(row, expected_version=current,
+                        status='needs_confirmation', status_reason='Eski birleşik durum fixture'))
+                self.assertEqual(version, row['version'])
+                self.assertNotIn(ident, [r['id'] for r in brief(self.vault)])
+                cfg = dict(projects=[dict(id='proj-a', aliases=['proj-a'], roots=[])])
+                self.registry.write_text(json.dumps(cfg))
+                self.assertNotIn(ident, build_task_package(self.vault, 'proj-a devam', budget=2000)['selected_ids'])
+                row = put(self.vault, 'task', dict(row, expected_version=version,
+                    status='active', project_id='proj-a', outcome_unverified=True,
+                    decision_required='Yayın zamanını seç'))
+                card = next(r for r in brief(self.vault) if r['id'] == ident)
+                self.assertEqual('active', card['status'])
+                package = build_task_package(self.vault, 'proj-a devam', budget=2000)
+                self.assertIn(ident, package['selected_ids'])
+                self.assertIn('karar bekliyor: Yayın zamanını seç', package['text'])
+                self.assertIn('sonuç teyitsiz', package['text'])
+                self.assertIn('devam edilebilir', package['text'])
+                clean = dict(row, expected_version=row['version'], outcome_unverified=False)
+                clean.pop('decision_required')
+                row = put(self.vault, 'task', clean)
+                package = build_task_package(self.vault, 'proj-a devam', budget=2000)
+                self.assertIn(ident, package['selected_ids'])
+                self.assertNotIn('karar bekliyor:', package['text'])
+                self.assertNotIn('sonuç teyitsiz', package['text'])
+                put(self.vault, 'task', dict(row, expected_version=row['version'], status='done'))
+
     def test_directory_prefix_delivers_legacy_card_without_config(self):
         self.card(); cwd = self.home/'projects/proj-a'; cwd.mkdir(parents=True)
         p = self.package(cwd)
@@ -1519,7 +1584,7 @@ class ImplicitProjectTests(unittest.TestCase):
     def test_pending_legacy_card_is_delivered_as_confirmation_hint(self):
         from is_ve_ders import put
         row = self.card(); cwd = self.home/'proj-a'; cwd.mkdir()
-        put(self.vault, 'task', dict(row, status='needs_confirmation', expected_version=row['version']))
+        put(self.vault, 'task', dict(row, status='needs_confirmation', status_reason='Kapsam değişimi için teyit gerekli', expected_version=row['version']))
         p = self.package(cwd)
         self.assertEqual('proj-a', p['project_id'])
         self.assertIn('proj-a-plan', p['selected_ids'])
@@ -1532,7 +1597,7 @@ class ImplicitProjectTests(unittest.TestCase):
         row = self.card()
         for value in ('missing', None):
             with self.subTest(next_step=value):
-                row = dict(row, status='needs_confirmation', expected_version=row['version'])
+                row = dict(row, status='needs_confirmation', status_reason='Kapsam değişimi için teyit gerekli', expected_version=row['version'])
                 if value == 'missing': row.pop('next_step', None)
                 else: row['next_step'] = value
                 row = put(self.vault, 'task', row)

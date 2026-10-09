@@ -29,6 +29,34 @@ class Work(unittest.TestCase):
             source_path='kaynak.md', evidence='İşin uygulaması tamamlandı', actor='test',
             last_verified=dt.date.today().isoformat())
 
+    def test_task_decision_and_outcome_validation_and_brief(self):
+        for name, values in (('decision_required', (None, False, '', ' ', 'x'*241)),
+                             ('outcome_unverified', (None, 0, 1, 'true')),
+                             ('status_reason', (None, False, '', ' ', 'x'*501))):
+            for value in values:
+                with self.subTest(name=name, value=value), self.assertRaises(ValueError):
+                    w.put(self.vault, 'task', dict(self.row, **{name:value}))
+        row = w.put(self.vault, 'task', dict(self.row,
+            decision_required='Yayın zamanını seç', outcome_unverified=True))
+        card = w.brief(self.vault)[0]
+        self.assertEqual('active', card['status'])
+        self.assertEqual(row['decision_required'], card['decision_required'])
+        self.assertTrue(card['outcome_unverified'])
+        row = w.put(self.vault, 'task', dict(row, expected_version=1, outcome_unverified=False))
+        self.assertFalse(w.brief(self.vault)[0]['outcome_unverified'])
+        self.assertEqual(row['updated_at'], w.brief(self.vault)[0]['content_updated_at'])
+
+    def test_active_to_pending_requires_reason_but_legacy_creation_does_not(self):
+        row = w.put(self.vault, 'task', self.row)
+        pending = dict(row, status='needs_confirmation', expected_version=1)
+        with self.assertRaisesRegex(ValueError, 'status_reason'):
+            w.put(self.vault, 'task', pending)
+        self.assertEqual(1, w.latest(self.vault, 'task')['test']['version'])
+        saved = w.put(self.vault, 'task', dict(pending, status_reason='Kapsam değişimi kaynakta belirtildi'))
+        self.assertEqual('needs_confirmation', saved['status'])
+        self.assertEqual([], w.brief(self.vault))
+        w.put(self.vault, 'task', dict(self.row, id='legacy', status='needs_confirmation'))
+
     def test_missing_ledger_preserves_existing_view(self):
         target = self.vault / 'zihin/açık-işler.md'
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -37,6 +65,61 @@ class Work(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'defteri'):
             w.render(self.vault)
         self.assertEqual(before, target.read_bytes())
+
+    def test_project_report_preserves_active_and_pending_with_receipt_replay(self):
+        (self.vault / 'komuta').mkdir()
+        state = dict(project_id='demo', outcome='Uygulama tamamlandı.',
+            rationale='Kaynak kontrolü tamamlandı.', open_items=['Kabul bekleniyor.'],
+            next_step='Kullanıcı kabulünü doğrula.', evidence=dict(quote=self.row['evidence']))
+        transcript = dict(client='claude', session='neutral-session')
+        registry = self.vault / 'komuta/gorev-baglam.json'
+        for initial in (None, 'needs_confirmation', 'active'):
+            with self.subTest(initial=initial):
+                project = 'demo-' + str(initial)
+                registry.write_text(json.dumps({'projects': [{'id': project}]}))
+                report = dict(state, project_id=project)
+                ident = 'project-state:' + project
+                if initial:
+                    w.put(self.vault, 'task', dict(self.row, id=ident,
+                        project_id=project, status=initial))
+                before = len(h.load_jsonl(self.vault / w.TASKS))
+                row = w.put_project_state(self.vault, report, project, 'kaynak.md', transcript)
+                self.assertEqual('active' if initial == 'active' else 'needs_confirmation', row['status'])
+                self.assertEqual(initial == 'active', row.get('outcome_unverified', False))
+                self.assertEqual(2 if initial else 1, row['version'])
+                self.assertEqual(report, row['assistant_report'])
+                self.assertIsNone(row['verified_outcome'])
+                self.assertNotIn('last_verified', row)
+                self.assertEqual(row, w.put_project_state(self.vault, report, project, 'kaynak.md', transcript))
+                for changed_report, changed_transcript in (
+                        (dict(report, outcome='Başka rapor.'), transcript),
+                        (report, dict(transcript, session='other-session'))):
+                    with self.assertRaisesRegex(ValueError, 'project_state_receipt_conflict'):
+                        w.put_project_state(self.vault, changed_report, project, 'kaynak.md', changed_transcript)
+                self.assertEqual(before + 1, len(h.load_jsonl(self.vault / w.TASKS)))
+
+    def test_successive_reports_preserve_decision_basis_without_confirmation(self):
+        (self.vault / 'komuta').mkdir()
+        (self.vault / 'komuta/gorev-baglam.json').write_text(json.dumps({'projects': [{'id': 'demo'}]}))
+        active = w.put(self.vault, 'task', dict(self.row, id='project-state:demo',
+            project_id='demo', decision_required='Kabul zamanını kullanıcı seçsin'))
+        basis = {k: active[k] for k in ('id', 'version', 'source_path', 'source_content_hash', 'evidence')}
+        quote = 'Asistan yeni uygulama adımını raporladı.'
+        (self.vault / 'report.md').write_text(quote)
+        report = dict(project_id='demo', outcome=quote, next_step='Kabulü doğrula.', evidence=dict(quote=quote))
+        for receipt in ('first', 'second'):
+            row = w.put_project_state(self.vault, report, receipt, 'report.md', {})
+            self.assertEqual(active['decision_required'], row['decision_required'])
+            self.assertEqual(basis, row['decision_source'])
+            self.assertNotIn('last_verified', row)
+            self.assertIsNone(row['verified_outcome'])
+            self.assertTrue(row['outcome_unverified'])
+            self.assertNotIn('decision_required', row['assistant_report'])
+            self.assertEqual(row, w.put_project_state(self.vault, report, receipt, 'report.md', {}))
+        from client_sessions import state_warnings
+        self.assertIn(('karar bekliyor: '+active['decision_required'], basis), state_warnings(self.vault, row))
+        (self.vault / 'kaynak.md').write_text('Eski kaynak artık değişti.')
+        self.assertEqual([('sonuç teyitsiz', row)], state_warnings(self.vault, row))
 
     def test_done_disappears_from_brief_but_history_remains(self):
         w.put(self.vault, 'task', self.row)
@@ -95,7 +178,7 @@ class Work(unittest.TestCase):
         self.assertEqual([], w.brief(self.vault, include_stale=False))
         w.render(self.vault)
         self.assertIn('**needs_confirmation**', (self.vault/'zihin/açık-işler.md').read_text())
-        w.put(self.vault, 'task', dict(self.row, expected_version=1, status='needs_confirmation'))
+        w.put(self.vault, 'task', dict(self.row, expected_version=1, status='needs_confirmation', status_reason='Kapsam değişimi için teyit gerekli'))
         self.assertEqual([], w.brief(self.vault))
 
     def test_week_old_confirmation_is_not_current(self):

@@ -67,6 +67,11 @@ def put(vault, kind, data):
         raise ValueError('kanıt kaynak notta aynen bulunmalı')
     data['source_content_hash'] = h.statement_hash(source.read_text())
     if kind == 'task':
+        for name, limit in (('decision_required', 240), ('status_reason', 500)):
+            if name in data and (not isinstance(data[name], str) or not data[name].strip() or len(data[name]) > limit):
+                raise ValueError(f'{name} kısa, boş olmayan metin olmalı (en fazla {limit})')
+        if 'outcome_unverified' in data and type(data['outcome_unverified']) is not bool:
+            raise ValueError('outcome_unverified bool olmalı')
         if data.get('project_id') is not None:
             registry = vault / 'komuta/gorev-baglam.json'
             try:
@@ -105,6 +110,9 @@ def put(vault, kind, data):
     previous = latest(vault, kind).get(data['id'])
     if previous and data.pop('expected_version', None) != previous['version']:
         raise ValueError('kayıt değişmiş; mevcut sürümü okuyup expected_version ile yeniden dene')
+    if kind == 'task' and previous and previous['status'] == 'active' and data['status'] == 'needs_confirmation':
+        if not data.get('status_reason'):
+            raise ValueError('active → needs_confirmation için status_reason gerekli')
     data.update(version=previous['version'] + 1 if previous else 1,
         updated_at=dt.datetime.now(dt.timezone.utc).isoformat(),
         evidence_hash=h.statement_hash(data['evidence']))
@@ -149,13 +157,23 @@ def put_project_state(vault, state, receipt_id, source_path, transcript_source):
         next_step=state['next_step'], receipt_id=receipt_id, transcript_source=transcript_source)
     if previous:
         data['expected_version'] = previous['version']
+        if previous['status'] == 'active':
+            # A new assistant report does not revoke an active project's status.
+            data.update(status='active', outcome_unverified=True)
+            if previous.get('decision_required'):
+                data['decision_required'] = previous['decision_required']
+                # Keep the original basis across successive reports and receipt retries.
+                data['decision_source'] = previous.get('decision_source') or {
+                    k: previous[k] for k in ('id', 'version', 'source_path',
+                        'source_content_hash', 'evidence') if k in previous}
     # Lock already held: use the existing writer's full validation without relocking.
     return put.__wrapped__(vault, 'task', data)
 
 
 CONTENT_FIELDS = ('title', 'status', 'next_step', 'evidence', 'source_path',
                   'last_verified', 'goal', 'last_result', 'open_work', 'blocker',
-                  'outputs', 'assertion_kind', 'assistant_report', 'verified_outcome')
+                  'outputs', 'assertion_kind', 'assistant_report', 'verified_outcome',
+                  'decision_required', 'decision_source', 'outcome_unverified', 'status_reason')
 
 
 def content_updates(vault):
