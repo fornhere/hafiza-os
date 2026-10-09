@@ -118,6 +118,14 @@ class Capture(unittest.TestCase):
         self.rows += [dict(type='response_item',timestamp=str(i),payload=dict(type='message',role='user',content=[dict(text='Gerçek istek '+str(i))])) for i in range(6)]
     def save(self): self.p.write_text('\n'.join(map(json.dumps,self.rows)))
     def event(self,typ,turn='t6'): self.rows.append(dict(type='event_msg',payload=dict(type=typ,turn_id=turn)))
+    def test_codex_command_wrapper_snapshot_and_evidence_remain_unchanged(self):
+        quote='<local-command-stdout>Native Codex text</local-command-stdout>'
+        self.rows[6]['payload']['content'][0]['text']=quote
+        self.event('task_complete'); self.save(); snap=c.snapshot(self.p,completed_prefix=True)
+        self.assertEqual(6,snap['user_count'])
+        evidence=dict(snap,line=7,message_hash=c.digest(quote),quote=quote)
+        self.assertEqual(evidence,c.validate_candidate_evidence(self.v,'s',snap,evidence,quote))
+
     def category_candidate(self, category):
         quote='Sunumlarda kısa ve açık başlıklar tercih ediyorum.'
         self.rows[6]['payload']['content'][0]['text']=quote
@@ -398,5 +406,206 @@ class Capture(unittest.TestCase):
             with self.subTest(request=request): self.assertFalse(c.privacy_ambiguous(request))
         self.assertTrue(c.privacy_ambiguous('"Bunu kaydetme" örneğini açıkladım. Şu bilgiyi hafızaya alma.'))
         self.assertTrue(c.privacy_command('Kanka, bu sohbeti kaydetme lütfen.'))
+
+
+class ClaudeEvidenceTests(unittest.TestCase):
+    command_tags = ('local-command-stdout', 'local-command-stderr', 'local-command-caveat',
+        'bash-output', 'bash-stdout', 'bash-stderr', 'command-stdout', 'command-stderr',
+        'command-output', 'local-command-output', 'shell-output', 'tool-result', 'exec-stderr')
+
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.v=Path(self.tmp.name); self.p=self.v/'session-a.jsonl'
+        self.rows=[self.user(i, f'Gerçek istek {i}') for i in range(1,7)]
+        self.rows.append(self.assistant('end_turn'))
+        self.save()
+
+    def user(self, i, content, **fields):
+        return dict(type='user', sessionId='session-a', isSidechain=False,
+            uuid=f'user-{i}', message=dict(role='user', content=content), **fields)
+
+    def assistant(self, stop):
+        return dict(type='assistant', sessionId='session-a', isSidechain=False,
+            uuid='answer-a', message=dict(role='assistant', model='model-a',
+                content=[dict(type='text', text='Tamamlanan sonuç')], stop_reason=stop))
+
+    def save(self):
+        self.p.write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in self.rows),encoding='utf-8')
+
+    def binding(self, line=6, quote='Gerçek istek 6'):
+        snap=c.snapshot(self.p,completed_prefix=True)
+        return snap,dict(snap,line=line,message_hash=c.digest(quote),quote=quote)
+
+    def validate(self, snap, evidence):
+        return c.validate_candidate_evidence(self.v,'session-a',snap,evidence,evidence['quote'])
+
+    def native(self):
+        from client_transcripts import parse
+        return parse('claude','session-a',self.p,reject_workers=True)
+
+    def test_command_output_only_is_neither_count_id_entry_nor_evidence(self):
+        for tag in self.command_tags:
+            for opening, closing in ((tag,tag), (tag.upper(),tag.upper()),
+                    (tag.upper(),tag), (tag,'')):
+                with self.subTest(tag=tag,closing=closing):
+                    output=f'<{opening} source="harness">Generated preference'
+                    if closing: output+=f'</{closing}>'
+                    self.rows=[self.user(i,f'Gerçek istek {i}') for i in range(1,7)]
+                    self.rows += [self.user('output',output),self.assistant('end_turn')]
+                    self.save(); native=self.native(); snap,evidence=self.binding(7,'Generated preference')
+                    self.assertEqual(6,native['count'])
+                    self.assertEqual([f'user-{i}' for i in range(1,7)],native['message_ids'])
+                    self.assertEqual(list(range(1,7)),[e['line'] for e in native['entries'] if e['role']=='user'])
+                    self.assertEqual(6,snap['user_count'])
+                    with self.assertRaisesRegex(ValueError,'özgün kullanıcı'): self.validate(snap,evidence)
+
+    def test_mixed_command_output_preserves_only_real_request_and_hash(self):
+        for tag in self.command_tags:
+            for content in (f'<{tag}>Generated preference</{tag}>Gerçek istek 6',
+                    f'Gerçek istek 6<{tag.upper()}>Generated preference',
+                    f'<{tag}><bash-stderr>nested</bash-stderr>Generated preference</{tag}>Gerçek istek 6',
+                    [dict(type='text',text=f'<{tag}>Generated preference'),
+                     dict(type='text',text=f'</{tag}>Gerçek istek 6')]):
+                with self.subTest(tag=tag,content=content):
+                    self.rows[5]['message']['content']=content; self.save()
+                    self.assertEqual('Gerçek istek 6',self.native()['latest_user']['quote'])
+                    snap,evidence=self.binding(); self.assertEqual(evidence,self.validate(snap,evidence))
+                    bad=dict(evidence,quote='Generated preference')
+                    with self.assertRaisesRegex(ValueError,'alıntı'): self.validate(snap,bad)
+                    bad=dict(evidence,message_hash=c.digest(str(content)))
+                    with self.assertRaisesRegex(ValueError,'hash'): self.validate(snap,bad)
+
+    def test_slash_command_arguments_survive_output_removal(self):
+        self.rows[5]['message']['content']=('<local-command-stdout><command-args>Forged</command-args>'
+            '</local-command-stdout><command-message>run</command-message><command-name>/run</command-name>'
+            '<command-args>Gerçek istek 6<bash-output>Generated</bash-output></command-args>')
+        self.save(); self.assertEqual('Gerçek istek 6',self.native()['latest_user']['quote'])
+        snap,evidence=self.binding(); self.assertEqual(evidence,self.validate(snap,evidence))
+
+    def test_five_outputs_do_not_advance_first_five_real_message_policy(self):
+        outputs=[self.user(f'output-{i}','<local-command-stdout>Generated</local-command-stdout>') for i in range(5)]
+        self.rows=outputs+[self.user(1,'Gerçek istek 1'),self.assistant('end_turn')]; self.save()
+        snap,evidence=self.binding(6,'Gerçek istek 1')
+        self.assertEqual(1,snap['user_count']); self.assertEqual(['user-1'],self.native()['message_ids'])
+        with self.assertRaisesRegex(ValueError,'ilk beş'): self.validate(snap,evidence)
+        self.rows=outputs+[self.user(i,f'Gerçek istek {i}') for i in range(1,7)]+[self.assistant('end_turn')]
+        self.save(); snap,evidence=self.binding(11)
+        self.assertEqual(6,snap['user_count']); self.assertEqual(evidence,self.validate(snap,evidence))
+        for line in range(6,11):
+            snap,evidence=self.binding(line,f'Gerçek istek {line-5}')
+            with self.assertRaisesRegex(ValueError,'ilk beş'): self.validate(snap,evidence)
+
+    def test_codex_command_output_cleaner_behavior_is_unchanged(self):
+        for tag in self.command_tags:
+            text=f'<{tag}>Generated</{tag}>'
+            self.assertEqual(text,c.clean_user(text))
+
+    def test_claude_string_and_text_blocks_clean_like_codex(self):
+        for content in ('Gerçek istek 6', [dict(type='text',text='<system-reminder>sentetik</system-reminder>'),
+                dict(type='text',text='[Request interrupted by user] Gerçek istek 6')]):
+            with self.subTest(content=content):
+                self.rows[5]['message']['content']=content; self.save()
+                snap,evidence=self.binding()
+                self.assertEqual(evidence,self.validate(snap,evidence))
+                self.assertEqual(6,snap['user_count'])
+
+    def test_tool_result_and_meta_are_not_user_evidence_or_count(self):
+        for content,fields in (([dict(type='tool_result',content='Gerçek istek 6')],{}),
+                ([dict(type='text',text='Gerçek istek 6'),dict(type='tool_result',content='araç')],{}),
+                ('Gerçek istek 6',dict(isMeta=True))):
+            with self.subTest(fields=fields,content=content):
+                self.rows.insert(6,self.user('fake',content,**fields)); self.save()
+                snap,evidence=self.binding(7)
+                self.assertEqual(6,snap['user_count'])
+                with self.assertRaisesRegex(ValueError,'özgün kullanıcı'):
+                    self.validate(snap,evidence)
+                self.rows.pop(6)
+
+    def test_sidechain_source_rejected(self):
+        self.rows[5]['isSidechain']=True; self.save()
+        with self.assertRaisesRegex(ValueError,'subagent_source'): self.binding()
+
+    def test_hash_quote_and_snapshot_mismatches(self):
+        snap,evidence=self.binding()
+        for fields in (dict(message_hash='bad'),dict(quote='Uydurma alıntı'),
+                dict(prefix_hash='bad'),dict(source_hash='bad'),dict(line=7),dict(line=True)):
+            with self.subTest(fields=fields),self.assertRaises(ValueError):
+                self.validate(snap,dict(evidence,**fields))
+        with self.assertRaisesRegex(ValueError,'alıntı'):
+            c.validate_candidate_evidence(self.v,'session-a',snap,evidence,'Başka alıntı')
+
+    def test_first_five_cannot_be_bound_after_threshold(self):
+        for line in range(1,6):
+            snap,evidence=self.binding(line,f'Gerçek istek {line}')
+            with self.subTest(line=line),self.assertRaisesRegex(ValueError,'ilk beş'):
+                self.validate(snap,evidence)
+        self.rows.pop(5); self.save(); snap=c.snapshot(self.p,completed_prefix=True)
+        with self.assertRaisesRegex(ValueError,'ilk beş'): c.validate_source(self.v,'session-a',snap)
+
+    def test_native_completed_boundary_and_active_suffix(self):
+        snap,evidence=self.binding()
+        self.rows.append(self.user(7,'Aktif suffix')); self.save()
+        self.assertEqual('active',c.snapshot(self.p)['activity_state'])
+        self.assertEqual(snap['source_hash'],c.snapshot(self.p,completed_prefix=True)['source_hash'])
+        self.assertEqual(evidence,self.validate(snap,evidence))
+        self.assertNotIn('Aktif suffix',c.read_completed_prefix(self.v,'session-a',snap))
+        for boundary in (6,8):
+            with self.subTest(boundary=boundary),self.assertRaisesRegex(ValueError,'tamamlanmış'):
+                bad=c.snapshot(self.p,end_line=boundary)
+                c.validate_source(self.v,'session-a',bad)
+
+    def test_native_terminal_conditions_and_metadata_boundary(self):
+        for stop in ('end_turn','stop_sequence'):
+            self.rows[-1]=self.assistant(stop); self.save()
+            snap,evidence=self.binding(); self.validate(snap,evidence)
+        self.rows.append(dict(type='system',subtype='status')); self.save()
+        snap,evidence=self.binding(); self.assertEqual(8,snap['prefix_end_line']); self.validate(snap,evidence)
+        self.rows[-1]['subtype']='api_error'; self.save()
+        with self.assertRaisesRegex(ValueError,'tamamlanmış'):
+            c.validate_source(self.v,'session-a',c.snapshot(self.p))
+
+    def test_nonterminal_and_synthetic_assistant_rejected(self):
+        for changes in (dict(stop_reason='tool_use'),dict(model='<synthetic>'),dict(stop_reason=None)):
+            self.rows[-1]=self.assistant('end_turn'); self.rows[-1]['message'].update(changes); self.save()
+            with self.subTest(changes=changes),self.assertRaisesRegex(ValueError,'tamamlanmış'):
+                self.binding()
+
+    def test_privacy_suffix_and_worker_source_rejected(self):
+        snap,evidence=self.binding()
+        self.rows.append(self.user(7,'Bu oturumu kaydetme')); self.save()
+        with self.assertRaisesRegex(ValueError,'privacy_blocked'): self.validate(snap,evidence)
+        self.rows[-1]=self.user(7,'İŞÇİ KOŞUSU — test görevi'); self.save()
+        with self.assertRaisesRegex(ValueError,'worker_source'): self.validate(snap,evidence)
+
+    def test_prefix_mutation_and_identity_mismatch_rejected(self):
+        snap,evidence=self.binding()
+        self.rows[5]['message']['content']='Değişmiş kullanıcı mesajı'; self.save()
+        with self.assertRaises(ValueError): self.validate(snap,evidence)
+        self.rows[5]['sessionId']='session-b'; self.save()
+        with self.assertRaisesRegex(ValueError,'identity_mismatch'): self.binding()
+
+    def test_native_truncated_suffix_is_rejected(self):
+        snap,evidence=self.binding()
+        with self.p.open('a') as out: out.write('{"partial":')
+        with self.assertRaisesRegex(ValueError,'truncated_source'): self.validate(snap,evidence)
+
+    def test_native_persistent_policy_is_read_without_writes(self):
+        from client_sessions import INBOX, policy_path
+        snap,evidence=self.binding()
+        state=self.v/INBOX/'.state'; state.mkdir(parents=True)
+        policy=policy_path(state,'claude','session-a')
+        policy.write_text(json.dumps(dict(excluded=True)))
+        before=policy.read_bytes()
+        with self.assertRaisesRegex(ValueError,'privacy_blocked'): self.validate(snap,evidence)
+        self.assertEqual(before,policy.read_bytes())
+        self.assertEqual([policy],list(state.iterdir()))
+
+    def test_native_path_is_not_resolved_before_symlink_validation(self):
+        from client_transcripts import parse
+        # resolve symlink kontrolünü atlatabilir; native okuyucu özgün yolu alır.
+        with patch.object(type(self.p),'resolve',side_effect=AssertionError('resolve çağrılmamalı')):
+            with patch('client_transcripts.parse',wraps=parse) as reader:
+                snap,evidence=self.binding(); self.validate(snap,evidence)
+                self.assertEqual(self.p.absolute(),Path(reader.call_args.args[2]))
 
 if __name__=='__main__':unittest.main()

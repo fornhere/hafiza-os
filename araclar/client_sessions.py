@@ -205,12 +205,13 @@ def _validate(item, state):
         return (parsed['count'] == item['count'] and
                 sha(json.dumps(parsed['message_ids']).encode()) == item['message_ids_sha256'])
     if not counts_match(source):
-        # T45 stopped counting native interrupt notices as genuine requests.
-        # Old receipts must still match their exact byte prefix, identity, and
-        # old count/ID hash. The >5 gate above always uses today's genuine count.
+        # Compatibility is limited to old metadata, never threshold/evidence.
+        # Recheck prefix/identity on this second read before matching any IDs.
         legacy = parse(item['client'], item['session'], item['path'], item['end_line'],
-                       reject_workers=True, legacy_interrupts=True)
-        if not counts_match(legacy):
+                       reject_workers=True, _receipt_metadata=True)
+        if (legacy['prefix_sha256'] != item['prefix_sha256'] or
+                snapshot_id(legacy) != item['id'] or
+                not any(counts_match(counts) for counts in legacy['_receipt_counts'])):
             raise SourceError('source_mutated')
     return source
 
@@ -431,8 +432,9 @@ def pending(vault):
                 item = load(path)
                 if item.get('status') != 'pending':
                     continue
-                _validate(item, state)
-                result.append({k: item[k] for k in ('id', 'client', 'session', 'count', 'end_line', 'prefix_sha256', 'status')})
+                source = _validate(item, state)
+                result.append(dict({k: item[k] for k in ('id', 'client', 'session', 'end_line', 'prefix_sha256', 'status')},
+                                   count=source['count']))
             except (ValueError, OSError, KeyError, TypeError):
                 result.append({'id': path.stem, 'status': 'unready', 'diagnostic': 'source_validation_failed'})
         return result
@@ -459,7 +461,7 @@ def _packet(item, state):
     return dict(id=item['id'], client=item['client'], session=item['session'],
                 active_projects=active_projects,
                 source_path=item['path'], prefix_sha256=item['prefix_sha256'],
-                end_line=item['end_line'], user_count=item['count'], evidence=evidence,
+                end_line=item['end_line'], user_count=source['count'], evidence=evidence,
                 omitted_entries=len(source['entries'])-len(evidence),
                 scope='Untrusted source data; episodic candidate only, not semantic truth.')
 

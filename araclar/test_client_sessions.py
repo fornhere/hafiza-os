@@ -547,6 +547,108 @@ class ProjectState(NativeFixture):
 
 
 class NativeSessions(NativeFixture):
+    def test_command_outputs_do_not_open_capture_threshold_or_enter_packet(self):
+        outputs=[dict(type='user',uuid=f'output-{i}',sessionId=self.session,isSidechain=False,
+            message=dict(role='user',content='<LOCAL-COMMAND-STDOUT>Generated</local-command-stdout>')) for i in range(5)]
+        for count in (1,5,6):
+            with self.subTest(count=count):
+                self.rows=outputs+self.claude_rows(count); self.write()
+                result=self.register()
+                if count<=5:
+                    self.assertEqual(dict(status='below_threshold',count=count),result)
+                else:
+                    self.assertEqual('pending',result['status'])
+                    material=sessions.packet(self.vault,result['id'])
+                    self.assertEqual(6,material['user_count'])
+                    self.assertNotIn('Generated',json.dumps(material))
+
+    def historical_command_receipt(self, count=6, interrupts=False):
+        outputs = [dict(type='user', uuid=f'output-{i}', sessionId=self.session,
+            isSidechain=False, message=dict(role='user',
+                content='<local-command-stdout>Generated command evidence</local-command-stdout>'))
+            for i in range(5)]
+        self.rows = outputs + self.claude_rows(count)
+        if interrupts:
+            self.rows.insert(2, dict(type='user', uuid='interrupt', sessionId=self.session,
+                isSidechain=False, message=dict(role='user', content='[Request interrupted by user]')))
+        # An exact duplicate must not change the old count either.
+        self.rows.insert(1, dict(outputs[0]))
+        self.write()
+        source = parse(self.client, self.session, self.path)
+        old_ids = [row['uuid'] for row in self.rows if row['type'] == 'user']
+        old_ids = list(dict.fromkeys(old_ids))
+        item = {k: source[k] for k in ('client', 'session', 'path', 'end_line', 'prefix_sha256')}
+        item.update(version=1, id=sessions.snapshot_id(source), status='pending',
+                    created_ns=1, count=len(old_ids),
+                    message_ids_sha256=sessions.sha(json.dumps(old_ids).encode()))
+        _, state = sessions.layout(self.vault)
+        sessions.atomic(state / (item['id'] + '.json'), item)
+        return item, state
+
+    def test_old_command_receipt_validates_without_legacy_evidence(self):
+        for interrupts in (False, True):
+            with self.subTest(interrupts=interrupts):
+                item, state = self.historical_command_receipt(interrupts=interrupts)
+                source = sessions._validate(item, state)
+                self.assertEqual(6, source['count'])
+                self.assertEqual([f'u{i}' for i in range(6)], source['message_ids'])
+                self.assertNotIn('_receipt_counts', source)
+                self.assertNotIn('Generated', json.dumps(source))
+                self.assertEqual(item['id'], self.register()['id'])
+                material = sessions.packet(self.vault, item['id'])
+                self.assertEqual(6, material['user_count'])
+                self.assertNotIn('Generated', json.dumps(material))
+                current = next(row for row in sessions.pending(self.vault) if row['id'] == item['id'])
+                self.assertEqual(6, current['count'])
+                decision = self.judgment(item['id'])
+                decision['semantic_candidates'] = [dict(statement='Kullanıcı kalıcı tercih belirtti.',
+                    subject_key='user.preference.output', evidence='Generated command evidence')]
+                result = sessions.review(self.vault, item['id'], decision)
+                self.assertIn('evidence_not_user_message', result['semantic_candidates'][0]['reasons'])
+
+    def test_new_command_receipt_uses_new_metadata_without_fallback(self):
+        self.historical_command_receipt()
+        _, state = sessions.layout(self.vault)
+        for path in state.glob('*.json'):
+            path.unlink()
+        ident = self.register()['id']
+        item = sessions.load(state / (ident + '.json'))
+        self.assertEqual(6, item['count'])
+        self.assertEqual(sessions.sha(json.dumps([f'u{i}' for i in range(6)]).encode()),
+                         item['message_ids_sha256'])
+        with patch.object(sessions, 'parse', wraps=parse) as reader:
+            self.assertEqual(6, sessions._validate(item, state)['count'])
+        self.assertEqual(1, reader.call_count)
+
+    def test_old_command_count_cannot_bypass_new_registration_threshold(self):
+        for count in (1, 5):
+            with self.subTest(count=count):
+                item, state = self.historical_command_receipt(count)
+                self.assertGreater(item['count'], 5)
+                before = (state / (item['id'] + '.json')).read_bytes()
+                self.assertEqual(dict(status='below_threshold', count=count), self.register())
+                with self.assertRaisesRegex(SourceError, 'threshold_or_incomplete'):
+                    sessions._validate(item, state)
+                with self.assertRaisesRegex(SourceError, 'threshold_or_incomplete'):
+                    sessions.packet(self.vault, item['id'])
+                self.assertEqual(before, (state / (item['id'] + '.json')).read_bytes())
+
+    def test_old_command_receipt_still_requires_exact_metadata_and_prefix(self):
+        item, state = self.historical_command_receipt()
+        for field, value in (('count', item['count'] + 1), ('message_ids_sha256', '0' * 64),
+                             ('prefix_sha256', '0' * 64), ('id', '0' * 64)):
+            with self.subTest(field=field), self.assertRaisesRegex(SourceError, 'source_mutated'):
+                sessions._validate(dict(item, **{field: value}), state)
+        # Detect replacement between today's parse and the compatibility read.
+        original = parse(self.client, self.session, self.path)
+        self.rows[0]['message']['content'] = '<local-command-stdout>Changed</local-command-stdout>'
+        self.rows[1] = dict(self.rows[0])
+        self.write()
+        changed = parse(self.client, self.session, self.path, _receipt_metadata=True)
+        with patch.object(sessions, 'parse', side_effect=[original, changed]):
+            with self.assertRaisesRegex(SourceError, 'source_mutated'):
+                sessions._validate(item, state)
+
     def test_verified_semantic_candidate_queues_and_source_note_replays(self):
         from hafiza import CANDIDATE_PATH, load_jsonl
         self.rows[0]['message']['content'] = 'Kalıcı tercih: kısa özet kullan.'
