@@ -699,9 +699,19 @@ def receipt_project_matches(vault, receipt, project_id):
                for name in names if isinstance(name, str) and name)
 
 
-def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), delivered_cards=None, project_id=None):
+def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), delivered_cards=None, project_id=None, query=None):
     budget = max(0, min(int(budget), 6500))
     oldest_ns = time.time_ns() - int(max_age_days * 86400 * 1e9)
+    if query is not None:
+        from gorev_baglam import config, project_terms, rank_records, content_words, word_match
+        project = next((p for p in config(vault).get('projects', [])
+                        if p['id'] == project_id), dict(id=project_id or ''))
+        ignored = project_terms(project)
+        # Proje adı sahipliktir; tek başına görev alakası değildir.
+        topic = ' '.join(sorted(w for w in content_words(query)
+                              if not any(word_match(w, term) for term in ignored)))
+        if not topic: return ''
+
     with locked(vault) as (root, state):
         candidates = []
         for path in scan(state):
@@ -713,19 +723,38 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), d
             except (ValueError, OSError, KeyError, TypeError):
                 continue
         parts, used, seen_sessions, seen_cards = [], 0, set(), list(exclude_cards)
-        # At most 20 recent original sources are reread per opening hook.
+        # Inspect at most 20 bounded receipts; only relevant candidates reread sources.
         for item in sorted(candidates, key=lambda i: i['created_ns'], reverse=True)[:20]:
             if len(parts) >= 3 or used >= budget:
                 break
             try:
                 identity = (item['client'], item['session'])
-                _validate(item, state)
+                header = f"Episodic candidate ({item['client']}, {item['id']}): "
+                available = budget - used - len(header) - (1 if parts else 0)
+                if available < 80:
+                    break
                 receipt_path = root / (item['id'] + '.json')
-                if sha(read_bytes(receipt_path, 128000)) != item.get('receipt_sha256'):
+                receipt_bytes = read_bytes(receipt_path, 128000)
+                receipt = strict_json(receipt_bytes)
+                summary = receipt['summary']
+                report = receipt.get('project_state')
+                if not isinstance(summary, str):
+                    continue
+                if query is not None:
+                    # Untrusted receipt text is only an exclusion hint. Never rank
+                    # rendered schema labels, and validate every delivered source.
+                    values = [summary]
+                    if isinstance(report, dict):
+                        values.extend(report.get(k, '') for k in ('outcome', 'rationale', 'next_step'))
+                        values.extend(report.get('open_items', []))
+                    content = '\n'.join(v for v in values if isinstance(v, str))
+                    if not rank_records([dict(statement=content)], topic):
+                        continue
+                _validate(item, state)
+                if sha(receipt_bytes) != item.get('receipt_sha256'):
                     continue
                 if item.get('note_sha256') and sha(read_bytes(root / (item['id'] + '.md'), 128000)) != item['note_sha256']:
                     continue
-                receipt = load(receipt_path)
                 if receipt.get('decision_sha256') != item['decision_sha256'] or receipt.get('meaningful') is not True or receipt.get('decision') != 'record' or receipt.get('id') != item['id']:
                     continue
                 summary = receipt['summary']
@@ -754,10 +783,6 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), d
                         summary = 'Proje kimliği yok; kapsam gerekçeden eşleşti.\n' + summary + '\n' + report_text
                     else:
                         summary = report_text + '\n' + summary
-                header = f"Episodic candidate ({item['client']}, {item['id']}): "
-                available = budget - used - len(header) - (1 if parts else 0)
-                if available < 80:
-                    break
                 excerpt = summary if len(summary) <= available else summary[:available-20] + ' [summary truncated]'
                 text = header + excerpt
                 parts.append(text)

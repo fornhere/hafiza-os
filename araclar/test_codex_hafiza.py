@@ -11,6 +11,118 @@ import codex_hafiza as h
 
 
 class Hooks(unittest.TestCase):
+    def test_heartbeat_metadata_skips_policy_state_and_counter(self):
+        meta = dict(content_item_kinds=['user.heartbeat'], turn_id='t1')
+        payload = dict(type='message', role='user',
+                       internal_chat_message_metadata_passthrough=meta,
+                       content=[dict(type='input_text', text='Otomatik görev gövdesi')])
+        path = self.transcript(dict(source='vscode'))
+        with path.open('a') as out:
+            out.write(json.dumps(dict(type='response_item', payload=payload))+'\n')
+        with patch('capture_source.apply_prompt_policy') as policy:
+            self.assertEqual(self.event('UserPromptSubmit', 't1',
+                prompt='Otomatik görev gövdesi', transcript_path=str(path)), {})
+            policy.assert_not_called()
+        self.assert_no_hook_state()
+        for source in ('user.heartbeat', 'heartbeat', 'automatic_wakeup'):
+            self.assertEqual(self.event('UserPromptSubmit', source_type=source,
+                                       prompt='Boş olmayan gövde'), {})
+        self.event('UserPromptSubmit', 'real', prompt='Gerçek görev istemi')
+        state = json.loads(next((self.vault/h.INBOX/'.state').glob('*.json')).read_text())
+        self.assertEqual(state['count'], 1)
+        self.assertEqual(state['turns'], ['real'])
+
+    def test_cli_heartbeat_telemetry_without_queue(self):
+        data = dict(session_id='synthetic', turn_id='t1', hook_event_name='UserPromptSubmit',
+                    source_type='user.heartbeat', prompt='NEVER_COPY')
+        proc = subprocess.run([sys.executable, str(Path(h.__file__)), '--vault', str(self.vault), 'hook'],
+            input=json.dumps(data), text=True, capture_output=True, check=True,
+            env=dict(os.environ,HAFIZA_ISCI='0',CODEX_WORKER='0'))
+        self.assertEqual(json.loads(proc.stdout), {})
+        self.assert_no_hook_state()
+        import hook_health
+        rows = hook_health.read_runs(self.vault)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['outcome'], 'heartbeat_skipped')
+        self.assertEqual(rows[0]['emitted_chars'], 0)
+        self.assertNotIn('NEVER_COPY', json.dumps(rows))
+
+    def test_heartbeat_never_replaces_new_or_explicit_real_turn(self):
+        meta = dict(content_item_kinds=['user.heartbeat'], turn_id='old')
+        data = dict(hook_event_name='UserPromptSubmit', turn_id='new')
+        path = self.transcript(dict(source='vscode'))
+        with path.open('a') as out:
+            out.write(json.dumps(dict(type='response_item', payload=dict(
+                type='message', role='user', internal_chat_message_metadata_passthrough=meta)))+'\n')
+        self.assertFalse(h.heartbeat_run(dict(data, transcript_path=str(path))))
+        self.assertFalse(h.heartbeat_run(dict(data,
+            internal_chat_message_metadata_passthrough=dict(content_item_kinds=['user.text','user.heartbeat']))))
+        for source in ('vscode', 'user.text', 'exec'):
+            self.assertFalse(h.heartbeat_run(dict(data, source_type=source)))
+
+    def test_explicit_user_text_overrides_wrappers_and_same_turn_transcript(self):
+        human = dict(internal_chat_message_metadata_passthrough=dict(content_item_kinds=['user.text']))
+        auto = dict(internal_chat_message_metadata_passthrough=dict(content_item_kinds=['user.heartbeat'], turn_id='t1'))
+        path = self.transcript(dict(source='vscode'))
+        with path.open('a') as out:
+            out.write(json.dumps(dict(type='response_item', payload=dict(type='message', role='user', **auto)))+'\n')
+        for wrappers in (dict(**human), dict(payload=human), dict(**human, payload=auto), dict(**auto, payload=human)):
+            data = dict(hook_event_name='UserPromptSubmit', session_id='session1', turn_id='t1',
+                        transcript_path=str(path), prompt='Bakır kalemleri karşılaştır', **wrappers)
+            self.assertFalse(h.heartbeat_run(data))
+            with patch('capture_source.apply_prompt_policy') as policy:
+                h.hook(self.vault, data)
+                policy.assert_called_once()
+        state = json.loads(next((self.vault/h.INBOX/'.state').glob('*.json')).read_text())
+        self.assertEqual(state['count'], 1)
+
+    def test_resume_after_old_heartbeat_renews_opening_and_scope_state(self):
+        path = self.transcript(dict(source='vscode'))
+        with path.open('a') as out:
+            out.write(json.dumps(dict(type='response_item', payload=dict(type='message', role='user',
+                internal_chat_message_metadata_passthrough=dict(content_item_kinds=['user.heartbeat'], turn_id='old'))))+'\n')
+        state_path = self.vault/h.INBOX/'.state'/(h.key('session1', 'state')+'.json')
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(json.dumps(dict(turns=['real'], count=1, context_generation=4,
+            session_project_id='proj-a', package_cache={'old':True}, delivered_records=['old'], delivered_turn='real')))
+        data = dict(hook_event_name='SessionStart', session_id='session1', source='resume', transcript_path=str(path))
+        self.assertFalse(h.heartbeat_run(data))
+        with patch.object(h, 'opening_brief', return_value='Açılış') as opening, patch.object(h, 'shared_reviewed_context', return_value=''):
+            result = h.hook(self.vault, data)
+        self.assertIn('Açılış', result['hookSpecificOutput']['additionalContext'])
+        opening.assert_called_once_with(self.vault, project_id='proj-a')
+        state = json.loads(state_path.read_text())
+        self.assertEqual(state['context_generation'], 5)
+        self.assertTrue(state['recontext_pending'])
+        for field in ('package_cache', 'delivered_records', 'delivered_turn'):
+            self.assertNotIn(field, state)
+        self.assertTrue(h.heartbeat_run(dict(data, turn_id='old')))
+        self.assertFalse(h.heartbeat_run(dict(data, turn_id='new')))
+        self.assertTrue(h.heartbeat_run(dict(data, source_type='user.heartbeat')))
+
+    def test_duration_telemetry_outcomes_and_retention_are_content_free(self):
+        import hook_health as health
+        self.event('UserPromptSubmit', source_type='heartbeat', prompt='NEVER_COPY')
+        self.event('Stop')
+        self.event('SessionStart')
+        with patch.dict(os.environ, {'HAFIZA_ISCI':'1'}): self.event('Stop')
+        with patch.object(h, '_hook', side_effect=RuntimeError('NEVER_COPY')):
+            with self.assertRaises(RuntimeError): self.event('Stop')
+        rows = health.read_runs(self.vault)
+        self.assertEqual([r['outcome'] for r in rows],
+                         ['heartbeat_skipped','suppressed','delivered','worker_skipped','failure'])
+        self.assertGreater(rows[2]['emitted_chars'], 0)
+        self.assertTrue(all(r['duration_ms'] >= 0 for r in rows))
+        for _ in range(health.MAX_EVENTS+2):
+            health.record_run(self.vault, 'codex', 'NEVER_COPY', 'suppressed', 1, 0)
+        raw = (self.vault/health.RUN_PATH).read_text()
+        self.assertNotIn('NEVER_COPY', raw)
+        self.assertEqual(len(health.read_runs(self.vault)), health.MAX_EVENTS)
+        self.assertLess(len(raw.encode()), health.MAX_BYTES)
+        self.assertEqual(health.summary(self.vault)['total'], 1)
+        with patch.object(health, 'record_run', wraps=health.record_run), patch.object(health, 'safe_path', side_effect=OSError):
+            self.assertEqual(self.event('Stop'), {})
+
     def test_project_opening_excludes_foreign_and_unscoped_cards(self):
         def card(ident, project):
             return dict(id=ident,project_id=project,title=ident,next_step='İncele',
@@ -100,6 +212,10 @@ class Hooks(unittest.TestCase):
             h.main()
             self.assertIn('oturum yakalama 1 kez başarısız (registry_limit)',
                           json.loads(out.getvalue())['hookSpecificOutput']['additionalContext'])
+            rows = hook_health.read_runs(self.vault)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['outcome'], 'failure')
+            self.assertEqual(rows[0]['emitted_chars'], len(json.loads(out.getvalue())['hookSpecificOutput']['additionalContext']))
 
     def test_prompt_package_can_opt_out_of_remote_advisor(self):
         import gorev_baglam, jev_client
@@ -358,7 +474,7 @@ class Hooks(unittest.TestCase):
             first=self.event('UserPromptSubmit','t1',prompt='İncele')
             self.assertIn('Özet',first['hookSpecificOutput']['additionalContext'])
             self.assertEqual(self.event('UserPromptSubmit','t2',prompt='Başka yönden incele'),{})
-            self.assertEqual(recall.call_args.kwargs,{'project_id':'proj-a'})
+            self.assertEqual(recall.call_args.kwargs,{'project_id':'proj-a','query':'Başka yönden incele'})
 
     def test_resume_compaction_resets_package_cache(self):
         from unittest.mock import patch

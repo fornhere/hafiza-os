@@ -300,6 +300,51 @@ class ProjectState(NativeFixture):
         card = self.work.latest(self.vault, 'task')['project-state:demo']
         self.assertEqual(sessions.recall(self.vault, exclude_cards=[card]), '')
 
+    def test_recall_query_requires_topic_within_selected_project(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        decision['summary'] = 'Bakır kalemleri incelendi; uç kalınlığı karşılaştırıldı.'
+        sessions.review(self.vault, ident, decision, True)
+        project = decision['project_state']['project_id']
+        with patch('gorev_baglam.config', return_value={'projects':[dict(id=project, aliases=['Örnekalan'])]}):
+            for query in ('tarayıcıyı aç', 'Örnekalan', 'tamam', 'sunum animasyonunu gözden geçir', 'sunum sonucunu göster', 'sunum adımını göster', 'asistan bildirimini göster'):
+                with patch.object(sessions, '_validate', side_effect=AssertionError('İlgisiz kaynak okunmamalı')):
+                    self.assertEqual(sessions.recall(self.vault,project_id=project,query=query), '')
+            self.assertIn('Bakır kalemleri', sessions.recall(self.vault,project_id=project,query='bakır kalem'))
+            self.assertIn('Bakır kalemleri', sessions.recall(self.vault,project_id=project,query='Örnekalan bakır kalem'))
+        # Sorgusuz ortak okuyucu Claude'un mevcut davranışını korur.
+        self.assertIn('Bakır kalemleri', sessions.recall(self.vault,project_id=project))
+
+    def test_recall_prefilter_keeps_validation_and_stops_at_budget(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        decision['summary'] = 'Bakır kalemleri karşılaştırıldı.'
+        sessions.review(self.vault, ident, decision, True)
+        project = decision['project_state']['project_id']
+        with patch.object(sessions, '_validate', wraps=sessions._validate) as validate:
+            self.assertEqual(sessions.recall(self.vault, project_id=project, query='bakır kalem', budget=0), '')
+            self.assertEqual(sessions.recall(self.vault, project_id=project, query='bakır kalem', budget=100), '')
+            validate.assert_not_called()
+            self.assertIn('Bakır kalemleri', sessions.recall(self.vault, project_id=project, query='bakır kalem'))
+            self.assertEqual(validate.call_count, 1)
+        # A filled output budget must stop even if more relevant candidates remain.
+        root, state = sessions.layout(self.vault)
+        with patch.object(sessions, 'scan', return_value=[state / (ident + '.json')]*20), patch.object(sessions, '_validate', wraps=sessions._validate) as validate:
+            text = sessions.recall(self.vault, project_id=project, query='bakır kalem', budget=250)
+            self.assertLessEqual(len(text), 250)
+            self.assertEqual(validate.call_count, 1)
+        receipt_path = root / (ident + '.json')
+        original = receipt_path.read_bytes()
+        receipt = json.loads(original)
+        receipt['summary'] = 'Bakır kalemleri değiştirildi.'
+        receipt_path.write_text(json.dumps(receipt))
+        self.assertEqual(sessions.recall(self.vault, project_id=project, query='bakır kalem'), '')
+        receipt_path.write_bytes(original)
+        # Relevance can never authorize a changed receipt or changed source.
+        self.rows[0]['message']['content'] = 'Değişen gerçek kullanıcı görevi'
+        self.write()
+        self.assertEqual(sessions.recall(self.vault, project_id=project, query='bakır kalem'), '')
+
     def test_recall_requires_matching_explicit_project(self):
         ident = self.register()['id']
         decision = self.decision(ident)
@@ -353,7 +398,7 @@ class ProjectState(NativeFixture):
                             {'prompt':'Atlas durumunu incele'},'UserPromptSubmit')
                     else:
                         output=str(codex.hook(self.vault,dict(session_id='scoped-reader',
-                            hook_event_name='UserPromptSubmit',turn_id='1',prompt='Atlas durumunu incele')))
+                            hook_event_name='UserPromptSubmit',turn_id='1',prompt='İzin listesi mapping kontrolü')))
                     for marker in ('#64','izin listesi','mapping','K4c'):
                         self.assertIn(marker,output)
             # Still requires the original source to pass validation.

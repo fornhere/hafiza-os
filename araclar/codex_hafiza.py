@@ -9,6 +9,7 @@ import re
 import shlex
 import stat
 import tempfile
+import time
 from pathlib import Path
 import sys
 
@@ -308,11 +309,12 @@ def account_context(state, emitted, suppressed=0):
     usage['token_count_method'] = 'not_measured'
 
 
-def shared_reviewed_context(vault, project_id=None):
+def shared_reviewed_context(vault, project_id=None, query=None):
     """Optional source-validated native recall; no model and no startup dependency."""
     try:
         from client_sessions import recall
-        return recall(vault, budget=1800, **(dict(project_id=project_id) if project_id else {}))
+        return recall(vault, budget=1800, **(dict(project_id=project_id) if project_id else {}),
+                      **(dict(query=query) if query is not None and project_id else {}))
     except Exception:
         return ''
 
@@ -364,17 +366,87 @@ def worker_run(data, environ=os.environ):
     return False
 
 
-def hook(vault, data):
-    from hook_health import record_failure
+def heartbeat_run(data):
+    """Kaynak türünü kullan; otomatik mesajın gövdesi insan istemi değildir."""
+    def real_user(payload):
+        if not isinstance(payload, dict): return False
+        meta = payload.get('internal_chat_message_metadata_passthrough')
+        kinds = meta.get('content_item_kinds') if isinstance(meta, dict) else None
+        return isinstance(kinds, list) and 'user.text' in kinds
+
+    def automatic(payload):
+        if not isinstance(payload, dict): return False
+        meta = payload.get('internal_chat_message_metadata_passthrough') or {}
+        kinds = meta.get('content_item_kinds', []) if isinstance(meta, dict) else []
+        if not isinstance(kinds, list): kinds = []
+        if 'user.text' in kinds: return False
+        return ('user.heartbeat' in kinds or any(payload.get(k) in
+                ('user.heartbeat', 'heartbeat', 'automatic_wakeup')
+                for k in ('source', 'source_type', 'type') if isinstance(payload.get(k), str)))
+    # Explicit human metadata wins across wrappers and transcript fallback.
+    if real_user(data) or real_user(data.get('payload')): return False
+    if automatic(data) or automatic(data.get('payload')): return True
+    if data.get('hook_event_name') not in ('UserPromptSubmit', 'SessionStart'): return False
+    # A resume has no current user turn by default. Its last transcript row
+    # belongs to history and must not suppress opening/state renewal.
+    if data.get('hook_event_name') == 'SessionStart' and not data.get('turn_id'): return False
+    path = data.get('transcript_path')
+    if not isinstance(path, (str, os.PathLike)) or not path: return False
     try:
-        return _hook(vault, data)
+        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+        fd = os.open(path, flags)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode): return False
+            offset = max(0, info.st_size - 65536)
+            os.lseek(fd, offset, os.SEEK_SET)
+            lines = os.read(fd, 65536).split(b'\n')
+            if offset: lines = lines[1:]
+        finally:
+            os.close(fd)
+        for line in reversed(lines):
+            if not line.strip(): continue
+            try: row = json.loads(line)
+            except ValueError: continue
+            payload = row.get('payload')
+            if (row.get('type') != 'response_item' or not isinstance(payload, dict)
+                    or payload.get('type') != 'message' or payload.get('role') != 'user'): continue
+            meta = payload.get('internal_chat_message_metadata_passthrough') or {}
+            if not isinstance(meta, dict): return False
+            # Eski heartbeat yeni gerçek turun yerine geçmesin.
+            if data.get('turn_id') and meta.get('turn_id') != data['turn_id']: return False
+            return automatic(payload)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return False
+
+
+def hook(vault, data, started=None, telemetry=True):
+    from hook_health import record_failure, record_run
+    started = time.monotonic() if started is None else started
+    outcome, emitted = 'failure', 0
+    event = data.get('hook_event_name') if isinstance(data, dict) else None
+    try:
+        if worker_run(data):
+            outcome = 'worker_skipped'
+            return {}
+        if heartbeat_run(data):
+            outcome = 'heartbeat_skipped'
+            return {}
+        result = _hook(vault, data)
+        emitted = len(result.get('hookSpecificOutput', {}).get('additionalContext', ''))
+        outcome = 'delivered' if emitted else 'suppressed'
+        return result
     except Exception as error:
-        record_failure(vault, 'codex', data.get('hook_event_name') if isinstance(data, dict) else None, error)
+        record_failure(vault, 'codex', event, error)
         raise
+    finally:
+        if telemetry:
+            record_run(vault, 'codex', event, outcome, (time.monotonic()-started)*1000, emitted)
 
 
 def _hook(vault, data):
-    if worker_run(data):
+    if worker_run(data) or heartbeat_run(data):
         return {}
     event = data.get('hook_event_name')
     session = data.get('session_id')
@@ -439,7 +511,7 @@ def _hook(vault, data):
             parts.append(lesson_text)
             if package.get('source_versions'):
                 parts.append('HAFIZA GÖRÜNÜRLÜĞÜ: Bu bağlamın gelmesi kullanım kanıtı değildir. Geçmiş bilgi somut seçimini etkilediyse kısa bir cümlede neyi nasıl uyguladığını kaynak bağlantısıyla belirt; etkilemediyse kullanım iddiası üretme. Aynı bildirimi değişiklik yokken tekrarlama. Uyarlama önerisini yeni kullanıcı onayı sayma. Kayıt bildirimi yalnız başarılı yazma ve geri okuma kanıtından sonra; dry-run, bekleyen aday veya değişmeyen kayıt için kaydettim deme.')
-        shared = shared_reviewed_context(vault, **scope) if not no_memory else ''
+        shared = shared_reviewed_context(vault, query=current_user, **scope) if not no_memory else ''
         if shared:
             shared, markers = package_delta(recall_package(shared, package.get('project_id')), delivered, shared)
             pending.extend(markers)
@@ -541,21 +613,28 @@ def main():
     else:
         data = {}
         called = False
+        started = time.monotonic()
+        outcome = 'failure'
+        result = {}
         try:
             data = json.load(sys.stdin)
             if not isinstance(data, dict):
                 data = {}
                 raise ValueError('hook_payload_invalid')
-            if worker_run(data):
-                result = {}
+            if worker_run(data) or heartbeat_run(data):
+                called = True
+                outcome = 'worker_skipped' if worker_run(data) else 'heartbeat_skipped'
+                result = hook(args.vault, data, started=started, telemetry=False)
             else:
                 state_dir = args.vault / INBOX / '.state'
                 state_dir.mkdir(parents=True, exist_ok=True)
                 # Serialize only this session; health uses a separate nonblocking lock.
                 with exclusive_lock(state_dir / (key(data.get('session_id'), 'state') + '.lock')):
                     called = True
-                    result = hook(args.vault, data)
+                    result = hook(args.vault, data, started=started, telemetry=False)
+                    outcome = 'delivered' if result.get('hookSpecificOutput', {}).get('additionalContext') else 'suppressed'
         except Exception as error:
+            outcome = 'failure'
             from hook_health import record_failure, error_code, warning
             if not called:
                 record_failure(args.vault, 'codex', data.get('hook_event_name'), error)
@@ -565,6 +644,11 @@ def main():
                 line = warning(args.vault)
                 if line:
                     result = {'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': line}}
+        finally:
+            from hook_health import record_run
+            record_run(args.vault, 'codex', data.get('hook_event_name'), outcome,
+                       (time.monotonic()-started)*1000,
+                       len(result.get('hookSpecificOutput', {}).get('additionalContext', '')))
     if args.cmd != 'hook' or not worker_run(data):
         from capture_source import installation_version
         print(json.dumps({'installation_version': installation_version()}), file=sys.stderr)

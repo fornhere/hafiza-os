@@ -7,6 +7,7 @@ an exhaustive audit. No session identifiers, paths, prompts or error messages.
 from collections import Counter
 import datetime as dt
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -123,3 +124,52 @@ def warning(vault, now=None):
     activity = 'oturum yakalama' if code in data['stop_by_code'] else 'hook çalışması'
     return (f'Hafıza uyarısı: {activity} {count} kez başarısız ({code}); '
             'bakım: python3 araclar/konsolidasyon.py status')[:240]
+
+
+RUN_PATH = PATH.with_name('runs.json')
+OUTCOMES = {'delivered', 'suppressed', 'worker_skipped', 'heartbeat_skipped', 'failure'}
+
+
+def read_runs(vault):
+    path = safe_path(Path(vault) / RUN_PATH)
+    if not path.exists(): return []
+    with path.open('rb') as stream:
+        raw = stream.read(MAX_BYTES + 1)
+    if len(raw) > MAX_BYTES: raise ValueError('health_size_limit')
+    rows = json.loads(raw)
+    if not isinstance(rows, list) or len(rows) > MAX_EVENTS: raise ValueError('health_schema_invalid')
+    valid = []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {'client', 'event', 'outcome', 'duration_ms', 'emitted_chars'}: continue
+        if row['client'] != 'codex' or row['event'] not in EVENTS | {'Interrupt', 'unknown'} or row['outcome'] not in OUTCOMES: continue
+        if (type(row['duration_ms']) not in (int, float) or not math.isfinite(row['duration_ms'])
+                or not 0 <= row['duration_ms'] <= 86400000
+                or type(row['emitted_chars']) is not int or not 0 <= row['emitted_chars'] <= 10000000): continue
+        valid.append(row)
+    return valid
+
+
+def record_run(vault, client, event, outcome, duration_ms, emitted_chars):
+    """İçeriksiz Codex süreleri; hata geçmişini başarılarla tahliye etme."""
+    try:
+        if client != 'codex' or outcome not in OUTCOMES: return
+        if event not in EVENTS | {'Interrupt'}: event = 'unknown'
+        path = safe_path(Path(vault) / RUN_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with exclusive_lock(safe_path(path.with_suffix('.lock')), timeout=0):
+            try: rows = read_runs(vault)
+            except (ValueError, TypeError, KeyError): rows = []
+            rows.append(dict(client=client, event=event, outcome=outcome,
+                             duration_ms=round(min(86400000, max(0, duration_ms)), 3),
+                             emitted_chars=min(10000000, max(0, int(emitted_chars)))))
+            raw = json.dumps(rows[-MAX_EVENTS:]).encode('utf-8')
+            if len(raw) > MAX_BYTES: return
+            fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.run-')
+            try:
+                with os.fdopen(fd, 'wb') as stream: stream.write(raw)
+                safe_path(path)
+                os.replace(temporary, path)
+            finally:
+                if os.path.exists(temporary): os.unlink(temporary)
+    except Exception:
+        pass
