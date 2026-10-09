@@ -601,6 +601,29 @@ def state_values(card):
             if v and not contains_secret(str(v)) and not private(str(v))]
 
 
+def state_warnings(vault, card):
+    """Independent uncertainty notices, with their own source basis.
+
+    Callers have validated the card source. An inherited decision additionally
+    needs its original source checked; matching report prose cannot resolve it.
+    """
+    notices = []
+    decision = card.get('decision_required')
+    origin = card.get('decision_source') or card
+    if isinstance(decision, str) and decision and not contains_secret(decision) and not private(decision):
+        try:
+            import hafiza as h
+            content = h.source_file(vault, origin['source_path']).read_text()
+            if (origin.get('evidence') and origin['evidence'] in content
+                    and origin.get('source_content_hash') == h.statement_hash(content)):
+                notices.append(('karar bekliyor: ' + decision, origin))
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    if card.get('outcome_unverified') is True:
+        notices.append(('sonuç teyitsiz', card))
+    return notices
+
+
 def same_state(left, right):
     """Only a report can collapse a card; shared projects alone prove nothing."""
     if not left.get('project_id') or left.get('project_id') != right.get('project_id'):
