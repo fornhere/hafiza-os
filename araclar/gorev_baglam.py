@@ -276,6 +276,98 @@ def subtask_focus(tasks, project, cwd):
     return kept, focus, omitted
 
 
+def _source_paths(row):
+    """Unsupported optional metadata cannot invalidate an otherwise valid card."""
+    sources = row.get('sources')
+    return [s['path'] for s in sources if isinstance(s, dict)
+            and isinstance(s.get('path'), str) and s['path']] if isinstance(sources, list) else []
+
+
+def _subtask_claim(row, project, query, cwd):
+    """Alt işe bağlı kanıtı genel tercih gibi teslim etme; ek kaynak okuma yok."""
+    sources = _source_paths(row)
+    sources += [row.get('source_path')]
+    sources = [s for s in sources if isinstance(s, str) and s]
+    roots = project.get('roots', []) if project else []
+    bound = []
+    for source in sources:
+        path = Path(source)
+        for root in roots:
+            try: parts = path.relative_to(Path(root)).parts
+            except ValueError: continue
+            if len(parts)>1 and not _temporary_component(parts[0]): bound.append((parts[0], False))
+        # Eski oturum özetinin dosya adı tek videoyu açıkça tanımlayabilir.
+        if path.parent.name == 'rollout_summaries':
+            match = re.search(r'(?:^|[-_])([a-z][a-z0-9-]*)_video(?:_|$)', path.stem)
+            if match: bound.append((match[1], True))
+        parts = path.parts
+        if (project and len(parts)>3 and parts[:2] == ('projeler', project['id'])
+                and not _temporary_component(parts[2])): bound.append((parts[2], False))
+    title = row.get('title') if isinstance(row.get('title'), str) else ''
+    words = query_words(title)
+    video = next((i for i,w in enumerate(words) if any(inflected(t, w) for t in ('video', 'yayın'))), None)
+    # Başlığın video adından sonraki biçim sözcükleri iş kimliği değildir.
+    if row.get('kind') == 'decision' and video is not None and video>0:
+        bound.append((' '.join(words[:video]), True))
+    if not bound: return False
+    terms = content_words(query)
+    if cwd and project:
+        location = Path(os.path.abspath(cwd))
+        for root in roots:
+            try: parts = location.relative_to(Path(os.path.abspath(root))).parts
+            except ValueError: continue
+            if not any(_temporary_component(p) for p in parts):
+                # Bir video klasörü doğrudan proje kökü olarak ayarlanabilir.
+                terms |= content_words(parts[0] if parts else Path(root).name)
+    def identity_match(term, word):
+        return word_match(term, word) or (len(term)>=3 and word.startswith(term) and word[len(term):] in _SUFFIXES)
+    for name, named_video in bound:
+        identity = [w for w in query_words(name) if w not in _GENERIC and w not in _STOPWORDS]
+        if not identity: continue
+        if all(any(identity_match(t, w) for w in terms) for t in identity): return False
+        if (named_video and identity[0] not in {'bölüm', 'bolum'} and
+                not identity[0].isdigit() and any(identity_match(identity[0], w) for w in terms)): return False
+    return True
+
+
+def _guard_knowledge(data, project, query, cwd):
+    """Yerel, sentez ve danışman bilgi çıktısında aynı teslim koruması."""
+    if not data or not data.get('text'): return data
+    rows = list(data.get('records') or [])
+    rows += [t['source_record'] for t in data.get('transfers', [])]
+    excluded = {r['id'] for r in rows if _subtask_claim(r, project, query, cwd)}
+    if not excluded: return data
+    # Boş satır statement'ın içinde de olabilir; yalnız teslim başlıkları sınırdır.
+    cards = re.split(r'\n\n(?=Bilgi \[|Uyarlama önerisi \[|Konu:)', data['text'])
+    kept_indices = [i for i, card in enumerate(cards) if not any(
+        'Kaynak: bilgi/'+ident+'.md' in card for ident in excluded)]
+    kept = [cards[i] for i in kept_indices]
+    # Kalan kartın ilişkisi de elenen kararın açıklamasını yeniden taşımasın.
+    kept = ['\n'.join(line for line in card.split('\n') if not any(
+        line.startswith('İlişki: '+ident+' ') or line == 'İlişki: '+ident
+        for ident in excluded)) for card in kept]
+    records = [r for r in data.get('records', []) if r['id'] not in excluded]
+    transfers = [t for t in data.get('transfers', []) if t['source_record']['id'] not in excluded]
+    topics = []
+    for topic in data.get('topics', []):
+        ids = [i for i in topic['record_ids'] if i not in excluded]
+        if ids:
+            topics.append(dict(topic, record_ids=ids, summary=[r for r in topic.get('summary', [])
+                                                               if r['record_id'] not in excluded]))
+    records = [dict(r, relations=[link for link in r['relations'] if link['target'] not in excluded])
+               if r.get('relations') else r for r in records]
+    remaining = records + [t['source_record'] for t in transfers]
+    paths = {'bilgi/'+r['id']+'.md' for r in remaining}
+    paths.update(p for r in remaining for p in _source_paths(r))
+    paths.update(e['path'] for r in remaining for e in r.get('examples', []) if e.get('path'))
+    return dict(data, text='\n\n'.join(kept) if remaining else '', records=records,
+                card_indices=dict(zip(kept, kept_indices)),
+                transfers=transfers, topics=topics,
+                source_versions={p:v for p,v in data.get('source_versions', {}).items() if p in paths},
+                guarded_record_ids=sorted(excluded),
+                omitted_record_ids=sorted(set(data.get('omitted_record_ids', [])) | excluded))
+
+
 def _task_focus_order(task, focus):
     """Focus eligibility, then dated freshness, then lexical focus strength.
 
@@ -1062,6 +1154,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if project and wants_reuse:
         from yeniden_kullanim import propose
         reuse_data=propose(vault,project['id'],query,max_chars=min(1800,budget))
+    delivery_costs = {}
     def add(ident, text):
         priority = {'subtask-empty':-2, 'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
@@ -1142,6 +1235,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         eligible, ranked_catalog, recall_settings(cfg), rerank_state is not None, query)
     procedure_data = procedure_future.result()
     if knowledge_future: knowledge_data = knowledge_future.result()
+    unguarded_knowledge = knowledge_data
+    knowledge_data = _guard_knowledge(knowledge_data, project, query, cwd)
+    if knowledge_data:
+        omitted.extend(i+':other_subtask_decision' for i in knowledge_data.get('guarded_record_ids', []))
     if procedure_data['text']: add('procedure-reading', procedure_data['text'])
     def still_current(row):
         try:
@@ -1149,6 +1246,12 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                     digest(h.source_file(vault,row['source_path'])) == eligible_versions[row['source_path']])
         except (OSError,ValueError): return False
     ranked_catalog=[row for row in ranked_catalog if still_current(row)]
+    catalog_indices = {row['memory_id']: i for i, row in enumerate(ranked_catalog)}
+    unguarded_catalog = ranked_catalog
+    foreign_catalog = {row['memory_id'] for row in eligible if _subtask_claim(row, project, query, cwd)}
+    omitted.extend(i+':other_subtask_decision' for i in sorted(foreign_catalog)
+                   if i in {r['memory_id'] for r in ranked_catalog})
+    ranked_catalog = [r for r in ranked_catalog if r['memory_id'] not in foreign_catalog]
     profile_rows = [] if skip_memory else scope_profile(
         eligible, project, cfg.get('projects', []))
     # Scope identifies whose preferences apply; the active work domain decides
@@ -1158,6 +1261,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     profile_rows = [row for row in profile_rows if still_current(row) and
                     any(word_match(t, w) for t in profile_topic
                         for w in content_words(search_text(row)))]
+    omitted.extend(row['memory_id']+':other_subtask_decision' for row in profile_rows
+                   if row['memory_id'] in foreign_catalog and row['memory_id']+':other_subtask_decision' not in omitted)
+    profile_rows = [row for row in profile_rows if row['memory_id'] not in foreign_catalog]
     ranked_ids = {row['memory_id'] for row in ranked_catalog}
     profile_ids = set()
     profile_used = 0
@@ -1171,8 +1277,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                           if isinstance(row.get(key),str) and row[key] in content)
         text = ('Kapsam profili: '+row['statement']+details+
                 ' (kaynak: '+source_reference(row, 'zihin/hafıza-kataloğu.jsonl')+')')
-        if profile_used + len(text) + 1 > profile_budget: continue
-        profile_used += len(text) + 1
+        original_cost = len(text)
+        if profile_used + max(original_cost, len(text)) + 1 > profile_budget: continue
+        profile_used += max(original_cost, len(text)) + 1
         profile_ids.add(row['memory_id'])
         add(row['memory_id'], text)
         priority, sequence, ident, text = candidates[-1]
@@ -1182,11 +1289,16 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if catalog_evaluation and catalog_evaluation.get('suggested_ids'):
         suggested=set(catalog_evaluation['suggested_ids'])
         for row in eligible:
-            if row['memory_id'] not in suggested or not still_current(row):continue
+            if row['memory_id'] not in suggested or not still_current(row): continue
+            if row['memory_id'] in foreign_catalog:
+                reason = row['memory_id']+':other_subtask_decision'
+                if reason not in omitted: omitted.append(reason)
+                continue
             add('jev-reading:'+row['memory_id'], 'Jev kaynak adayı (okumadan tercih/onay sayma): '+row['subject_key']+' — '+str(vault/row['source_path']))
             source_versions[row['source_path']]=eligible_versions[row['source_path']]
 
     for rank_index, row in enumerate(ranked_catalog):
+        rank_index = catalog_indices[row['memory_id']]
         # A source-derived card requires a reviewed source revision, not a new
         # hash computed from an unreviewed legacy statement's current file.
         content = h.source_file(vault, row['source_path']).read_text()
@@ -1197,7 +1309,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if pinned: card_facts.append(row)
         prefix = 'Bilgi kartı: ' if resume and pinned else 'Güncel kayıt: '
         details = ''.join(' '+label+': '+row[key] for key,label in (('rationale','Gerekçe'),('conditions','Geçerlilik koşulu')) if isinstance(row.get(key),str) and row[key] in content and not h.contains_secret(row[key]))
-        if add(row['memory_id'],prefix+row['statement']+details+' (kaynak: '+source_reference(row, 'zihin/hafıza-kataloğu.jsonl')+'; kapsam: '+row.get('scope','bilinmiyor')+('' if compact and source_reference(row, 'zihin/hafıza-kataloğu.jsonl') != row['source_path'] else '; sınıf: '+h.context_source_class(row))+')'):
+        text = prefix+row['statement']+details+' (kaynak: '+source_reference(row, 'zihin/hafıza-kataloğu.jsonl')+'; kapsam: '+row.get('scope','bilinmiyor')+('' if compact and source_reference(row, 'zihin/hafıza-kataloğu.jsonl') != row['source_path'] else '; sınıf: '+h.context_source_class(row))+')'
+        original_cost = len(text)
+        delivery_costs[(row['memory_id'], text)] = max(original_cost, len(text))
+        if add(row['memory_id'],text):
             current_facts.append(row)
             priority,sequence,ident,text=candidates[-1]
             # Alternate catalog cards and note cards at the same priority.
@@ -1326,7 +1441,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             add(task['id'],text)
             # One relevant primary card comes first; notes precede additional
             # cards and unrelated recency hints, so a long card cannot starve notes.
-            primary = visible_count==1 and (resume or bool(task_focus) or bool(topical_ids) or not knowledge_data or not knowledge_data['text'])
+            primary = visible_count==1 and (resume or bool(task_focus) or bool(topical_ids) or not unguarded_knowledge or not unguarded_knowledge['text'])
             priority,sequence,ident,text=candidates[-1]
             candidates[-1]=(-2 if primary else 2,sequence,ident,text)
         identity_assets = [a for a in project.get('assets', []) if a.get('role') == 'identity']
@@ -1348,6 +1463,13 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         separate_notes = (knowledge_data['text'].startswith('Bilgi [') and
                           not knowledge_data.get('transfers') and not knowledge_data.get('topics'))
         for note_index, card in enumerate(re.split(r'\n\n(?=Bilgi \[)', knowledge_data['text']) if separate_notes else [knowledge_data['text']]):
+            # Keep the pre-filter interleave with catalog cards. Removing an
+            # earlier note must not promote later notes ahead of preferences.
+            if separate_notes: note_index = knowledge_data.get('card_indices', {}).get(card, note_index)
+            # Tam kartlar seçim bütçesine birlikte sığmalı.
+            cost = knowledge_data.get('delivery_costs', {}).get(card, len(card))
+            if not separate_notes: cost = max(cost, len(knowledge_data.get('original_text', card)))
+            delivery_costs[('knowledge', card)] = max(cost, len(card))
             add('knowledge',card)
             priority, _, ident, text = candidates[-1]
             candidates[-1] = (priority, 2*note_index+1, ident, text)
@@ -1398,7 +1520,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     # Only candidates that fit the actual bounded package can satisfy coverage.
     preview_ids=set(); preview_used=0
     for _,_,ident,text in sorted(candidates):
-        cost=len(text)+(1 if preview_ids else 0)
+        cost=delivery_costs.get((ident,text), len(text))+(1 if preview_ids else 0)
         if preview_used+cost<=budget: preview_ids.add(ident); preview_used+=cost
     current_facts=[r for r in current_facts if r['memory_id'] in preview_ids]
     current_tasks=[t for t in current_tasks if t['id'] in preview_ids]
@@ -1430,24 +1552,65 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     # Failed optional inference reports diagnostics without adding a context card
     # to a selection that previously stayed empty.
     errors=[reason for reason in omitted
-            if not reason.endswith((':budget', ':card_limit', ':subtask_focus', ':root_fallback', ':visual_intent_required'))
+            if not reason.endswith((':budget', ':card_limit', ':subtask_focus', ':root_fallback', ':visual_intent_required', ':other_subtask_decision'))
             and not reason.startswith(('implicit_project:', 'inventory:'))]
     if errors:
         detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'
         if len(detail)>min(600,budget): detail='Bağlam kontrolü: Geçersiz veya değişmiş kaynaklar dışlandı; omitted_reasons alanını incele.'
         candidates.append((0,-1,'context-check',detail))
-    delivered_segments={}
-    for _, _, ident, text in sorted(candidates):
+    # Reserve the surviving cards that fit before subtask filtering. A newly
+    # affordable long card must not consume a later general preference's room.
+    original_candidates = list(candidates)
+    if foreign_catalog:
+        for row in unguarded_catalog:
+            if row['memory_id'] not in foreign_catalog: continue
+            content = h.source_file(vault, row['source_path']).read_text()
+            pinned = (row.get('source_content_hash') == h.statement_hash(content)
+                      or h.current_source_binding(vault, row, content))
+            details = ''.join(' '+label+': '+row[key] for key,label in (('rationale','Gerekçe'),('conditions','Geçerlilik koşulu')) if isinstance(row.get(key),str) and row[key] in content and not h.contains_secret(row[key]))
+            text = ('Bilgi kartı: ' if resume and pinned else 'Güncel kayıt: ')+row['statement']+details+' (kaynak: '+source_reference(row, 'zihin/hafıza-kataloğu.jsonl')+'; kapsam: '+row.get('scope','bilinmiyor')+('' if compact and source_reference(row, 'zihin/hafıza-kataloğu.jsonl') != row['source_path'] else '; sınıf: '+h.context_source_class(row))+')'
+            original_candidates.append((0.5,2*catalog_indices[row['memory_id']],row['memory_id'],text))
+    if unguarded_knowledge and knowledge_data and knowledge_data.get('guarded_record_ids'):
+        original_candidates = [c for c in original_candidates if c[2] != 'knowledge']
+        separate = (unguarded_knowledge['text'].startswith('Bilgi [') and
+                    not unguarded_knowledge.get('transfers') and not unguarded_knowledge.get('topics'))
+        for i, card in enumerate(re.split(r'\n\n(?=Bilgi \[)', unguarded_knowledge['text']) if separate else [unguarded_knowledge['text']]):
+            original_candidates.append((0.5,2*i+1,'knowledge',card))
+    original_selected = set(); original_used = 0; original_reserve = lesson_reserve
+    for candidate in sorted(original_candidates):
+        _, _, ident, text = candidate
+        cost = len(text)+(1 if original_selected else 0)
+        limit = budget if ident == 'methods' else budget-original_reserve
+        if original_used+cost > limit: continue
+        original_selected.add(candidate[:3]); original_used += cost
+        if ident == 'methods': original_reserve = 0
+    # Keep a scope header that fit before filtering with the surviving memory
+    # cards, before admitting newly affordable cards. Knowledge-channel context
+    # may remain even when the catalog card that triggered the header is gone.
+    header = h.context_scope_header(scope, ['project:'+w['id'] for w in workflows])
+    original_fact_ids = {row['memory_id'] for row in unguarded_catalog} | profile_ids
+    surviving_fact_ids = {row['memory_id'] for row in current_facts}
+    header_reserve = (len(header)+1 if
+                      any(c[2] in original_fact_ids for c in original_selected)
+                      and any(c[2] in surviving_fact_ids or c[2] == 'knowledge' for c in candidates)
+                      and original_used+len(header)+1 <= budget else 0)
+    admitted = []
+    for candidate in sorted(candidates, key=lambda c: (c[:3] not in original_selected, c)):
+        _, _, ident, text = candidate
         if ident == 'inventory':
-            text = inventory_card(inventory, min(inventory_limit(budget), max(0,budget-lesson_reserve-used-bool(lines))))
+            text = inventory_card(inventory, min(inventory_limit(budget), max(0,budget-lesson_reserve-header_reserve-used-bool(admitted))))
             if not text:
                 omitted.append('inventory:budget'); continue
-        cost=len(text)+(1 if lines else 0)
-        limit=budget if ident=='methods' else budget-lesson_reserve
+            candidate = candidate[:3]+(text,)
+        cost=delivery_costs.get((ident,text), len(text))+(1 if admitted else 0)
+        limit=budget-header_reserve if ident=='methods' else budget-lesson_reserve-header_reserve
         if used+cost>limit:
             omitted.append(ident+':budget'); continue
         if ident=='methods': lesson_reserve=0
-        lines.append(text);selected.append(ident);used+=cost
+        admitted.append(candidate);used+=cost
+    delivered_segments={}
+    for _, _, ident, text in sorted(admitted):
+        lines.append(text);selected.append(ident)
         if ident == 'inventory':
             source_versions[inventory['path']] = inventory['sha256']
             source_versions.single_reads[inventory['path']] = inventory['revision']
@@ -1460,12 +1623,12 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     remaining_active = sum(t['id'] not in selected for t in resume_tasks)
     if remaining_active:
         text = f'{remaining_active} aktif iş daha; hedef işi seçmek için iş defterini aç.'
-        if used+len(text)+(1 if lines else 0)<=budget:
+        if used+len(text)+(1 if lines else 0)<=budget-header_reserve:
             lines.append(text); selected.append('other-active-tasks')
             delivered_segments['other-active-tasks']=text
             used+=len(text)+(1 if len(lines)>1 else 0)
         else: omitted.append('other-active-tasks:budget')
-    if 'suppressed-history' in selected or any(row['memory_id'] in selected for row in current_facts):
+    if (header_reserve and 'knowledge' in selected) or 'suppressed-history' in selected or any(row['memory_id'] in selected for row in current_facts):
         header = h.context_scope_header(scope, ['project:'+w['id'] for w in workflows])
         if used + len(header) + 1 <= budget:
             lines.insert(0, header)
@@ -1497,7 +1660,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             records = [r for r in knowledge_data['records'] if r['statement'] in delivered
                        and 'Kaynak: bilgi/'+r['id']+'.md' in delivered]
             paths = {'bilgi/'+r['id']+'.md' for r in records}
-            paths.update(s['path'] for r in records for s in r['sources'])
+            paths.update(p for r in records for p in _source_paths(r))
             paths.update(e['path'] for r in records for e in r.get('examples', []))
             knowledge_data = dict(knowledge_data, records=records, text=delivered,
                                   source_versions={p:v for p,v in knowledge_data['source_versions'].items() if p in paths},
@@ -1507,6 +1670,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if 'procedure-reading' in selected:
         source_versions.update(procedure_data['source_versions'])
     result['procedure_reading'] = dict(paths=procedure_data['paths'] if 'procedure-reading' in selected else [], delivered='procedure-reading' in selected, advisory=True, diagnostics=procedure_data.get('diagnostics',[]))
+    if knowledge_data:
+        knowledge_data = {k:v for k,v in knowledge_data.items() if k not in ('original_text', 'delivery_costs', 'card_indices')}
     result['knowledge']=knowledge_data if 'knowledge' in selected else None
     if catalog_evaluation is not None or (knowledge_data and knowledge_data.get('jev')) or procedure_data.get('jev'):
         result['jev'] = {'catalog':catalog_evaluation,

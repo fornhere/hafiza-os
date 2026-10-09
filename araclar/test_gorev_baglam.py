@@ -2195,3 +2195,292 @@ class Inventory(unittest.TestCase):
   self.assertNotIn('inventory',p['selected_ids'])
   self.assertNotIn('context-check',p['selected_ids'])
   self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+
+
+class SubtaskClaims(unittest.TestCase):
+ def setUp(self):
+  import bilgi_agi as b
+  self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+  self.v=Path(self.tmp.name).resolve();(self.v/'komuta').mkdir()
+  self.root=self.v/'videolar';self.root.mkdir()
+  self.project=dict(id='proj-a',aliases=['videolar'],roots=[str(self.root)])
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[self.project]}))
+  self.quote='Atlas mercek videosunu freestyle çek, çekim kartları kullan. Bu karar bu videoya özgüdür.'
+  (self.v/'source.md').write_text(self.quote)
+  self.record=dict(id='episode',title='Atlas mercek videosunda freestyle çekim',kind='decision',
+   statement=self.quote,scope='project:proj-a',domains=['video'],status='reviewed',
+   sources=[dict(path='source.md',sha256=b.digest(self.v/'source.md'),evidence=self.quote)],
+   reviewed_by='test',review_note='Yalnız bu video için karar.')
+  b.register(self.v,self.record,True)
+
+ def test_root_other_video_and_scripted_correction_omit_decision(self):
+  for query,cwd in [('Video çekim kartları hazırla',self.root),
+                    ('Video çekim kartları hazırla',self.root/'delta-sponsor'),
+                    ('Freestyle değil scripted video metni istiyorum',self.root)]:
+   with self.subTest(query=query):
+    p=build_task_package(self.v,query,cwd=cwd,budget=4000)
+    self.assertNotIn(self.quote,p['text'])
+    self.assertIsNone(p['knowledge'])
+    self.assertIn('episode:other_subtask_decision',p['omitted_reasons'])
+    self.assertNotIn('context-check',p['selected_ids'])
+    self.assertNotIn('bilgi/episode.md',p['source_versions'])
+
+ def test_named_video_or_matching_directory_preserves_full_claim(self):
+  for query,cwd in [('Atlas videosunun çekim kartlarını hazırla',self.root),
+                    ('Video çekim kartları hazırla',self.root/'atlas-mercek/cekim')]:
+   with self.subTest(query=query):
+    p=build_task_package(self.v,query,cwd=cwd,budget=4000)
+    self.assertIn(self.quote,p['text'])
+    self.assertNotIn('genel tercih değildir',p['text'])
+
+ def test_user_preference_without_bound_source_is_unchanged(self):
+  from gorev_baglam import _subtask_claim
+  row=dict(self.record,kind='preference',title=None,scope='user')
+  self.assertFalse(_subtask_claim(row,self.project,'Scripted metin hazırla',self.root/'delta-sponsor'))
+
+ def test_source_path_is_bound_but_session_alone_is_not_subtask_evidence(self):
+  from gorev_baglam import _subtask_claim
+  for source in [str(self.root/'bolum-1/not.md'),'projeler/proj-a/bolum-1/not.md']:
+   row=dict(kind='semantic',source_path=source,statement='Kartlarla çekim seçildi.')
+   self.assertTrue(_subtask_claim(row,self.project,'Çekim hazırla',self.root/'bolum-2'))
+   self.assertFalse(_subtask_claim(row,self.project,'Çekim hazırla',self.root/'bolum-1'))
+  row=dict(kind='decision',title='Atlas taslağı',sources=[dict(path='gelen-kutusu/oturumlar/abc.md')])
+  self.assertFalse(_subtask_claim(row,self.project,'Yeni taslak hazırla',self.root))
+  self.assertFalse(_subtask_claim(row,self.project,'Atlas taslağını getir',self.root))
+
+ def test_synthesis_relations_and_examples_cannot_leak_old_decision(self):
+  from gorev_baglam import _guard_knowledge
+  text='Uyarı\n\nKonu: video\n'+self.quote+'\nKaynak: bilgi/episode.md\nİlişki: freestyle uygula\nÖrnek: eski.md\n\nDiğer kart'
+  data=dict(text=text,records=[self.record],source_versions={})
+  guarded=_guard_knowledge(data,self.project,'Anlatım tercihlerimi özetle',self.root)
+  self.assertNotIn(self.quote,guarded['text'])
+  self.assertNotIn('İlişki:',guarded['text'])
+  self.assertNotIn('Örnek:',guarded['text'])
+  self.assertEqual(guarded['text'],'')
+  self.assertEqual(guarded['records'],[])
+  self.assertIn('episode',guarded['omitted_record_ids'])
+  self.assertEqual(data['records'][0],self.record)
+
+ def test_general_catalog_preferences_have_no_subtask_binding(self):
+  from gorev_baglam import _subtask_claim
+  row=dict(kind='semantic',scope='project:proj-a',source_path='projeler/proj-a/DURUM.md',
+           statement='Birinci ağızdan samimi anlatım tercih edilir.')
+  self.assertFalse(_subtask_claim(row,self.project,'Scripted video metni hazırla',self.root))
+
+ def test_legacy_video_summary_cannot_be_generalized_by_category(self):
+  from gorev_baglam import _subtask_claim
+  row=dict(kind='semantic',category='preference',scope='project:proj-a',
+   source_path='arsiv/rollout_summaries/2026-09-17T05-31-05-ABCD-atlas_video_demo.md',
+   statement='Kartlarla doğaçlama anlatım tercih edilir.')
+  self.assertTrue(_subtask_claim(row,self.project,'Scripted video metni hazırla',self.root))
+  self.assertFalse(_subtask_claim(row,self.project,'Atlas videosunu hazırla',self.root))
+  self.assertFalse(_subtask_claim(row,self.project,'Çekim hazırla',self.root/'atlas-mercek'))
+
+ def test_legacy_user_preference_with_bound_source_is_subtask_specific(self):
+  from gorev_baglam import _subtask_claim
+  row=dict(kind='semantic',category='preference',scope='user',
+   source_path='arsiv/rollout_summaries/2026-09-17T05-31-05-ABCD-atlas_video_demo.md')
+  self.assertTrue(_subtask_claim(row,self.project,'Yeni video metni',self.root))
+
+ def test_catalog_delivery_omits_legacy_video_claim_and_preserves_same_video(self):
+  folder=self.v/'arsiv/rollout_summaries';folder.mkdir(parents=True)
+  source=folder/'2026-09-17T05-31-05-ABCD-atlas_video_demo.md'
+  statement='Öğretici videoda kısa çekim kartlarıyla doğaçlama anlatım tercih edilir.'
+  source.write_text(statement)
+  row=dict(memory_id='legacy-video',kind='semantic',category='preference',scope='project:proj-a',
+   sensitivity='normal',status='active',source_path=source.relative_to(self.v).as_posix(),
+   source_anchor='test',statement=statement,subject_key='video.cekim',
+   confidence='explicit-user',valid_from='2026-01-01',valid_to=None)
+  with patch('gorev_baglam.h.load_catalog',return_value=[row]), \
+       patch('gorev_baglam.h.context_record_errors',return_value=[]):
+   other=build_task_package(self.v,'Öğretici video çekim kartlarını hazırla',cwd=self.root,budget=6000)
+   same=build_task_package(self.v,'Atlas öğretici video çekim kartlarını hazırla',cwd=self.root,budget=6000)
+  self.assertNotIn(statement,other['text'])
+  self.assertNotIn('legacy-video',other['selected_ids'])
+  self.assertIn('legacy-video:other_subtask_decision',other['omitted_reasons'])
+  self.assertNotIn('context-check',other['selected_ids'])
+  self.assertIn('Güncel kayıt: '+statement,same['text'])
+
+ def test_omission_respects_budget_and_does_not_expose_raw_text(self):
+  for budget in (400,600,900,1500,2000):
+   with self.subTest(budget=budget):
+    after=build_task_package(self.v,'Video çekim kartlarını hazırla',cwd=self.root,budget=budget)
+    self.assertNotIn(self.quote,after['text'])
+    self.assertIn('episode:other_subtask_decision',after['omitted_reasons'])
+    self.assertLessEqual(len(after['text']),budget)
+    if after['knowledge']:
+     self.assertNotIn('original_text',after['knowledge'])
+     self.assertNotIn('delivery_costs',after['knowledge'])
+
+ def test_short_video_name_with_apostrophe_suffix_preserves_claim(self):
+  from gorev_baglam import _subtask_claim
+  row=dict(self.record,title='Lux videosunda freestyle çekim')
+  self.assertFalse(_subtask_claim(row,self.project,"Lux'un çekim kartlarını hazırla",self.root))
+  self.assertTrue(_subtask_claim(row,self.project,'Yeni videoda çekim kartlarını hazırla',self.root))
+
+ def test_multiline_statement_removes_whole_card_and_preserves_neighbor(self):
+  from gorev_baglam import _guard_knowledge
+  row=dict(self.record,statement='İlk karar paragrafı.\n\nİkinci karar paragrafı.')
+  neighbor=dict(self.record,id='general',kind='preference',title=None,scope='user',statement='Genel dil tercihi.')
+  for prefix in ('Bilgi [decision]: ', 'Konu: çekim\n', 'Uyarlama önerisi [video]: '):
+   with self.subTest(prefix=prefix):
+    card=prefix+row['statement']+'\nKaynak: bilgi/episode.md\nİlişki: eski açıklama\nÖrnek: eski.md'
+    other='Bilgi [preference]: Genel dil tercihi.\nKaynak: bilgi/general.md'
+    data=dict(text=card+'\n\n'+other,records=[row,neighbor],source_versions={'bilgi/episode.md':'old','bilgi/general.md':'new'})
+    result=_guard_knowledge(data,self.project,'Yeni video çekimi',self.root/'delta')
+    self.assertEqual(result['text'],other)
+    self.assertEqual(result['records'],[neighbor])
+    self.assertEqual(result['source_versions'],{'bilgi/general.md':'new'})
+
+ def test_optional_null_fields_preserve_base_delivery(self):
+  for optional in (dict(title=None),dict(title=None,sources=None),dict(title=None,sources=[{'path':None}])):
+   with self.subTest(optional=optional):
+    row=dict(self.record,**optional)
+    data=dict(text='Bilgi [decision]: '+self.quote+'\nKaynak: bilgi/episode.md',records=[row],source_versions={})
+    with patch('konu_sentezi.retrieve',return_value=data):
+     package=build_task_package(self.v,'Video çekim kartlarını hazırla',cwd=self.root,budget=4000)
+    self.assertIn(self.quote,package['text'])
+
+ def test_configured_single_video_root_preserves_own_decision(self):
+  root=self.root/'atlas-mercek';root.mkdir()
+  project=dict(self.project,roots=[str(root)])
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[project]}))
+  package=build_task_package(self.v,'Video çekim kartlarını hazırla',cwd=root,budget=4000)
+  self.assertIn(self.quote,package['text'])
+  self.assertNotIn('episode:other_subtask_decision',package['omitted_reasons'])
+
+ def test_transfer_metadata_cannot_deliver_excluded_decision(self):
+  from gorev_baglam import _guard_knowledge
+  data=dict(text='Uyarlama önerisi [video]: '+self.quote+'\nKaynak: bilgi/episode.md',records=[],
+            transfers=[dict(source_record=self.record)],source_versions={})
+  guarded=_guard_knowledge(data,self.project,'Başka video',self.root/'delta')
+  self.assertEqual(guarded['text'],'')
+  self.assertEqual(guarded['transfers'],[])
+
+ def test_general_user_preference_delivery_survives_decision_omission(self):
+  import bilgi_agi as b
+  statement='Video çekim kartlarında kısa cümleler tercih edilir.'
+  (self.v/'general.md').write_text(statement)
+  row=dict(self.record,id='general-style',kind='preference',title='Genel anlatım tercihi',scope='user',
+   statement=statement,sources=[dict(path='general.md',sha256=b.digest(self.v/'general.md'),evidence=statement)])
+  b.register(self.v,row,True)
+  package=build_task_package(self.v,'Video çekim kartlarını hazırla',cwd=self.root/'delta',budget=6000)
+  self.assertIn(statement,package['text'])
+  self.assertIn('general-style',[r['id'] for r in package['knowledge']['records']])
+  self.assertNotIn(self.quote,package['text'])
+  self.assertIn('episode:other_subtask_decision',package['omitted_reasons'])
+  self.assertNotIn('context-check',package['selected_ids'])
+
+ def test_synthesis_metadata_discards_only_foreign_record(self):
+  from gorev_baglam import _guard_knowledge
+  other=dict(self.record,id='general',kind='preference',title=None,scope='user',statement='Kısa cümle tercih edilir.',sources=[])
+  data=dict(text='Konu: video\n'+self.quote+'\nKaynak: bilgi/episode.md\n\nKonu: video\n'+other['statement']+'\nKaynak: bilgi/general.md',
+   records=[self.record,other],source_versions={},topics=[dict(record_ids=['episode','general'],
+   summary=[dict(record_id='episode',text=self.quote),dict(record_id='general',text=other['statement'])])])
+  result=_guard_knowledge(data,self.project,'Başka video',self.root/'delta')
+  self.assertNotIn(self.quote,json.dumps(result,ensure_ascii=False))
+  self.assertEqual(result['topics'][0]['record_ids'],['general'])
+  self.assertEqual(result['topics'][0]['summary'],[dict(record_id='general',text=other['statement'])])
+
+ def test_remaining_relation_cannot_repeat_excluded_decision(self):
+  from gorev_baglam import _guard_knowledge
+  general=dict(self.record,id='general',kind='preference',title=None,scope='user',sources=[],
+               statement='Genel tercih.',relations=[dict(target='episode',reason=self.quote)])
+  card='Bilgi [preference]: Genel tercih.\nKaynak: bilgi/general.md'
+  data=dict(text='Bilgi [decision]: '+self.quote+'\nKaynak: bilgi/episode.md\n\n'+card+'\nİlişki: episode — '+self.quote,
+            records=[self.record,general],source_versions={})
+  result=_guard_knowledge(data,self.project,'Başka video',self.root/'delta')
+  self.assertEqual(result['text'],card)
+  self.assertEqual(result['records'][0]['relations'],[])
+
+class SubtaskBaseComparison(unittest.TestCase):
+ setUp=SubtaskClaims.setUp
+ @classmethod
+ def setUpClass(cls):
+  import subprocess, types
+  # Taban karşılaştırması git geçmişi ister; yayın kopyası ve sığ CI klonunda yoktur.
+  try:
+   source=subprocess.check_output(['git','show','cb05983:araclar/gorev_baglam.py'],cwd=Path(__file__).resolve().parent.parent,stderr=subprocess.DEVNULL)
+  except (OSError, subprocess.CalledProcessError):
+   raise unittest.SkipTest('taban commit cb05983 bu kopyada yok')
+  cls.base=types.ModuleType('gorev_baglam_base')
+  exec(compile(source,'gorev_baglam_base.py','exec'),cls.base.__dict__)
+
+ def test_scope_header_survives_when_only_triggering_catalog_card_is_omitted(self):
+  import jev_client
+  folder=self.v/'arsiv/rollout_summaries';folder.mkdir(parents=True)
+  source=folder/'2026-09-17T05-31-05-ABCD-atlas_video_demo.md'
+  statement='Video anlatımında kısa çekim kartları tercih edilir.'
+  source.write_text(statement)
+  row=dict(memory_id='legacy-video',kind='semantic',category='preference',scope='project:proj-a',
+   sensitivity='normal',status='active',source_path=source.relative_to(self.v).as_posix(),
+   source_anchor='test',statement=statement,subject_key='video.anlatim',confidence='explicit-user',
+   valid_from='2026-01-01',valid_to=None,source_hash=h.statement_hash(statement),
+   observed_at='2026-01-01',mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
+  general=dict(self.record,id='general',kind='preference',title=None,scope='user',sources=[],
+   statement='Video anlatımında konuşma dili kullan.')
+  data=dict(text='Bilgi [preference]: '+general['statement']+'\nKaynak: bilgi/general.md',
+   records=[general],source_versions={})
+  checked=0
+  with jev_client.disabled(), patch.object(h,'load_catalog',return_value=[row]), patch('konu_sentezi.retrieve',return_value=data):
+   for budget in (1000,1500,2000):
+    with self.subTest(budget=budget):
+     before=self.base.build_task_package(self.v,'Video anlatımını hazırla',cwd=self.root,budget=budget)
+     after=build_task_package(self.v,'Video anlatımını hazırla',cwd=self.root,budget=budget)
+     if 'scope-header' not in before['selected_ids']: continue
+     checked+=1
+     self.assertNotIn('legacy-video',after['selected_ids'])
+     self.assertIn(general['statement'],after['text'])
+     self.assertEqual(after['delivered_segments']['scope-header'],before['delivered_segments']['scope-header'])
+     self.assertLessEqual(len(after['text']),budget)
+  self.assertGreater(checked,0)
+
+ def test_wrong_optional_metadata_matches_base_package(self):
+  import jev_client
+  statement='Video anlatımında kısa cümle tercih edilir.'
+  (self.v/'general.md').write_text(statement)
+  row=dict(memory_id='general',kind='semantic',category='preference',scope='project:proj-a',
+   sensitivity='normal',status='active',source_path='general.md',source_anchor='test',
+   statement=statement,subject_key='video.anlatim',confidence='explicit-user',valid_from='2026-01-01',valid_to=None,
+   source_hash=h.statement_hash(statement),observed_at='2026-01-01',mem0_id=None,
+   supersedes=None,reviewed_by='test',schema_version=1)
+  for optional in (dict(title=123),dict(sources=[None]),dict(sources=[{'path':123}]),dict(sources=123)):
+   with self.subTest(optional=optional), jev_client.disabled():
+    case=dict(row,**optional)
+    self.assertEqual(h.context_record_errors(self.v,case),[])
+    with patch.object(h,'load_catalog',return_value=[case]), patch('konu_sentezi.retrieve',return_value=None):
+     before=self.base.build_task_package(self.v,'Video anlatımını hazırla',cwd=self.root,budget=2000)
+     after=build_task_package(self.v,'Video anlatımını hazırla',cwd=self.root,budget=2000)
+    self.assertIn('general',before['selected_ids'])
+    self.assertEqual(after['text'],before['text'])
+    self.assertEqual(after['selected_ids'],before['selected_ids'])
+
+ def test_note_omission_preserves_base_catalog_preferences_at_all_budgets(self):
+  import jev_client
+  rows=[]
+  for ident,statement in [('style','Video anlatımı samimi olsun.'),('tempo','Video kurgu temposu hızlı olsun.'),('goal','Video izleyicisiyle samimi bağ kurulsun.')]:
+   (self.v/(ident+'.md')).write_text(statement)
+   rows.append(dict(memory_id=ident,kind='semantic',category='preference',scope='project:proj-a',
+    sensitivity='normal',status='active',source_path=ident+'.md',source_anchor='test',statement=statement,
+    subject_key='video.'+ident,confidence='explicit-user',valid_from='2026-01-01',valid_to=None,
+    source_hash=h.statement_hash(statement),observed_at='2026-01-01',mem0_id=None,
+    supersedes=None,reviewed_by='test',schema_version=1))
+  general=dict(self.record,id='general',kind='preference',title=None,scope='user',sources=[],statement='Video anlatımında konuşma dili kullan. '*12)
+  cards=['Bilgi [decision]: '+self.quote+'\nKaynak: bilgi/episode.md',
+         'Bilgi [preference]: '+general['statement']+'\nKaynak: bilgi/general.md']
+  data=dict(text='\n\n'.join(cards),records=[self.record,general],source_versions={})
+  delivered=0
+  with jev_client.disabled(), patch.object(h,'load_catalog',return_value=rows), patch('konu_sentezi.retrieve',return_value=data):
+   for budget in range(400,1801,50):
+    with self.subTest(budget=budget):
+     before=self.base.build_task_package(self.v,'Video anlatımı kurgu temposu',cwd=self.root,budget=budget)
+     after=build_task_package(self.v,'Video anlatımı kurgu temposu',cwd=self.root,budget=budget)
+     expected=set(before['selected_ids']) & {'style','tempo','goal'}
+     delivered+=len(expected)
+     self.assertTrue(expected <= set(after['selected_ids']))
+     if expected and 'scope-header' in before['selected_ids']:
+      self.assertIn('scope-header',after['selected_ids'])
+      self.assertEqual(after['delivered_segments']['scope-header'],before['delivered_segments']['scope-header'])
+     self.assertLessEqual(len(after['text']),budget)
+     self.assertNotIn(self.quote,after['text'])
+  self.assertGreater(delivered,0)
