@@ -1771,3 +1771,259 @@ class VisualIntentTests(unittest.TestCase):
    p=build_task_package(self.v,'proj-a kapak üret',budget=1000)
   self.assertIn('ref',p['selected_ids'])
   self.assertNotIn('knowledge',p['selected_ids'])
+
+class Inventory(unittest.TestCase):
+ def setUp(self):
+  self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+  self.v=Path(self.tmp.name).resolve();(self.v/'komuta').mkdir()
+  self.note=self.v/'envanter.md'
+  project=dict(id='proj-a',aliases=['atolye'],roots=[str(self.v/'atolye')],
+               inventory=dict(path='envanter.md',marker='is-envanteri-v1'))
+  (self.v/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[project]}))
+  self.write([self.row('Eski çalışma','yayinlandi','2026-01-01'),
+              self.row('Yeni çalışma','kurguda','2026-03-01'),
+              self.row('Çekim','cekildi','2026-02-01'),
+              self.row('Taslak','planlandi','2026-04-01'),
+              self.row('İptal','vazgecildi','2026-05-01')])
+
+ def row(self,title,state,date):
+  return dict(video_id=title,baslik=title,durum=state,tarih=date,konu='Konu',
+              guven='yuksek',kanit='fixture')
+
+ def write(self,rows):
+  self.note.write_text('İnsan tablosu\n<!-- is-envanteri-v1\n'+
+                       '\n'.join(json.dumps(r,ensure_ascii=False) for r in rows)+'\n-->')
+
+ def package(self,query='atolye ne yapsam',budget=2000):
+  return build_task_package(self.v,query,budget=budget)
+
+ def test_selection_card_states_order_and_version(self):
+  p=self.package();text=p['delivered_segments']['inventory']
+  self.assertIn('yeni aday değildir',text)
+  self.assertLess(text.index('Yeni çalışma'),text.index('Çekim'))
+  self.assertLess(text.index('Çekim'),text.index('Eski çalışma'))
+  self.assertIn('Planlananlar: Taslak',text);self.assertNotIn('İptal',text)
+  self.assertEqual(p['source_versions']['envanter.md'],digest(self.note))
+  self.assertEqual(p['selected_ids'][0],'inventory')
+
+ def test_neutral_and_inflected_intent(self):
+  from gorev_baglam import inventory_intent
+  for q in ('ne çeksem','ne çeksek','ne yapayım','ne videosu',
+            'yeni video fikri','yeni projelerin fikirleri','konuları öner',
+            'konu önerileri','adayları değerlendir','sıradaki videomuzu seç'):
+   with self.subTest(query=q):
+    self.assertTrue(inventory_intent(q))
+    self.assertIn('inventory',self.package('atolye '+q)['selected_ids'])
+  for q in ('videonun kapağını düzelt','çekilmiş videoyu kurgula','atolye devam',
+            'nasıl video çekerim','yeni dosyayı oku','videoda ne değişti'):
+   with self.subTest(query=q): self.assertFalse(inventory_intent(q))
+
+ def test_no_intent_no_content_read(self):
+  original=Path.read_bytes;reads=[]
+  def read(path):
+   if path==self.note: reads.append(path)
+   return original(path)
+  with patch.object(Path,'read_bytes',read): p=self.package('atolye videoyu düzenle')
+  self.assertEqual(reads,[]);self.assertNotIn('inventory',p['selected_ids'])
+  self.assertNotIn('envanter.md',p['source_versions'])
+  self.assertFalse(any(r.startswith('inventory:') for r in p['omitted_reasons']))
+
+ def test_intent_one_content_read(self):
+  original=Path.read_bytes;reads=[]
+  def read(path):
+   if path==self.note: reads.append(path)
+   return original(path)
+  with patch.object(Path,'read_bytes',read): p=self.package()
+  self.assertIn('inventory',p['selected_ids']);self.assertEqual(len(reads),1)
+
+ def test_missing_and_broken_blocks_are_silent(self):
+  cases=(None,'İnsan tablosu','<!-- is-envanteri-v1\n{bad}\n-->',
+         '<!-- is-envanteri-v1\n[]\n-->',
+         '<!-- is-envanteri-v1\n{"durum":"unknown","baslik":"Başlık"}\n-->',
+         '<!-- is-envanteri-v1\n{"durum":"cekildi","baslik":5}\n-->',
+         '<!-- is-envanteri-v1\n{}\n',b'\xff')
+  for content in cases:
+   with self.subTest(content=content):
+    if content is None: self.note.unlink(missing_ok=True)
+    elif isinstance(content,bytes): self.note.write_bytes(content)
+    else: self.note.write_text(content)
+    p=self.package()
+    self.assertNotIn('inventory',p['selected_ids'])
+    self.assertNotIn('context-check',p['selected_ids'])
+    self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+    self.assertNotIn('envanter.md',p['source_versions'])
+
+ def test_budget_and_latest_first_with_remainder(self):
+  self.write([self.row('Çalışma '+str(i),'cekildi',f'2026-01-{i:02}') for i in range(1,31)])
+  for budget in (0,80,150,240,400,2000):
+   with self.subTest(budget=budget):
+    p=self.package(budget=budget);self.assertLessEqual(len(p['text']),budget)
+    if budget>=400:
+     card=p['delivered_segments']['inventory']
+     self.assertIn('Çalışma 30',card);self.assertRegex(card,r'\+\d+')
+    else:
+     self.assertNotIn('inventory',p['selected_ids'])
+     self.assertNotIn('envanter.md',p['source_versions'])
+
+ def test_topic_fallback_and_only_planned(self):
+  row=self.row('','cekildi','2026-01-01');row['konu']='Konu başlığı'
+  self.write([row]);self.assertIn('Konu başlığı',self.package()['text'])
+  self.write([self.row('Taslak','planlandi','2026-01-01')])
+  self.assertEqual(self.package()['delivered_segments']['inventory'],'Planlananlar: Taslak')
+  self.write([self.row('İptal','vazgecildi',None)]);p=self.package()
+  self.assertNotIn('inventory',p['selected_ids']);self.assertIn('inventory:empty',p['omitted_reasons'])
+
+ def test_external_path_and_invalid_spec(self):
+  cfg=self.v/'komuta/gorev-baglam.json';data=json.loads(cfg.read_text())
+  for spec in ({'path':'../outside.md','marker':'is-envanteri-v1'},
+               {'path':str(self.note),'marker':'is-envanteri-v1'},
+               {'path':'envanter.md','marker':'bad.*'},[],{}):
+   with self.subTest(spec=spec):
+    data['projects'][0]['inventory']=spec;cfg.write_text(json.dumps(data))
+    p=self.package();self.assertNotIn('inventory',p['selected_ids'])
+    self.assertNotIn('context-check',p['selected_ids'])
+    self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+
+ def test_unknown_date_and_long_topic_fit(self):
+  row=self.row(None,'cekildi',None);row['konu']='Uzun konu '*50
+  self.write([row]);p=self.package(budget=500)
+  self.assertIn('inventory',p['selected_ids']);self.assertLessEqual(len(p['text']),500)
+  self.assertIn('…',p['delivered_segments']['inventory'])
+
+ def test_duplicate_block_and_changed_read_are_silent(self):
+  self.note.write_text(self.note.read_text()*2)
+  p=self.package();self.assertNotIn('context-check',p['selected_ids'])
+  self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+  self.write([self.row('Çalışma','cekildi',None)])
+  original=Path.read_bytes
+  def read(path):
+   raw=original(path)
+   if path==self.note: path.write_bytes(raw+b'\n')
+   return raw
+  with patch.object(Path,'read_bytes',read): p=self.package()
+  self.assertNotIn('inventory',p['selected_ids']);self.assertNotIn('context-check',p['selected_ids'])
+  self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+
+ def test_gate_cannot_suppress_selection_inventory(self):
+  (self.v/'komuta/jev.json').write_text(json.dumps(dict(
+      mode='on',retrieval_mode='rerank',rerank_gate_scope='all')))
+  with patch('jev_retrieval.rerank_gate',return_value=(False,dict(degraded=False))):
+   p=self.package()
+   self.assertIn('inventory',p['selected_ids'])
+   p=self.package('atolye videoyu düzenle')
+   self.assertNotIn('inventory',p['selected_ids'])
+   self.assertEqual(p['text'],'')
+
+ def test_confidence_tie_and_final_revision_validation(self):
+  low=self.row('Düşük güven','cekildi',None);low['guven']='dusuk'
+  high=self.row('Yüksek güven','cekildi',None)
+  self.write([low,high]);p=self.package()
+  self.assertLess(p['text'].index('Yüksek güven'),p['text'].index('Düşük güven'))
+  from gorev_baglam import inventory_card
+  def card(data,budget):
+   text=inventory_card(data,budget)
+   self.note.write_text(self.note.read_text()+'\n')
+   return text
+  with patch('gorev_baglam.inventory_card',side_effect=card): p=self.package()
+  self.assertNotIn('inventory',p['selected_ids'])
+  self.assertEqual(p['source_versions'],{})
+  self.assertIn('source_changed_during_package',p['omitted_reasons'])
+
+
+ def test_surrogate_rows_are_isolated_inside_reader(self):
+  for field in ('baslik','konu'):
+   for surrogate in ('\ud800','\udfff'):
+    with self.subTest(field=field,surrogate=repr(surrogate)):
+     bad=self.row('Bozuk','cekildi',None);bad[field]=surrogate
+     self.note.write_text('<!-- is-envanteri-v1\n'+json.dumps(bad)+'\n-->')
+     p=self.package()
+     self.assertNotIn('inventory',p['selected_ids'])
+     self.assertNotIn('context-check',p['selected_ids'])
+     self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+     self.assertNotIn('inventory:budget',p['omitted_reasons'])
+     good=self.row('Sağlam çalışma','cekildi',None)
+     self.note.write_text('<!-- is-envanteri-v1\n'+json.dumps(bad)+'\n'+json.dumps(good)+'\n-->')
+     p=self.package()
+     self.assertIn('Sağlam çalışma',p['delivered_segments']['inventory'])
+     self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+     p['text'].encode('utf-8')
+
+ def test_blank_title_fallback_and_bad_row_diagnostics(self):
+  row=self.row('  \t','cekildi',None);row['konu']='  Geçerli   konu  '
+  self.write([row]);p=self.package()
+  self.assertIn('Geçerli konu',p['delivered_segments']['inventory'])
+  self.assertFalse(any(r.startswith('inventory:') for r in p['omitted_reasons']))
+  row['konu']=' \t '
+  self.write([row]);p=self.package()
+  self.assertNotIn('inventory',p['selected_ids'])
+  self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+  self.assertNotIn('inventory:budget',p['omitted_reasons'])
+  self.write([row,self.row('Sağlam taslak','planlandi',None)])
+  p=self.package()
+  self.assertEqual(p['delivered_segments']['inventory'],'Planlananlar: Sağlam taslak')
+  self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+
+ def test_malformed_json_and_wrong_type_do_not_hide_valid_rows(self):
+  good=self.row('Sağlam taslak','planlandi',None)
+  for bad in ('{bad}', '[]', json.dumps(dict(baslik=4,durum='cekildi'))):
+   with self.subTest(bad=bad):
+    self.note.write_text('<!-- is-envanteri-v1\n'+bad+'\n'+json.dumps(good)+'\n-->')
+    p=self.package()
+    self.assertIn('Sağlam taslak',p['delivered_segments']['inventory'])
+    self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
+    self.assertNotIn('context-check',p['selected_ids'])
+
+ def test_all_gate_preserves_empty_return_for_unusable_inventory(self):
+  (self.v/'komuta/jev.json').write_text(json.dumps(dict(
+      mode='on',retrieval_mode='rerank',rerank_gate_scope='all')))
+  for content in (None,'broken','<!-- is-envanteri-v1\n{bad}\n-->',
+                  '<!-- is-envanteri-v1\n\n-->',
+                  '<!-- is-envanteri-v1\n'+json.dumps(self.row('İptal','vazgecildi',None))+'\n-->'):
+   with self.subTest(content=content):
+    if content is None: self.note.unlink(missing_ok=True)
+    else: self.note.write_text(content)
+    with patch('jev_retrieval.rerank_gate',return_value=(False,dict(degraded=False))):
+     p=self.package()
+    self.assertEqual(p['text'],'');self.assertEqual(p['selected_ids'],[])
+    self.assertIsNone(p['project_id']);self.assertEqual(p['omitted_reasons'],[])
+  self.write([self.row('Sağlam çalışma','cekildi',None)])
+  original=Path.read_bytes;reads=[]
+  def read(path):
+   if path==self.note: reads.append(path)
+   return original(path)
+  with patch('jev_retrieval.rerank_gate',return_value=(False,dict(degraded=False))), patch.object(Path,'read_bytes',read):
+   p=self.package()
+   self.assertIn('inventory',p['selected_ids']);self.assertEqual(reads,[self.note])
+   p=self.package(budget=80)
+   self.assertEqual(p['text'],'');self.assertEqual(p['selected_ids'],[])
+
+ def test_card_reserves_thirty_percent_and_short_planned_line(self):
+  self.write([self.row('Ayırt edici çalışma '+str(i)+' uzun açıklama '*20,'yayinlandi',f'2026-01-{i:02}')
+              for i in range(1,31)]+[self.row('Kısa taslak '+str(i),'planlandi',None) for i in range(8)])
+  for budget in (500,1000,2000,5000):
+   with self.subTest(budget=budget):
+    p=self.package(budget=budget);card=p['delivered_segments']['inventory']
+    self.assertLessEqual(len(card),budget*3//10)
+    self.assertIn('Ayırt edici çalışma 30',card)
+    self.assertRegex(card,r'\+\d+')
+    if budget>=1000:
+     self.assertIn('\nPlanlananlar:',card)
+     self.assertLessEqual(len(card.split('\n')[1]),100)
+
+
+ def test_distinct_titles_survive_duplicate_latest_rows(self):
+  self.write([self.row('Tekrarlanan çalışma','cekildi','2026-02-01') for _ in range(25)]+
+             [self.row('Ayırt edici çalışma','yayinlandi','2026-01-01')])
+  card=self.package()['delivered_segments']['inventory']
+  self.assertEqual(card.count('Tekrarlanan çalışma'),1)
+  self.assertIn('Ayırt edici çalışma',card);self.assertIn('+24',card)
+
+
+ def test_surrogate_source_path_is_rejected_inside_reader(self):
+  cfg=self.v/'komuta/gorev-baglam.json';data=json.loads(cfg.read_text())
+  data['projects'][0]['inventory']['path']='bozuk\ud800.md'
+  cfg.write_text(json.dumps(data))
+  p=self.package()
+  self.assertNotIn('inventory',p['selected_ids'])
+  self.assertNotIn('context-check',p['selected_ids'])
+  self.assertIn('inventory:invalid_or_missing',p['omitted_reasons'])
