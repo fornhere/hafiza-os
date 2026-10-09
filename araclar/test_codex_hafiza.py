@@ -11,6 +11,22 @@ import codex_hafiza as h
 
 
 class Hooks(unittest.TestCase):
+    def test_project_opening_excludes_foreign_and_unscoped_cards(self):
+        def card(ident, project):
+            return dict(id=ident,project_id=project,title=ident,next_step='İncele',
+                        source_path='kaynak.md',last_verified='2026-10-01')
+        cards=[card('card-a','proj-a'),card('card-b','proj-b'),card('legacy',None),card('unknown',None)]
+        with (patch('is_ve_ders.brief',return_value=cards),
+              patch('gorev_baglam.config',return_value={'projects':[
+                  dict(id='proj-a',task_ids=['legacy'])]})):
+            text=h.opening_brief(Path('/tmp/x'),project_id='proj-a')
+        self.assertIn('card-a',text)
+        self.assertIn('legacy',text)
+        self.assertNotIn('card-b',text)
+        self.assertNotIn('unknown',text)
+        with patch.object(Path,'read_text',side_effect=AssertionError('Serbest özet okunmamalı')):
+            self.assertEqual(h.latest_session_section(Path('/tmp/x'),project_id='proj-a'),'')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -109,7 +125,7 @@ class Hooks(unittest.TestCase):
             self.event('UserPromptSubmit', turn='t1', prompt='First genuine task')
             self.event('UserPromptSubmit', turn='t2', prompt='Continue that task')
             self.event('UserPromptSubmit', turn='t2', prompt='Continue that task')
-        self.assertEqual(seen, [None, 'First genuine task', None])
+        self.assertEqual(seen, [None, 'First genuine task'])
 
     def test_worker_environment_skips_all_events_without_state(self):
         for name in ('HAFIZA_ISCI', 'CODEX_WORKER'):
@@ -300,7 +316,7 @@ class Hooks(unittest.TestCase):
             h.record(self.vault, 's', 't', 'Mevcut makbuzun üzerine yazılması reddedilmelidir.')
 
 
-    def test_package_repeat_refresh_and_source_invalidation(self):
+    def test_package_session_delta_and_source_invalidation(self):
         from unittest.mock import patch
         package={'text':'Güncel karar ve kaynak.', 'source_versions':{'karar.md':'v1'}}
         with patch('gorev_baglam.build_task_package',return_value=package):
@@ -311,13 +327,38 @@ class Hooks(unittest.TestCase):
             self.assertIn('HAFIZA GÖRÜNÜRLÜĞÜ',a['hookSpecificOutput']['additionalContext'])
             self.assertIn('kullanım kanıtı değildir',a['hookSpecificOutput']['additionalContext'])
             self.assertEqual({},b)
-            self.assertIn(package['text'],c['hookSpecificOutput']['additionalContext'])
+            self.assertEqual({},c)
             package['source_versions']['karar.md']='v2'
             d=self.event('UserPromptSubmit','t4',prompt='aynı görev')
             self.assertIn(package['text'],d['hookSpecificOutput']['additionalContext'])
+            self.assertIn('Güncellendi:',d['hookSpecificOutput']['additionalContext'])
         state=json.loads(next(self.vault.rglob('.state/*.json')).read_text())
-        self.assertEqual(len(package['text']),state['context_usage']['suppressed_chars'])
+        self.assertEqual(2*len(package['text']),state['context_usage']['suppressed_chars'])
         self.assertIsNone(state['context_usage']['token_count'])
+
+    def test_codex_memoryless_turns_and_harness_keep_genuine_count(self):
+        from unittest.mock import patch
+        with patch('gorev_baglam.build_task_package',return_value={'text':'Bellek'}) as build:
+            self.event('UserPromptSubmit','t1',prompt='tamam')
+            self.assertEqual(self.event('UserPromptSubmit','harness',prompt='[Request interrupted by user]'),{})
+            for i,prompt in enumerate(('tamam','hayır','sil','kısalt','sadece örnek yaz'),2):
+                build.reset_mock()
+                self.assertEqual(self.event('UserPromptSubmit','t'+str(i),prompt=prompt),{})
+                build.assert_not_called()
+            build.reset_mock()
+            self.event('UserPromptSubmit','t7',prompt='dün ne yaptık')
+            build.assert_called_once()
+        state=json.loads(next(self.vault.rglob('.state/*.json')).read_text())
+        self.assertEqual(state['count'],7)
+
+    def test_codex_recall_is_delta_and_uses_selected_scope(self):
+        from unittest.mock import patch
+        with (patch('gorev_baglam.build_task_package',return_value={'text':'Kart','project_id':'proj-a'}),
+              patch.object(h,'shared_reviewed_context',return_value='Episodic candidate (claude, receipt-a): Özet') as recall):
+            first=self.event('UserPromptSubmit','t1',prompt='İncele')
+            self.assertIn('Özet',first['hookSpecificOutput']['additionalContext'])
+            self.assertEqual(self.event('UserPromptSubmit','t2',prompt='Başka yönden incele'),{})
+            self.assertEqual(recall.call_args.kwargs,{'project_id':'proj-a'})
 
     def test_resume_compaction_resets_package_cache(self):
         from unittest.mock import patch

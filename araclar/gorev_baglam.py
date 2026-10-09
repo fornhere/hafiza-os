@@ -443,6 +443,8 @@ def task_intent(text):
 
     This only changes the retrieval query, never captured source evidence.
     """
+    from capture_source import clean_user
+    text = clean_user(text)
     def skill_block(match):
         block = match.group(0)
         name = re.search(r'<name>\s*([^<]+?)\s*</name>', block, re.I)
@@ -578,6 +580,27 @@ def inventory_card(data, budget):
 def inventory_limit(budget):
     return max(0, int(budget) * 3 // 10)
 
+def memoryless_continuation(text, projects=(), cards=()):
+    """Yalnız açık, kendi kendine yeten devamlar; ilk turu çağıran korur."""
+    intent = task_intent(text)
+    words = query_words(intent)
+    references = ('dün', 'geçen', 'önceki', 'hafıza', 'hatırla', 'kayıt', 'proje')
+    if any(inflected(term, word) for term in references for word in words):
+        return False
+    for project in projects:
+        names = [project['id']] + project.get('aliases', [])
+        if any(alias_match(name, words) for name in names if query_words(name)):
+            return False
+    topic = content_words(intent) - _GENERIC - {'sadece', 'yaz'}
+    for card in cards:
+        names = content_words(card.get('title', '')) - _GENERIC
+        if (alias_match(card.get('id', ''), words) or
+                any(word_match(t, w) for t in names for w in topic)):
+            return False
+    short = ' '.join(words)
+    return (short in ('tamam', 'ok', 'evet', 'hayır', 'go', 'devam', 'devam et',
+                      'devam edelim', 'sil', 'kısalt') or
+            bool(re.fullmatch(r'\s*sadece\s+[^\n]{1,160}\s+yaz[.!?\s]*', intent, re.I)))
 
 
 _VISUAL_TERMS = ('kapak','thumbnail','maskot','logo','banner','görsel','render')
@@ -1024,6 +1047,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     visual = visual_intent(query, previous_user)
     resume = view == "resume" or (view == "auto" and continuation_request(query))
     resume_tasks = []; card_facts = []; task_duplicates = {}
+    task_warning_versions = {}
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions=RevisionMap()
     budget=max(0, int(budget)); candidates=[]; current_facts=[]; current_tasks=[]
@@ -1428,7 +1452,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 if value and not (compact and sum(len(v) for _, v in optional_fields) > 200): text += '; '+label+': '+value
             def warnings(card):
                 result = ''
-                for warning, origin in state_warnings(vault, card):
+                notices = state_warnings(vault, card)
+                task_warning_versions[card['id']] = notices
+                for warning, origin in notices:
                     result += '; '+warning+' (kaynak: '+origin['source_path']+')'
                     source_versions[origin['source_path']] = digest(h.source_file(vault, origin['source_path']))
                 return result
@@ -1683,6 +1709,20 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if knowledge_data:
         knowledge_data = {k:v for k,v in knowledge_data.items() if k not in ('original_text', 'delivery_costs', 'card_indices')}
     result['knowledge']=knowledge_data if 'knowledge' in selected else None
+    # Kartın sürümü görünmeyen alanları da kapsar; defterin başka satırı değil.
+    records = list(current_facts) + project_tasks
+    by_id = {row.get('memory_id', row.get('id')): row for row in records}
+    result['delivery_versions'] = {
+        row.get('memory_id', row.get('id')): hashlib.sha256(json.dumps(
+            [row] + [by_id[ident] for ident in task_duplicates.get(row.get('id'), []) if ident in by_id]
+            + [task_warning_versions.get(ident, []) for ident in
+               [row.get('id'), *task_duplicates.get(row.get('id'), [])]],
+            ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        for row in records if row.get('memory_id', row.get('id')) in selected}
+    if 'inventory' in selected:
+        result['delivery_versions']['inventory'] = hashlib.sha256(json.dumps(
+            [project['id'], inventory['path'], inventory['sha256']],
+            ensure_ascii=False).encode()).hexdigest()
     if catalog_evaluation is not None or (knowledge_data and knowledge_data.get('jev')) or procedure_data.get('jev'):
         result['jev'] = {'catalog':catalog_evaluation,
                          'knowledge':knowledge_data.get('jev') if knowledge_data else None,

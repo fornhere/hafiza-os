@@ -292,6 +292,7 @@ class DeliveryUtility(unittest.TestCase):
         import hafiza as h
         self.lessons()
         package=dict(text='Teslim edilen yöntem.',package_id='package',source_versions={},
+                     delivered_segments={'methods':'Teslim edilen yöntem.'},
                      delivered_lessons=[dict(id='a',version=1)],
                      delivered_lesson_segments={'a':'Teslim edilen yöntem.'})
         with patch('gorev_baglam.build_task_package',return_value=package):

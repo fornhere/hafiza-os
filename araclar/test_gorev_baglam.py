@@ -8,6 +8,35 @@ import hafiza as h
 from gorev_baglam import build_task_package, digest, rank_records, validate_inputs
 from codex_hafiza import hook
 
+class TurnIntent(unittest.TestCase):
+ def test_card_delivery_version_tracks_record_not_rendering(self):
+  from is_ve_ders import put
+  with tempfile.TemporaryDirectory() as directory:
+   vault=Path(directory).resolve();(vault/'komuta').mkdir()
+   (vault/'komuta/gorev-baglam.json').write_text(json.dumps({'projects':[
+       dict(id='proj-a',aliases=['atlas'],task_ids=['card-a'])]}))
+   (vault/'source.md').write_text('Kaynaklı iş kanıtı.')
+   row=put(vault,'task',dict(id='card-a',project_id='proj-a',title='Atlas işi',
+       status='active',next_step='Kaynağı incele',source_path='source.md',
+       evidence='Kaynaklı iş kanıtı.',actor='reviewer',last_verified=dt.date.today().isoformat()))
+   first=build_task_package(vault,'atlas',view='standard')['delivery_versions']['card-a']
+   self.assertEqual(first,build_task_package(vault,'atlas',view='resume')['delivery_versions']['card-a'])
+   put(vault,'task',dict(row,expected_version=row['version'],next_step='Sonucu doğrula'))
+   self.assertNotEqual(first,build_task_package(vault,'atlas')['delivery_versions']['card-a'])
+
+ def test_harness_and_memory_references(self):
+  from gorev_baglam import task_intent, memoryless_continuation
+  self.assertEqual(task_intent('[Request interrupted by user]\nsil'),'sil')
+  projects=[dict(id='proj-a',aliases=['alt iş'])]
+  for text in ('tamam','devam','kısalt','sadece örnek yaz'):
+   self.assertTrue(memoryless_continuation(text,projects))
+  for text in ('dün devam','önceki proje','kayıtları sil','hafızayı hatırla',
+               'sadece proj-a yaz','alt iş devam','proje durumunu kısalt','yeni işi araştır'):
+   self.assertFalse(memoryless_continuation(text,projects))
+  self.assertFalse(memoryless_continuation('sadece atlas yaz',cards=[
+      dict(id='task-a',title='Atlas videosu')]))
+
+
 class SubtaskFocus(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)

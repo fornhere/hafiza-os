@@ -106,7 +106,10 @@ class Capsule(unittest.TestCase):
             self.assertIn('Yöntem: method.md',first['hookSpecificOutput']['additionalContext'])
             self.assertEqual(receipt()['delivered_lessons'],[dict(id=lesson['id'],version=lesson['version'])])
             event('two');self.assertEqual(receipt()['delivered_lessons'],[])
-            event('three');self.assertEqual(receipt()['delivered_lessons'],[dict(id=lesson['id'],version=lesson['version'])])
+            event('three');self.assertEqual(receipt()['delivered_lessons'],[])
+            for n in range(4,10):
+                event(str(n));self.assertEqual(receipt()['delivered_lessons'],[])
+            event('ten');self.assertEqual(receipt()['delivered_lessons'],[dict(id=lesson['id'],version=lesson['version'])])
         self.assertFalse((self.v/'gelen-kutusu/lesson-outcomes.jsonl').exists())
 
     def test_claude_receipt_uses_final_text_after_filter_and_truncation(self):
@@ -115,6 +118,7 @@ class Capsule(unittest.TestCase):
         segment='Ders: CSV kontrolü\nKoşul/adım: Üretirken alanları kontrol et.\nYöntem: method.md'
         lesson=dict(id='csv-method',version=3)
         package=dict(text=segment,selected_ids=[],project_id='atlas',package_id='synthetic',
+            delivered_segments={'methods':segment},
             delivered_lessons=[lesson],delivered_lesson_segments={'csv-method':segment})
         with patch('client_hafiza.claude_task_package',return_value=package),patch('codex_hafiza.opening_brief',return_value=''),patch('codex_hafiza.latest_session_section',return_value=''),patch('client_hafiza.recall',return_value=''):
             first=client.context(self.v,'claude','lessons',None,{'prompt':'Atlas CSV üret'},'UserPromptSubmit')
