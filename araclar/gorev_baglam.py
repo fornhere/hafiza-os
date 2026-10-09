@@ -1,6 +1,7 @@
 """Source-validated task context with optional bounded Jev advice; no memory writes."""
 import datetime as dt
 import functools
+import heapq
 import math
 import hashlib
 import json
@@ -316,6 +317,130 @@ def task_intent(text):
                   lambda match: match.group(1), text, flags=re.I)
 
 
+def inventory_intent(query):
+    """Yeni aday seçimi; sıradan üretim/düzenleme istemi envanter istemez."""
+    words = query_words(task_intent(query))
+    def has(*bases):
+        return any(word_match(base, word) or alias_inflected(base, word)
+                   or (base == 'iş' and word in {'işi','işin','işe','işler','işleri'})
+                   for base in bases for word in words)
+    conditional = any(word in {'çeksem','çeksek','çekseydim','yapsam','yapsak',
+                               'yapayım','yapalım','çekeyim','çekelim',
+                               'yapmalı','yapmalıyım','çekmeli','çekmeliyim'} for word in words)
+    idea = has('fikir') or any(inflected('fikr', word) for word in words)
+    what_video = any(left == 'ne' and word_match('video', right)
+                     for left, right in zip(words, words[1:]))
+    return bool(('ne' in words and conditional) or what_video or has('aday') or
+                (has('konu') and (has('öneri') or any(action_form(w, ('öner',)) for w in words))) or
+                (has('yeni') and idea) or
+                (has('sıradaki') and has('video','iş','proje')) or
+                (idea and has('video','proje','iş')))
+
+
+def file_revision(path):
+    stat = path.stat()
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def read_inventory(vault, project, query, omitted):
+    spec = (project or {}).get('inventory')
+    if spec is None or not inventory_intent(query): return None
+    try:
+        if not isinstance(spec, dict): raise ValueError('config')
+        relative, marker = spec.get('path'), spec.get('marker')
+        if (not isinstance(relative, str) or Path(relative).is_absolute() or
+            Path(relative).suffix != '.md' or not isinstance(marker, str) or
+            not re.fullmatch(r'[\w-]+', marker)): raise ValueError('config')
+        relative.encode('utf-8')
+        path = h.source_file(vault, relative)
+        revision = file_revision(path)
+        raw = path.read_bytes()  # Tek içerik okuması; hash aynı baytlara dayanır.
+        if file_revision(path) != revision: raise ValueError('changed')
+        text = raw.decode('utf-8')
+        blocks = re.findall(r'<!--\s*'+re.escape(marker)+r'\s*\n(.*?)-->', text, re.S)
+        if len(blocks) != 1: raise ValueError('block')
+        rows = []; invalid = False
+        states = {'yayinlandi','kurguda','cekildi','planlandi','vazgecildi'}
+        for line in blocks[0].splitlines():
+            if not line.strip(): continue
+            try:
+                row = json.loads(line)
+                if (not isinstance(row, dict) or row.get('durum') not in states or
+                    row.get('tarih') is not None and not isinstance(row['tarih'], str)):
+                    raise ValueError('row')
+                # JSON escapes can decode to lone surrogates in valid UTF-8 files.
+                # Normalize here so delivery and package hashing only see safe text.
+                title = ''
+                for field in ('baslik', 'konu'):
+                    value = row.get(field)
+                    if value is None: continue
+                    if not isinstance(value, str): raise ValueError('row')
+                    value.encode('utf-8')
+                    value = ' '.join(value.split())
+                    if not title: title = value
+                if not title: raise ValueError('row')
+                rows.append(dict(row, baslik=title))
+            except (ValueError, TypeError, RecursionError):
+                invalid = True
+        if invalid: omitted.append('inventory:invalid_or_missing')
+        if not rows:
+            if not invalid: omitted.append('inventory:empty')
+            return None
+        def order(row):
+            confidence = {'yuksek':3,'yüksek':3,'orta':2,'dusuk':1,'düşük':1}
+            return (row.get('tarih') or '', row['durum'] in {'yayinlandi','cekildi'},
+                    confidence.get(str(row.get('guven', '')).casefold(), 0))
+        done = [row for row in rows if row['durum'] in {'yayinlandi','kurguda','cekildi'}]
+        planned = [row for row in rows if row['durum'] == 'planlandi']
+        if not done and not planned:
+            if not invalid: omitted.append('inventory:empty')
+            return None
+        def distinct_latest(rows, limit):
+            distinct = {}
+            for row in rows:
+                key = row['baslik'].casefold()
+                if key not in distinct or order(row) > order(distinct[key]): distinct[key] = row
+            return heapq.nlargest(limit, distinct.values(), key=order)
+        return dict(path=relative, sha256=hashlib.sha256(raw).hexdigest(), revision=revision,
+                    done=distinct_latest(done, 20), done_count=len(done),
+                    planned=distinct_latest(planned, 5), planned_count=len(planned))
+    except (OSError, ValueError, TypeError, RecursionError):
+        omitted.append('inventory:invalid_or_missing')
+        return None
+
+
+def inventory_card(data, budget):
+    prefix = 'Daha önce yapılanlar (yeni aday değildir; devam bölümü olarak ayrıca önerilebilir): '
+    def line(label, rows, total, limit):
+        titles = []; seen = set()
+        for row in rows:
+            title = row['baslik']
+            if title.casefold() in seen: continue
+            seen.add(title.casefold())
+            if not title: continue
+            left = total-len(titles)-1
+            tail = f'; +{left}' if left else ''
+            head = label+'; '.join(titles)+('; ' if titles else '')
+            room = min(100, limit-len(head)-len(tail))
+            if room < min(12,len(title)): break
+            if len(title)>room: title = title[:room-1]+'…'
+            titles.append(title)
+        if not titles: return ''
+        return label+'; '.join(titles)+(f'; +{total-len(titles)}' if total>len(titles) else '')
+    # Keep plans visibly separate and short even when the completed list is long.
+    planned = line('Planlananlar: ', data['planned'], data['planned_count'], min(100, budget//4))
+    text = line(prefix, data['done'], data['done_count'], budget-len(planned)-bool(planned))
+    if data['done_count'] and not text: return ''
+    if not text:
+        planned = line('Planlananlar: ', data['planned'], data['planned_count'], min(100, budget))
+    return text+('\n' if text and planned else '')+planned
+
+
+def inventory_limit(budget):
+    return max(0, int(budget) * 3 // 10)
+
+
+
 _VISUAL_TERMS = ('kapak','thumbnail','maskot','logo','banner','görsel','render')
 
 # Full-word forms keep verb roots from matching nouns (yaz != yazıları).
@@ -628,6 +753,9 @@ def continuation_request(query):
 class RevisionMap(dict):
     """A merged read set must never hide two observed versions of one path."""
     conflict = False
+    def __init__(self):
+        super().__init__()
+        self.single_reads = {}
     def __setitem__(self, key, value):
         if key in self and self[key] != value: self.conflict = True
         super().__setitem__(key, value)
@@ -657,6 +785,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     rerank_state = None
     skip_memory = False
     gate = None
+    inventory_probe = None
     try: rerank_mode = jev_client.purpose_mode(jev_client.load_config(vault), 'retrieval') == 'rerank'
     except (OSError, ValueError): rerank_mode = False
     with evaluation_context(vault):
@@ -693,6 +822,11 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                     if not gate.get('degraded') and not needed:
                         skip_memory = True
                         if jev_client.load_config(vault)['rerank_gate_scope'] == 'all':
+                            diagnostics = []
+                            inventory = read_inventory(vault, project, query, diagnostics)
+                            inventory_probe = (inventory, diagnostics)
+                        if (jev_client.load_config(vault)['rerank_gate_scope'] == 'all' and
+                            not (inventory_probe[0] and inventory_card(inventory_probe[0], inventory_limit(budget)))):
                             result = dict(text='', selected_ids=[], source_versions={}, assets=[], knowledge=None, delivered_lessons=[], delivered_lesson_segments={}, lessons=dict(applied=[],diagnostics=[]),
                                           omitted_reasons=[], project_id=None, suppressed_count=0, jev={'gate': gate},
                                           history={'mode': history, 'included': False},
@@ -714,13 +848,15 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
                     diagnostics=(gate or {}).get('diagnostics', []) + (['private_input'] if private_fallback else []))
             else:
                 result = _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state, skip_memory,
-                                             previous_user=(previous_user or '')[:800] or None, **({'session_project_id': session_project_id} if session_project_id is not None else {}))
+                                             previous_user=(previous_user or '')[:800] or None, inventory_probe=inventory_probe, **({'session_project_id': session_project_id} if session_project_id is not None else {}))
                 if gate: result.setdefault('jev', {})['gate'] = gate
     changed = before != revisions() or getattr(result.get('source_versions'), 'conflict', False)
     for name, version in result.get('source_versions', {}).items():
         try:
-            if digest(vault/name) != version: changed = True
-        except OSError: changed = True
+            revision = getattr(result['source_versions'], 'single_reads', {}).get(name)
+            if (file_revision(h.source_file(vault,name)) != revision if revision is not None
+                else digest(vault/name) != version): changed = True
+        except (OSError, ValueError): changed = True
     if changed:
         # Never relabel an old claim with a freshly computed source hash.
         text = 'Bağlam hazırlanırken kaynak değişti; güncel kaynağı yeniden doğrula.'
@@ -742,7 +878,7 @@ def build_task_package(vault, query, cwd=None, budget=5000, history="auto", view
     return result
 
 
-def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state=None, skip_memory=False, previous_user=None, session_project_id=None):
+def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank_state=None, skip_memory=False, previous_user=None, session_project_id=None, inventory_probe=None):
     if history not in ("auto", "always", "never"): raise ValueError("invalid history mode")
     if view not in ("auto", "standard", "resume"): raise ValueError("invalid view")
     query = task_intent(query)
@@ -767,6 +903,11 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if cfg.get('invalid'): omitted.append('config_invalid')
     projects, match_reason = select_projects(cfg.get('projects', []), query, cwd, previous_user, session_project_id, vault=vault, diagnostics=omitted)
     project = projects[0] if len(projects)==1 else None
+    if inventory_probe is None:
+        inventory = read_inventory(vault, project, query, omitted)
+    else:
+        inventory, inventory_diagnostics = inventory_probe
+        omitted.extend(inventory_diagnostics)
     if project and match_reason == 'area_topic':
         # An area's production topic does not request its cover identity kit.
         project = dict(project, assets=[], working_sources=[])
@@ -883,6 +1024,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         candidates.append((priority, len(candidates), ident, text))
         return True
     task_ids=set()
+    if inventory: candidates.append((-3,len(candidates),'inventory',''))
     qwords=query_words(query)
     deictic=any(w in qwords for w in ('dünkü','o','şu','önceki'))
     task_reference=any(inflected(base,word) for base in ('kapak','video','proje','çıktı') for word in qwords) or any(w in qwords for w in ('iş','işi','işe','işin'))
@@ -1214,19 +1356,26 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     # to a selection that previously stayed empty.
     errors=[reason for reason in omitted
             if not reason.endswith((':budget', ':card_limit', ':subtask_focus', ':visual_intent_required'))
-            and not reason.startswith('implicit_project:')]
+            and not reason.startswith(('implicit_project:', 'inventory:'))]
     if errors:
         detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'
         if len(detail)>min(600,budget): detail='Bağlam kontrolü: Geçersiz veya değişmiş kaynaklar dışlandı; omitted_reasons alanını incele.'
         candidates.append((0,-1,'context-check',detail))
     delivered_segments={}
     for _, _, ident, text in sorted(candidates):
+        if ident == 'inventory':
+            text = inventory_card(inventory, min(inventory_limit(budget), max(0,budget-lesson_reserve-used-bool(lines))))
+            if not text:
+                omitted.append('inventory:budget'); continue
         cost=len(text)+(1 if lines else 0)
         limit=budget if ident=='methods' else budget-lesson_reserve
         if used+cost>limit:
             omitted.append(ident+':budget'); continue
         if ident=='methods': lesson_reserve=0
         lines.append(text);selected.append(ident);used+=cost
+        if ident == 'inventory':
+            source_versions[inventory['path']] = inventory['sha256']
+            source_versions.single_reads[inventory['path']] = inventory['revision']
         selected.extend(task_duplicates.get(ident, []))
         # One channel may deliver several roots or working sources.
         if ident in delivered_segments:
