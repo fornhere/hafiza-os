@@ -184,60 +184,95 @@ def _temporary_component(name):
     return name.startswith(('.', '_')) or bool(
         set(query_words(name)) & {'tmp', 'temp', 'temporary', 'cache', 'scratch', 'scratchpad'})
 
-@functools.lru_cache(maxsize=128)
-def _subfolders(root, minute):
-    # Tek seviye tarama; aynı kök aynı dakika diliminde yeniden okunmaz.
-    try:
-        with os.scandir(root) as entries:
-            return tuple((e.name, frozenset(content_words(e.name) - _GENERIC))
-                         for e in entries if not _temporary_component(e.name)
-                         and e.is_dir(follow_symlinks=False))
-    except OSError: return ()
-
-def subtask_focus(tasks, project, cwd):
-    """Alt iş kanıtı başlıkta güçlü, sonraki adımda daha zayıftır."""
-    if not cwd: return tasks, {}, []
+def _subtask_parts(project, cwd):
+    """En derin proje köküne göre alt işi kartlardan bağımsız belirle."""
+    if not cwd: return None
     location = Path(cwd).resolve()
     roots = [Path(r).resolve() for r in project.get('roots', [])
              if location.is_relative_to(Path(r).resolve())]
-    if not roots: return tasks, {}, []
-    root = max(roots, key=lambda r: len(r.parts))
-    parts = location.relative_to(root).parts
-    if not parts or any(_temporary_component(part) for part in parts): return tasks, {}, []
-    main = content_words(parts[0]) - _GENERIC
+    if not roots: return None
+    parts = location.relative_to(max(roots, key=lambda r: len(r.parts))).parts
+    if parts and _temporary_component(parts[0]): return ()
+    return parts
+
+
+def _project_state(task, project):
+    names = {frozenset(content_words(name)) for name in
+             [project['id'], *project.get('aliases', [])] if name}
+    return (task['id'] == 'project-state:' + project['id'] or
+            ((task.get('transcript_source') or task.get('assertion_kind') == 'assistant_report') and
+             (frozenset(content_words(task['title'])) in names or
+              frozenset(content_words(task['id'])) in names)))
+
+
+def _root_state_tasks(tasks, project):
+    """Keep the freshest state and source-backed general project work.
+
+    Project-named work is general only when its title/next action has no
+    distinctive sibling-folder reference. Evidence alone is not work scope.
+    An unconfirmed session report must not replace the verified general work.
+    Missing/unreadable roots cannot safely establish that work is general.
+    """
+    sibling_words = set()
+    readable = False
+    for root in project.get('roots', []):
+        try:
+            children = list(Path(root).iterdir())
+            for child in children:
+                if child.is_dir() and not _temporary_component(child.name):
+                    sibling_words.update(w for w in content_words(child.name) -
+                                         project_terms(project) - _GENERIC if not w.isdecimal())
+            readable = True
+        except OSError:
+            return _freshest_root_tasks(tasks, project, [])
+    general = []
+    if readable:
+        for task in tasks:
+            if _project_state(task, project) or task.get('confirmation_required'): continue
+            words = content_words(task['title'] + ' ' + task.get('next_step', ''))
+            names = [project['id'], *project.get('aliases', [])]
+            named = any(content_words(name) - _GENERIC and alias_match(name, words)
+                        for name in names)
+            if named and not any(word_match(t, w) for t in sibling_words for w in words):
+                general.append(task)
+    return _freshest_root_tasks(tasks, project, general)
+
+
+def _freshest_root_tasks(tasks, project, general):
+    states = [t for t in tasks if _project_state(t, project)]
+    focus = {t['id']: (0, 0, 0) for t in states + general}
+    def order(task):
+        return (bool(task.get('confirmation_required')), _task_focus_order(task, focus), task['id'])
+    # Preserve the general record separately: a session's next step may omit
+    # still-current project information held by that verified work record.
+    kept = [min(group, key=order) for group in (general, states) if group]
+    return sorted(kept, key=order)
+
+
+def subtask_focus(tasks, project, cwd):
+    """Alt iş biliniyorsa yalnız kaynakta ona atıf taşıyan kartları tut."""
+    parts = _subtask_parts(project, cwd)
+    if not parts: return tasks, {}, []
+    # Sürüm numarası kardeş işin adı yerine geçmez.
+    main = {w for w in content_words(parts[0]) - _GENERIC if not w.isdecimal()}
     detail = content_words(parts[1]) - _GENERIC if len(parts)>1 else set()
-    if not main: return tasks, {}, []
-    siblings = [(name, words) for name, words in _subfolders(str(root), int(time.monotonic()//60))
-                if name != parts[0] and words]
-    focus = {}; foreign = set(); project_states = set()
-    project_names = {frozenset(content_words(name)) for name in
-                     [project['id'], *project.get('aliases', [])] if name}
+    focus = {}
     for task in tasks:
-        title = content_words(task['title']); words = title | content_words(task['next_step'])
-        # Session-wide state can describe the current subtask without naming it.
-        # Legacy session cards may use only the project name instead of this ID.
-        if (task['id'] == 'project-state:' + project['id'] or
-                ((task.get('transcript_source') or task.get('assertion_kind') == 'assistant_report') and
-                 (frozenset(title) in project_names or
-                  frozenset(content_words(task['id'])) in project_names))):
-            project_states.add(task['id'])
+        title = content_words(task['title'])
+        next_words = content_words(task.get('next_step', ''))
+        evidence_words = content_words(task.get('evidence', ''))
+        words = next_words | evidence_words
+        # Proje durumunun genel başlığı alt iş bağı sayılmaz.
+        if not _project_state(task, project): words |= title
         hits = sum(any(word_match(t,w) for w in words) for t in main)
-        title_hits = sum(any(word_match(t,w) for w in title) for t in main)
         if hits:
-            focus[task['id']] = (-title_hits, -hits,
+            title_hits = sum(any(word_match(t,w) for w in title) for t in main)
+            next_hits = sum(any(word_match(t,w) for w in next_words) for t in main)
+            evidence_hits = sum(any(word_match(t,w) for w in evidence_words) for t in main)
+            focus[task['id']] = (-title_hits, -next_hits, -evidence_hits, -hits,
                                 -sum(any(word_match(t,w) for w in words) for t in detail))
-        else:
-            evidence_words = content_words(task.get('evidence', ''))
-            if any(word_match(t,w) for t in main for w in evidence_words): continue
-            other_words = words | evidence_words
-            if any(all(any(word_match(term, word) for word in other_words) for term in terms)
-                   for _, terms in siblings): foreign.add(task['id'])
-    if focus:
-        for ident in project_states - foreign: focus.setdefault(ident, (0,0,0))
-    kept = [t for t in tasks if t['id'] not in foreign and
-            (not focus or t['id'] in focus or t['id'] in project_states)]
-    kept_ids = {t['id'] for t in kept}
-    omitted = [t['id']+':subtask_focus' for t in tasks if t['id'] not in kept_ids]
+    kept = [t for t in tasks if t['id'] in focus]
+    omitted = [t['id']+':subtask_focus' for t in tasks if t['id'] not in focus]
     return kept, focus, omitted
 
 
@@ -962,7 +997,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             return belongs
         diagnostics = []
         cards = (project['_implicit_tasks'] if match_reason == 'cwd-implicit' else
-                 brief(vault,limit=10000,include_stale=True,diagnostics=diagnostics))
+                 brief(vault,limit=10000,include_stale=True,diagnostics=diagnostics,
+                       include_pending=bool(_subtask_parts(project, cwd))))
         for task in cards:
             if belongs_to_project(task):
                 # Confirmation cards may legitimately omit the next action.
@@ -980,7 +1016,10 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if task_focus and task_rows:
         order = {t['id']: index for index,t in enumerate(expansion_tasks)}
         expansion_tasks = [min(task_rows, key=lambda t: (_task_focus_order(t, task_focus), order.get(t['id'], len(order))))]
-    if not expansion_tasks: expansion_tasks = task_rows[:1]
+    if not expansion_tasks:
+        if project and _subtask_parts(project, cwd) == ():
+            expansion_tasks = _root_state_tasks(task_rows, project)[:1]
+        else: expansion_tasks = task_rows[:1]
     expansion_parts = []; linked_paths = []
     if project and len(content_words(query)) <= 24:
         expansion_parts = [project.get('id', ''), project.get('summary', ''), area_expansion(query)]
@@ -1024,7 +1063,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         from yeniden_kullanim import propose
         reuse_data=propose(vault,project['id'],query,max_chars=min(1800,budget))
     def add(ident, text):
-        priority = {'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
+        priority = {'subtask-empty':-2, 'unresolved_reference':0, 'ambiguous_project':0, 'project':1,
                     'unresolved':2, 'methods':3, 'input-check':3, 'workflow':4,
                     'working-source':8, 'working-root':8, 'summary-policy':6, 'capsule-status':6, 'suppressed-history':6, 'decision-history':4, 'knowledge':0.5, 'reuse':5, 'procedure-reading':5}.get(ident, 10)
         for asset in (project or {}).get('assets', []):
@@ -1190,6 +1229,30 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         topical_tasks = rank_records([dict(t, statement=t['title']+' '+t['next_step'], memory_id=t['id'])
                                       for t in project_tasks], query, ignore=project_terms(project), context=previous_user)
         topical_ids = [t['id'] for t in topical_tasks]
+        parts = _subtask_parts(project, cwd)
+        if parts and not project_tasks:
+            add('subtask-empty', 'Bu alt iş ('+parts[0]+') için kayıtlı iş kartı yok.')
+        # Kök dizinde konu yoksa kardeş işlerden rastgele kart seçme.
+        topic_words = project_terms(project) | _GENERIC
+        direct_query = ' '.join(w for w in query_words(query)
+                                if not any(word_match(w,t) for t in topic_words))
+        direct = rank_records(task_rows, direct_query)
+        if parts == () and not direct and match_reason != 'cwd-implicit':
+            fallback = _root_state_tasks(project_tasks, project)
+            if previous_user:
+                prior_words = {w for w in content_words(previous_user)
+                               if not any(word_match(w,t) for t in topic_words)}
+                prior = rank_records([t for t in task_rows if not _project_state(t, project) and
+                                      any(word_match(w,word) for w in prior_words
+                                          for word in content_words(t['title']))],
+                                     ' '.join(prior_words))
+                if prior:
+                    prior_focus = {t['id']:(0,0,0) for t in prior}
+                    fallback.append(min(prior, key=lambda t: _task_focus_order(t, prior_focus)))
+            allowed = {t['id'] for t in fallback}
+            omitted.extend(t['id']+':root_fallback' for t in project_tasks if t['id'] not in allowed)
+            project_tasks = fallback
+            topical_ids = []
         # A topic that matches every card distinguishes none; keep recency.
         if len(topical_ids) == len(project_tasks): topical_ids = []
         # Within subtask focus, dated freshness precedes lexical/query strength.
@@ -1367,7 +1430,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     # Failed optional inference reports diagnostics without adding a context card
     # to a selection that previously stayed empty.
     errors=[reason for reason in omitted
-            if not reason.endswith((':budget', ':card_limit', ':subtask_focus', ':visual_intent_required'))
+            if not reason.endswith((':budget', ':card_limit', ':subtask_focus', ':root_fallback', ':visual_intent_required'))
             and not reason.startswith(('implicit_project:', 'inventory:'))]
     if errors:
         detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'
