@@ -76,6 +76,39 @@ def clean_user(text):
     return '' if text.startswith(excluded) else text
 
 
+def claude_snapshot(path, lines, completed_prefix=False, end_line=None):
+    # Native okuyucu kimlik, gizlilik, sır ve alt ajan sınırlarını korur;
+    # client_sessions wrapper'ları policy/kilit yazdığı için burada kullanılmaz.
+    from client_transcripts import parse
+    native = parse('claude', path.stem, path.absolute(), end_line, reject_workers=True)
+    if completed_prefix and end_line is None and not native['terminal']:
+        terminals = [e['line'] for e in native['entries'] if e['role'] == 'assistant'
+            and json.loads(lines[e['line'] - 1])['message'].get('stop_reason') in ('end_turn', 'stop_sequence')]
+        if not terminals: raise ValueError('tamamlanmış kaynak turu gerekli')
+        native = parse('claude', path.stem, path.absolute(), terminals[-1], reject_workers=True)
+    boundary = native['end_line'] if completed_prefix or end_line is not None else None
+    prefix_hash = hashlib.sha256('\n'.join(lines[:boundary]).encode()).hexdigest() if boundary else None
+    # İki ayrı okumada aynı prefix görülmeli. Native hash newline baytlarını
+    # içerir; capture_source prefix_hash sözleşmesi ise normalize satırlardır.
+    from client_transcripts import sha
+    raw = path.read_bytes()
+    native_lines = split_jsonl(raw.decode('utf-8'), keepends=True)
+    if sha(''.join(native_lines[:native['end_line']]).encode()) != native['prefix_sha256']:
+        raise ValueError('transcript okuma sırasında değişti')
+    if split_jsonl(raw.decode('utf-8'))[:native['end_line']] != lines[:native['end_line']]:
+        raise ValueError('transcript okuma sırasında değişti')
+    users = {e['message_id']: clean_user(e['quote']) for e in native['entries'] if e['role'] == 'user'}
+    results = [e['quote'] for e in native['entries'] if e['role'] == 'assistant']
+    stat = path.stat()
+    return dict(schema_version=2, client='claude', session_id=native['session'], path=native['path'],
+        prefix_end_line=boundary, prefix_hash=prefix_hash, prefix_sha256=native['prefix_sha256'],
+        suffix_parse_status='ok', user_count=native['count'], parse_status='ok',
+        source_hash=digest(['claude', native['session'], native['prefix_sha256']]),
+        user_digest=digest(users), result_digest=digest(results),
+        activity_state='completed' if native['terminal'] else 'active', last_completed_turn_id=None,
+        observed_size=stat.st_size, observed_mtime_ns=stat.st_mtime_ns, last_modified=stat.st_mtime)
+
+
 def snapshot(path, completed_prefix=False, end_line=None):
     path = Path(path)
     before = path.stat()
@@ -85,14 +118,19 @@ def snapshot(path, completed_prefix=False, end_line=None):
         raise ValueError('transcript okuma sırasında değişti')
     lines = split_jsonl(raw.decode('utf-8'))
     # Establish rollout ownership before examining copied history or its partial writes.
+    codex_owner = False; claude_record = False
     for line in lines:
         try: first = json.loads(line)
         except json.JSONDecodeError: continue
         if first.get('type') == 'session_meta':
+            codex_owner = True
             meta = first.get('payload', {})
             if not main_owner(meta):
                 raise ValueError('desteklenmeyen veya alt ajan transcript sahibi')
             break
+        if first.get('type') in ('user', 'assistant'): claude_record = True
+    if not codex_owner and claude_record:
+        return claude_snapshot(path, lines, completed_prefix, end_line)
     boundary = None; suffix_parse_status = "ok"
     if completed_prefix or end_line is not None:
         terminal_lines = []; malformed_lines = []
@@ -174,6 +212,10 @@ def validate_source(vault, session, source):
             text = '\n'.join(x.get('text', '') for x in payload.get('content', []) if isinstance(x, dict))
             if privacy_command(text) or privacy_ambiguous(text): raise ValueError('kaynak kullanıcı kaydetmeme isteği veya belirsiz gizlilik kapsamı içeriyor; inceleme gerekli')
     actual = snapshot(source['path'], end_line=source.get('prefix_end_line'))
+    if actual.get('client') == 'claude':
+        from client_sessions import INBOX, enforce_policy
+        from client_transcripts import safe_path
+        enforce_policy(safe_path(vault / INBOX / '.state'), 'claude', session)
     if source.get('prefix_end_line') is not None and actual['prefix_hash'] != source.get('prefix_hash'):
         raise ValueError('incelenen tamamlanmış prefix değişti')
     if actual['session_id'] != session or actual['source_hash'] != source.get('source_hash'):
@@ -291,9 +333,20 @@ def validate_candidate_evidence(vault, session, source, evidence_source, evidenc
     if type(line) is not int or not 1 <= line <= len(lines):
         raise ValueError('özgün kullanıcı mesaj satırı gerekli')
     item = json.loads(lines[line - 1]); p = item.get('payload', {})
-    if item.get('type') != 'response_item' or p.get('type') != 'message' or p.get('role') != 'user':
-        raise ValueError('kanıt özgün kullanıcı mesajı olmalı')
-    text = clean_user('\n'.join(x.get('text', '') for x in p.get('content', []) if isinstance(x, dict)))
+    if actual.get('client') == 'claude':
+        from client_transcripts import parse
+        native = parse('claude', session, actual['path'], actual['prefix_end_line'], reject_workers=True)
+        if native['prefix_sha256'] != actual['prefix_sha256']:
+            raise ValueError('incelenen tamamlanmış prefix değişti')
+        users = [e for e in native['entries'] if e['role'] == 'user']
+        entry = next((e for e in users if e['line'] == line), None)
+        if entry is None: raise ValueError('kanıt özgün kullanıcı mesajı olmalı')
+        if users.index(entry) < 5: raise ValueError('ilk beş gerçek mesaj kaydedilmez')
+        text = clean_user(entry['quote'])
+    else:
+        if item.get('type') != 'response_item' or p.get('type') != 'message' or p.get('role') != 'user':
+            raise ValueError('kanıt özgün kullanıcı mesajı olmalı')
+        text = clean_user('\n'.join(x.get('text', '') for x in p.get('content', []) if isinstance(x, dict)))
     if not text or evidence_source.get('message_hash') != digest(text):
         raise ValueError('kullanıcı mesaj hash uyuşmazlığı')
     if evidence_source.get('quote') != evidence or evidence not in text:

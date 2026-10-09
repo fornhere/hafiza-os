@@ -126,7 +126,35 @@ def source_path(client, session, path):
     return path
 
 
-def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_interrupts=False):
+def claude_user_text(text):
+    """Exclude native command delivery bodies before extracting slash arguments.
+
+    These tags belong to Claude's harness, not the shared Codex cleaner. A
+    missing close consumes the tail; nested and case-varied tags stay excluded.
+    command-name/message/args are deliberately outside this family.
+    """
+    token = re.compile(
+        r'<(?P<end>/)?(?P<tag>(?:local-command|bash|command|shell|tool|exec)-'
+        r'(?:stdout|stderr|output|caveat|warnings?|errors?|results?))'
+        r'(?=\s|/?>)(?P<attrs>[^>]*)>', re.I)
+    pieces, stack, cursor = [], [], 0
+    for match in token.finditer(text):
+        tag = match['tag'].lower()
+        if not stack:
+            pieces.append(text[cursor:match.start()])
+        if match['end']:
+            if stack and tag == stack[-1]:
+                stack.pop()
+        elif not match['attrs'].rstrip().endswith('/'):
+            stack.append(tag)
+        cursor = match.end()
+    if not stack:
+        pieces.append(text[cursor:])
+    return clean_user(''.join(pieces))
+
+
+def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_interrupts=False,
+          _receipt_metadata=False):
     # Capture rejects worker sessions; offline readers may filter individual turns.
     path = source_path(client, session, path)
     data = read_bytes(path)
@@ -138,6 +166,8 @@ def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_
         raise SourceError('invalid_source_boundary')
     boundary = end_line or len(lines)
     entries, ids, seen, user_count, prefix_count = [], [], {}, 0, 0
+    # Historical Claude IDs are metadata only; never create legacy evidence.
+    receipt_ids, receipt_interrupt_ids = [], []
     terminal, prefix_terminal, previous_step = False, False, -1
     worker = False
     for number, raw in enumerate(lines, 1):
@@ -177,9 +207,21 @@ def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_
                 continue
             seen[ident] = fingerprint
             text, tools = _text(msg.get('content'), user=kind == 'user')
+            if _receipt_metadata and number <= boundary and kind == 'user' and not row.get('isMeta') and not tools:
+                # Exact pre-T63 (HEAD~1) predicate, plus pre-T45 interrupts.
+                old_user = bool(clean_user(text))
+                old_interrupt = bool(re.fullmatch(
+                    r'\s*\[Request interrupted by user(?: for tool use)?\]\s*', text, re.I))
+                if old_user:
+                    receipt_ids.append(ident)
+                if old_user or old_interrupt:
+                    receipt_interrupt_ids.append(ident)
+            interrupted = legacy_interrupts and bool(re.fullmatch(
+                r'\s*\[Request interrupted by user(?: for tool use)?\]\s*', text, re.I))
+            if kind == 'user' and not interrupted:
+                text = claude_user_text(text)
             # Harness notifications arrive as user rows but are not user requests.
-            genuine = kind == 'user' and not row.get('isMeta') and not tools and (bool(clean_user(text)) or
-                legacy_interrupts and bool(re.fullmatch(r'\s*\[Request interrupted by user(?: for tool use)?\]\s*', text, re.I)))
+            genuine = kind == 'user' and not row.get('isMeta') and not tools and bool(text)
             usable = kind == 'assistant' and not tools and not row.get('isMeta') and not any(row.get(k) or msg.get(k) for k in ('error', 'isApiErrorMessage')) and isinstance(msg.get('model'), str) and msg['model'] not in ('<synthetic>', 'synthetic') and row.get('model') not in ('<synthetic>', 'synthetic')
             terminal = usable and bool(text.strip()) and msg.get('stop_reason') in ('end_turn', 'stop_sequence')
             role = 'user' if genuine else 'assistant' if usable else None
@@ -246,7 +288,12 @@ def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_
     # Scan the whole source first so later privacy requests remain sticky.
     if worker:
         raise SourceError('worker_source')
-    return dict(client=client, session=session, path=str(path), end_line=boundary,
+    result = dict(client=client, session=session, path=str(path), end_line=boundary,
                 prefix_sha256=sha(b''.join(lines[:boundary])), count=prefix_count,
                 message_ids=ids, terminal=prefix_terminal, entries=entries,
                 total_lines=len(lines), latest_user=next((e for e in reversed(entries) if e['role'] == 'user'), None))
+
+    if _receipt_metadata:
+        result['_receipt_counts'] = [dict(count=len(old_ids), message_ids=old_ids)
+                                     for old_ids in (receipt_ids, receipt_interrupt_ids)]
+    return result
