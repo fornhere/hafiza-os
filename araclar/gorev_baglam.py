@@ -388,8 +388,8 @@ def _source_paths(row):
             and isinstance(s.get('path'), str) and s['path']] if isinstance(sources, list) else []
 
 
-def _subtask_claim(row, project, query, cwd):
-    """Alt işe bağlı kanıtı genel tercih gibi teslim etme; ek kaynak okuma yok."""
+def _subtask_claim(row, project, query, cwd, vault=None, source_cache=None):
+    """Alt işe bağlı kaynak kanıtını genel tercih gibi teslim etme."""
     sources = _source_paths(row)
     sources += [row.get('source_path')]
     sources = [s for s in sources if isinstance(s, str) and s]
@@ -411,9 +411,48 @@ def _subtask_claim(row, project, query, cwd):
     title = row.get('title') if isinstance(row.get('title'), str) else ''
     words = query_words(title)
     video = next((i for i,w in enumerate(words) if any(inflected(t, w) for t in ('video', 'yayın'))), None)
-    # Başlığın video adından sonraki biçim sözcükleri iş kimliği değildir.
-    if row.get('kind') == 'decision' and video is not None and video>0:
-        bound.append((' '.join(words[:video]), True))
+    # Başlık yalnız aday kimliktir. Genel yöntem/tercih metni sahiplik
+    # oluşturmaz; doğrudan bağlı yollar yukarıda her tür için korunur.
+    kind = row.get('kind')
+    method = kind in ('preference', 'procedure', 'procedural', 'semantic') or row.get('category') in ('preference', 'procedure', 'profile')
+    candidate = None
+    if not method and video is not None and video>0:
+        candidate = words[:video]
+    elif not method and words and isinstance(row.get('statement'), str):
+        claim = query_words(row['statement'])
+        video = next((i for i,w in enumerate(claim) if any(inflected(t, w) for t in ('video', 'yayın'))), None)
+        if video is not None:
+            start = next((i for i,w in enumerate(claim[:video]) if w == words[0]), None)
+            if start is not None: candidate = claim[start:video]
+    if candidate:
+        def names_subtask(text):
+            if not isinstance(text, str): return False
+            proof = query_words(text)
+            n = len(candidate)
+            # Aynı adlı video/yayın veya somut medya dosyası kaynakta yer almalı.
+            named = any(proof[i:i+n] == candidate and
+                        any(w.startswith(('videosu', 'yayını')) for w in proof[i+n:i+n+4])
+                        for i in range(len(proof)-n))
+            asset = re.search(r'(?<!\w)'+r'[-_ ]'.join(re.escape(w) for w in candidate)+r'[-_][^\s/]*\.(?:mp4|mov|mkv|webm)(?!\w)', text, re.I)
+            return named or bool(asset)
+        for source in row.get('sources', []) if isinstance(row.get('sources'), list) else []:
+            if not isinstance(source, dict) or not isinstance(source.get('path'), str): continue
+            proven = names_subtask(source.get('evidence'))
+            path = source['path']
+            # Oturum makbuzunun kısa alıntısı adı içermeyebilir. Yalnız sabitlenmiş
+            # oturum kaynağını denetle; başlık/statement tek başına yeterli değildir.
+            if not proven and vault is not None and any('oturum' in part for part in Path(path).parts[:-1]):
+                cache = source_cache if source_cache is not None else {}
+                key = (path, source.get('sha256'))
+                if key not in cache:
+                    try:
+                        file = h.source_file(Path(vault), path)
+                        cache[key] = file.read_text() if digest(file) == source.get('sha256') else ''
+                    except (OSError, ValueError, UnicodeError): cache[key] = ''
+                proven = names_subtask(cache[key])
+            if proven:
+                bound.append((' '.join(candidate), True))
+                break
     if not bound: return False
     terms = content_words(query)
     if cwd and project:
@@ -435,12 +474,13 @@ def _subtask_claim(row, project, query, cwd):
     return True
 
 
-def _guard_knowledge(data, project, query, cwd):
+def _guard_knowledge(data, project, query, cwd, vault=None):
     """Yerel, sentez ve danışman bilgi çıktısında aynı teslim koruması."""
     if not data or not data.get('text'): return data
     rows = list(data.get('records') or [])
     rows += [t['source_record'] for t in data.get('transfers', [])]
-    excluded = {r['id'] for r in rows if _subtask_claim(r, project, query, cwd)}
+    source_cache = {}
+    excluded = {r['id'] for r in rows if _subtask_claim(r, project, query, cwd, vault, source_cache)}
     if not excluded: return data
     # Boş satır statement'ın içinde de olabilir; yalnız teslim başlıkları sınırdır.
     cards = re.split(r'\n\n(?=Bilgi \[|Uyarlama önerisi \[|Konu:)', data['text'])
@@ -470,6 +510,8 @@ def _guard_knowledge(data, project, query, cwd):
                 transfers=transfers, topics=topics,
                 source_versions={p:v for p,v in data.get('source_versions', {}).items() if p in paths},
                 guarded_record_ids=sorted(excluded),
+                guarded_reasons={r['id']: ('other_subtask_decision' if r.get('kind') == 'decision'
+                                          else 'other_subtask_knowledge') for r in rows if r['id'] in excluded},
                 omitted_record_ids=sorted(set(data.get('omitted_record_ids', [])) | excluded))
 
 
@@ -1367,9 +1409,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     procedure_data = procedure_future.result()
     if knowledge_future: knowledge_data = knowledge_future.result()
     unguarded_knowledge = knowledge_data
-    knowledge_data = _guard_knowledge(knowledge_data, project, query, cwd)
+    knowledge_data = _guard_knowledge(knowledge_data, project, query, cwd, vault)
     if knowledge_data:
-        omitted.extend(i+':other_subtask_decision' for i in knowledge_data.get('guarded_record_ids', []))
+        omitted.extend(i+':'+knowledge_data['guarded_reasons'][i] for i in knowledge_data.get('guarded_record_ids', []))
     if procedure_data['text']: add('procedure-reading', procedure_data['text'])
     def still_current(row):
         try:
@@ -1380,7 +1422,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     catalog_indices = {row['memory_id']: i for i, row in enumerate(ranked_catalog)}
     unguarded_catalog = ranked_catalog
     foreign_catalog = {row['memory_id'] for row in eligible if _subtask_claim(row, project, query, cwd)}
-    omitted.extend(i+':other_subtask_decision' for i in sorted(foreign_catalog)
+    omitted.extend(i+':other_subtask_catalog' for i in sorted(foreign_catalog)
                    if i in {r['memory_id'] for r in ranked_catalog})
     ranked_catalog = [r for r in ranked_catalog if r['memory_id'] not in foreign_catalog]
     profile_rows = [] if skip_memory else scope_profile(
@@ -1392,8 +1434,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     profile_rows = [row for row in profile_rows if still_current(row) and
                     any(word_match(t, w) for t in profile_topic
                         for w in content_words(search_text(row)))]
-    omitted.extend(row['memory_id']+':other_subtask_decision' for row in profile_rows
-                   if row['memory_id'] in foreign_catalog and row['memory_id']+':other_subtask_decision' not in omitted)
+    omitted.extend(row['memory_id']+':other_subtask_catalog' for row in profile_rows
+                   if row['memory_id'] in foreign_catalog and row['memory_id']+':other_subtask_catalog' not in omitted)
     profile_rows = [row for row in profile_rows if row['memory_id'] not in foreign_catalog]
     ranked_ids = {row['memory_id'] for row in ranked_catalog}
     profile_ids = set()
@@ -1422,7 +1464,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         for row in eligible:
             if row['memory_id'] not in suggested or not still_current(row): continue
             if row['memory_id'] in foreign_catalog:
-                reason = row['memory_id']+':other_subtask_decision'
+                reason = row['memory_id']+':other_subtask_catalog'
                 if reason not in omitted: omitted.append(reason)
                 continue
             add('jev-reading:'+row['memory_id'], 'Jev kaynak adayı (okumadan tercih/onay sayma): '+row['subject_key']+' — '+str(vault/row['source_path']))
@@ -1738,7 +1780,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     # Failed optional inference reports diagnostics without adding a context card
     # to a selection that previously stayed empty.
     errors=[reason for reason in omitted
-            if not reason.endswith((':budget', ':card_limit', ':subtask_focus', ':root_fallback', ':visual_intent_required', ':other_subtask_decision'))
+            if not reason.endswith((':budget', ':card_limit', ':subtask_focus', ':root_fallback', ':visual_intent_required', ':other_subtask_decision', ':other_subtask_knowledge', ':other_subtask_catalog'))
             and not reason.startswith(('implicit_project:', 'inventory:'))]
     if errors:
         detail='Bağlam kontrolü: '+ '; '.join(errors)+'. Eksik veya değişmiş kaynağı onaylı sayma.'

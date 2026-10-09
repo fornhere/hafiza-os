@@ -2395,7 +2395,7 @@ class SubtaskClaims(unittest.TestCase):
    same=build_task_package(self.v,'Atlas öğretici video çekim kartlarını hazırla',cwd=self.root,budget=6000)
   self.assertNotIn(statement,other['text'])
   self.assertNotIn('legacy-video',other['selected_ids'])
-  self.assertIn('legacy-video:other_subtask_decision',other['omitted_reasons'])
+  self.assertIn('legacy-video:other_subtask_catalog',other['omitted_reasons'])
   self.assertNotIn('context-check',other['selected_ids'])
   self.assertIn('Güncel kayıt: '+statement,same['text'])
 
@@ -2412,7 +2412,8 @@ class SubtaskClaims(unittest.TestCase):
 
  def test_short_video_name_with_apostrophe_suffix_preserves_claim(self):
   from gorev_baglam import _subtask_claim
-  row=dict(self.record,title='Lux videosunda freestyle çekim')
+  row=dict(self.record,title='Lux videosunda freestyle çekim',
+           sources=[dict(path='source.md',evidence='Lux videosunu freestyle çek, bu videoya özgüdür.')])
   self.assertFalse(_subtask_claim(row,self.project,"Lux'un çekim kartlarını hazırla",self.root))
   self.assertTrue(_subtask_claim(row,self.project,'Yeni videoda çekim kartlarını hazırla',self.root))
 
@@ -2491,6 +2492,152 @@ class SubtaskClaims(unittest.TestCase):
   self.assertEqual(result['text'],card)
   self.assertEqual(result['records'][0]['relations'],[])
 
+ def test_nondecision_named_notes_and_explicit_reuse(self):
+  from gorev_baglam import _subtask_claim
+  for kind in ('example','research','episode','lesson'):
+   with self.subTest(kind=kind):
+    row=dict(self.record,kind=kind)
+    self.assertTrue(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta'))
+    self.assertFalse(_subtask_claim(row,self.project,'Atlas videosunu örnek al',self.root/'delta'))
+    self.assertFalse(_subtask_claim(row,self.project,'Çekim hazırla',self.root/'atlas-mercek'))
+    row=dict(row,title='Atlas 18 saniyelik görsel prova',statement='Atlas mercek videosu için görsel prova kabul edildi.')
+    self.assertTrue(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta'))
+    self.assertFalse(_subtask_claim(row,self.project,'Atlas provasını getir',self.root))
+
+ def test_general_preference_and_procedure_video_title_is_not_ownership(self):
+  from gorev_baglam import _subtask_claim
+  for kind in ('preference','procedure','procedural'):
+   row=dict(self.record,kind=kind,scope='user')
+   self.assertFalse(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta'))
+
+ def test_nondecision_delivery_reason_metadata_and_general_budget(self):
+  import jev_client
+  general=dict(self.record,id='general',kind='preference',title=None,scope='user',sources=[],
+               statement='Video anlatımında kısa cümle kullan.')
+  checked=0
+  for kind in ('example','research','episode'):
+   foreign=dict(self.record,kind=kind)
+   data=dict(text='Bilgi ['+kind+']: '+self.quote+'\nKaynak: bilgi/episode.md\n\nBilgi [preference]: '+general['statement']+'\nKaynak: bilgi/general.md',
+             records=[foreign,general],source_versions={})
+   for budget in (400,600,900,1500,2000):
+    with self.subTest(kind=kind,budget=budget), jev_client.disabled(), patch('konu_sentezi.retrieve',return_value=data):
+     with patch('gorev_baglam._guard_knowledge',side_effect=lambda data,*args:data):
+      before=build_task_package(self.v,'Video anlatımını hazırla',cwd=self.root/'delta',budget=budget)
+     after=build_task_package(self.v,'Video anlatımını hazırla',cwd=self.root/'delta',budget=budget)
+    self.assertNotIn(self.quote,after['text'])
+    self.assertIn('episode:other_subtask_knowledge',after['omitted_reasons'])
+    self.assertNotIn('context-check',after['selected_ids'])
+    self.assertNotIn('bilgi/episode.md',after['source_versions'])
+    self.assertLessEqual(len(after['text']),budget)
+    if general['statement'] in before['text']:
+     checked+=1;self.assertIn(general['statement'],after['text'])
+   self.assertGreater(checked,0)
+
+ def test_nondecision_transfer_and_synthesis_metadata(self):
+  from gorev_baglam import _guard_knowledge
+  for kind in ('example','research','episode'):
+   row=dict(self.record,kind=kind)
+   for prefix in ('Bilgi ['+kind+']: ', 'Konu: çekim\n', 'Uyarlama önerisi [video]: '):
+    data=dict(text=prefix+self.quote+'\nKaynak: bilgi/episode.md',records=[],
+              transfers=[dict(source_record=row)],source_versions={'bilgi/episode.md':'old'})
+    result=_guard_knowledge(data,self.project,'Yeni video hazırla',self.root/'delta')
+    self.assertEqual(result['text'],'');self.assertEqual(result['transfers'],[])
+    self.assertEqual(result['source_versions'],{})
+    self.assertEqual(result['guarded_reasons'],{'episode':'other_subtask_knowledge'})
+   general=dict(self.record,id='general',kind='procedure',title=None,scope='user',sources=[],
+                statement='Genel yöntem.',relations=[dict(target='episode',reason=self.quote)])
+   data=dict(text='Konu: çekim\n'+self.quote+'\nKaynak: bilgi/episode.md\n\nKonu: çekim\nGenel yöntem.\nKaynak: bilgi/general.md',
+             records=[row,general],source_versions={},topics=[dict(record_ids=['episode','general'],
+             summary=[dict(record_id='episode',text=self.quote),dict(record_id='general',text='Genel yöntem.')])])
+   result=_guard_knowledge(data,self.project,'Yeni video hazırla',self.root/'delta')
+   self.assertNotIn(self.quote,json.dumps(result,ensure_ascii=False))
+   self.assertEqual(result['topics'][0]['record_ids'],['general'])
+   self.assertEqual(result['records'][0]['relations'],[])
+
+ def test_general_method_lesson_is_registered_and_delivered(self):
+  import bilgi_agi as b
+  statement='Her videoda anlatım için kısa cümleler kullan; genel yöntem bütün çekimlerde geçerlidir.'
+  (self.v/'general.md').write_text(statement)
+  row=dict(self.record,id='general-method',kind='lesson',scope='user',title='Kısa video anlatımı',
+   statement=statement,sources=[dict(path='general.md',sha256=b.digest(self.v/'general.md'),evidence=statement)])
+  b.register(self.v,row,True)
+  package=build_task_package(self.v,'Video anlatım çekim kartlarını hazırla',cwd=self.root/'delta',budget=6000)
+  self.assertIn(statement,package['text'])
+  self.assertIn('general-method',[r['id'] for r in package['knowledge']['records']])
+  self.assertNotIn('general-method:other_subtask_knowledge',package['omitted_reasons'])
+
+ def test_named_title_needs_source_evidence_and_null_statement_is_safe(self):
+  from gorev_baglam import _subtask_claim
+  for kind in ('lesson','example','decision','episodic','working'):
+   for statement in ('Atlas mercek videosu için görsel prova kabul edildi.',None):
+    with self.subTest(kind=kind,statement=statement):
+     row=dict(self.record,kind=kind,statement=statement,sources=[dict(path='general.md',evidence='Genel anlatım yöntemleri.')])
+     self.assertFalse(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta'))
+
+ def test_general_lesson_with_title_in_source_evidence_has_no_subtask(self):
+  from gorev_baglam import _subtask_claim
+  row=dict(self.record,kind='lesson',scope='user',title='Kısa video anlatımı',
+   statement='Kısa video anlatımı için her çekimde kısa cümleler kullan.',
+   sources=[dict(path='general.md',evidence='Kısa video anlatımı için her çekimde kısa cümleler kullan.')])
+  self.assertFalse(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta'))
+
+ def test_pinned_session_source_proves_specific_subtask(self):
+  import bilgi_agi as b
+  from gorev_baglam import _subtask_claim
+  folder=self.v/'gelen-kutusu/codex-oturumları';folder.mkdir(parents=True)
+  source=folder/'receipt.md'
+  source.write_text('Atlas-mercek-prova.mp4 gösterildi; kullanıcı görsel provayı beğendi.')
+  row=dict(self.record,kind='example',title='Atlas görsel prova',statement='Atlas videosu için görsel prova kabul edildi.',
+   sources=[dict(path=source.relative_to(self.v).as_posix(),sha256=b.digest(source),evidence='görsel provayı beğendi')])
+  self.assertTrue(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta',self.v))
+  self.assertFalse(_subtask_claim(row,self.project,'Atlas provasını getir',self.root,self.v))
+  self.assertFalse(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta'))
+  source.write_text('Atlas mercek final videosu için kullanıcı görsel provayı beğendi.')
+  row['sources'][0]['sha256']=b.digest(source)
+  self.assertTrue(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta',self.v))
+  source.write_text('Genel görsel prova yöntemleri.')
+  self.assertFalse(_subtask_claim(row,self.project,'Yeni video hazırla',self.root/'delta',self.v))
+
+ def test_general_catalog_method_and_other_kinds_keep_scope_header(self):
+  statement='Her videoda anlatım için kısa cümleler kullan; genel yöntem bütün çekimlerde geçerlidir.'
+  (self.v/'general.md').write_text(statement)
+  for kind,category in (('procedural','procedure'),('semantic','preference'),('episodic','event'),('working','procedure')):
+   with self.subTest(kind=kind):
+    row=dict(memory_id='general',kind=kind,category=category,scope='user',title='Kısa video anlatımı',
+     sensitivity='normal',status='active',source_path='general.md',source_anchor='test',
+     statement=statement,subject_key='video.anlatim',confidence='explicit-user',
+     valid_from='2026-01-01',valid_to=None)
+    row.update(source_hash=h.statement_hash(row['statement']),observed_at='2026-01-01',
+               mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
+    self.assertEqual(h.context_record_errors(self.v,row),[])
+    h._write_jsonl(self.v/h.CATALOG_PATH,[row])
+    package=build_task_package(self.v,'Video anlatım çekim kartlarını hazırla',cwd=self.root/'delta',budget=6000)
+    self.assertIn(statement,package['text'])
+    self.assertIn('general',package['selected_ids'])
+    self.assertIn('scope-header',package['selected_ids'])
+    self.assertIn(package['delivered_segments']['scope-header'],package['text'])
+    self.assertFalse(any(r.startswith('general:other_subtask_') for r in package['omitted_reasons']))
+
+ def test_source_bound_catalog_kinds_still_omit_foreign_subtask(self):
+  folder=self.v/'projeler/proj-a/atlas-mercek';folder.mkdir(parents=True)
+  source=folder/'card.md';source.write_text(self.quote)
+  for kind,category in (('procedural','procedure'),('semantic','preference'),('episodic','event'),('working','procedure')):
+   with self.subTest(kind=kind):
+    row=dict(memory_id='bound',kind=kind,category=category,scope='user',title='Kısa video anlatımı',
+     sensitivity='normal',status='active',source_path=source.relative_to(self.v).as_posix(),source_anchor='test',
+     statement=self.quote,subject_key='video.anlatim',confidence='explicit-user',valid_from='2026-01-01',valid_to=None)
+    row.update(source_hash=h.statement_hash(row['statement']),observed_at='2026-01-01',
+               mem0_id=None,supersedes=None,reviewed_by='test',schema_version=1)
+    self.assertEqual(h.context_record_errors(self.v,row),[])
+    h._write_jsonl(self.v/h.CATALOG_PATH,[row])
+    other=build_task_package(self.v,'Video çekim kartlarını hazırla',cwd=self.root/'delta',budget=6000)
+    same=build_task_package(self.v,'Video çekim kartlarını hazırla',cwd=self.root/'atlas-mercek',budget=6000)
+    self.assertNotIn('bound',other['selected_ids'])
+    self.assertIn('bound:other_subtask_catalog',other['omitted_reasons'])
+    self.assertNotIn('context-check',other['selected_ids'])
+    self.assertIn('bound',same['selected_ids'])
+
+
 class SubtaskBaseComparison(unittest.TestCase):
  setUp=SubtaskClaims.setUp
  @classmethod
@@ -2564,7 +2711,7 @@ class SubtaskBaseComparison(unittest.TestCase):
     source_hash=h.statement_hash(statement),observed_at='2026-01-01',mem0_id=None,
     supersedes=None,reviewed_by='test',schema_version=1))
   general=dict(self.record,id='general',kind='preference',title=None,scope='user',sources=[],statement='Video anlatımında konuşma dili kullan. '*12)
-  cards=['Bilgi [decision]: '+self.quote+'\nKaynak: bilgi/episode.md',
+  cards=['Bilgi ['+self.record['kind']+']: '+self.quote+'\nKaynak: bilgi/episode.md',
          'Bilgi [preference]: '+general['statement']+'\nKaynak: bilgi/general.md']
   data=dict(text='\n\n'.join(cards),records=[self.record,general],source_versions={})
   delivered=0
@@ -2582,6 +2729,12 @@ class SubtaskBaseComparison(unittest.TestCase):
      self.assertLessEqual(len(after['text']),budget)
      self.assertNotIn(self.quote,after['text'])
   self.assertGreater(delivered,0)
+ def test_nondecision_omission_preserves_catalog_and_scope_header(self):
+  for kind in ('example','research','episode'):
+   with self.subTest(kind=kind):
+    self.record=dict(self.record,kind=kind)
+    self.test_note_omission_preserves_base_catalog_preferences_at_all_budgets()
+
 class CompactTaskCardTests(unittest.TestCase):
     setUp=ScopeContextPackageTests.setUp
     task=ProjectStatusTests.task
