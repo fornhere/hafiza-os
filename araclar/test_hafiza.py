@@ -147,6 +147,226 @@ class FakeMem0:
         self.remote.pop(memory_id)
 
 
+class RemoteTombstoneTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.v = Path(temp.name)
+        statement = 'Kullanıcı kısa açıklama tercih eder.'
+        (self.v/'source.md').write_text(statement, encoding='utf-8')
+        queued = hafiza.add_candidate(self.v, statement=statement, kind='semantic', scope='user',
+            subject_key='style', source_path='source.md', source_anchor='test',
+            confidence='explicit-user', sensitivity='normal', proposed_by='test')
+        self.record = hafiza.promote_candidate(self.v, queued['candidate_id'],
+            memory_id='pref-a', reviewed_by='test')['record']
+        self.record['mem0_id'] = 'remote-a'
+
+    def forget_receipt(self, **changes):
+        payload = dict(result='deleted', mem0_id='remote-a', approved_by='reviewer')
+        payload.update(changes)
+        hafiza.write_receipt(self.v, 'forget', payload)
+
+    def cli(self, command, client, *, apply=False):
+        from unittest.mock import patch
+        hafiza._write_jsonl(self.v/hafiza.CATALOG_PATH, [self.record])
+        output = io.StringIO()
+        with patch.object(hafiza, 'load_api_key', return_value='test'), \
+             patch.object(hafiza, 'Mem0HttpClient', return_value=client), \
+             contextlib.redirect_stdout(output):
+            code = hafiza.main(['--vault', str(self.v), command] + (['--apply'] if apply else []))
+        return code, json.loads(output.getvalue())
+
+    def test_passive_existing_binding_transitions_and_audit_reports_drift(self):
+        for status in ('superseded', 'quarantined'):
+            for valid_to in (None, '2000-01-01'):
+                with self.subTest(status=status, valid_to=valid_to):
+                    self.record.update(status=status, valid_to=valid_to)
+                    metadata = dict(hafiza.memory_metadata(self.v, self.record), status='active', valid_to=None)
+                    client = FakeMem0([dict(id='remote-a', memory=self.record['statement'], metadata=metadata)])
+                    self.assertTrue(hafiza.retrievable(metadata))
+                    code, result = self.cli('audit', client)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(result['drifted'], ['pref-a'])
+                    self.assertEqual((result['total'], result['verified'], result['expected_absent']), (0, 0, 0))
+                    code, result = self.cli('sync', client, apply=True)
+                    self.assertEqual(code, 0)
+                    self.assertEqual((result['updated'], result['total'], result['verified']), (1, 0, 0))
+                    self.assertEqual(client.added, [])
+                    self.assertEqual(client.updated[0][3], valid_to)
+                    self.assertEqual(client.remote['remote-a']['metadata']['status'], status)
+                    self.assertFalse(hafiza.retrievable(client.remote['remote-a']['metadata']))
+                    code, result = self.cli('audit', client)
+                    self.assertEqual(code, 0)
+                    self.assertEqual(result['drifted'], [])
+
+    def test_absent_passive_binding_is_never_added_or_counted_active(self):
+        for status in ('superseded', 'quarantined'):
+            for valid_to in (None, '2000-01-01'):
+                for binding in (None, 'remote-a'):
+                    with self.subTest(status=status, valid_to=valid_to, binding=binding):
+                        record = dict(self.record, status=status, valid_to=valid_to, mem0_id=binding)
+                        # An unbound passive record must not recover identity or add.
+                        remote = [] if binding else [dict(id='other', memory=record['statement'],
+                                                         metadata=hafiza.memory_metadata(self.v, record))]
+                        client = FakeMem0(remote)
+                        result = hafiza.sync_existing(self.v, [record], client, apply=True)
+                        self.assertEqual((result['total'], result['verified'], result['expected_absent']), (0, 0, 0))
+                        self.assertEqual(result['missing_remote'], 0)
+                        self.assertEqual(client.added, [])
+                        self.assertEqual(client.updated, [])
+                        self.assertEqual(record['mem0_id'], binding)
+                        result = hafiza.audit(self.v, [record], FakeMem0([]))
+                        self.assertEqual(result['missing_remote'], [])
+                        self.assertEqual(result['drifted'], [])
+
+    def test_sync_reports_passive_update_that_did_not_take_effect(self):
+        class IgnoredUpdate(FakeMem0):
+            def update_memory(self, *args, **kwargs):
+                self.updated.append(args)
+        self.record['status'] = 'quarantined'
+        client = IgnoredUpdate([dict(id='remote-a', memory=self.record['statement'],
+            metadata=dict(hafiza.memory_metadata(self.v, self.record), status='active'))])
+        code, result = self.cli('sync', client, apply=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(result['drifted'], ['pref-a'])
+        self.assertEqual((result['total'], result['verified']), (0, 0))
+
+    def test_forget_evidence_takes_precedence_over_passive_update(self):
+        self.forget_receipt()
+        for status in ('superseded', 'quarantined'):
+            record = dict(self.record, status=status, valid_to='2000-01-01')
+            client = FakeMem0([dict(id='remote-a', memory=record['statement'], metadata={'status': 'active'})])
+            result = hafiza.sync_existing(self.v, [record], client, apply=True)
+            self.assertEqual(client.updated, [])
+            self.assertEqual(client.added, [])
+            self.assertEqual(result['unexpected_remote_ids'], ['remote-a'])
+
+    def test_sync_tombstone_result_uses_final_snapshot(self):
+        class ChangingSnapshot(FakeMem0):
+            def __init__(self, snapshots):
+                super().__init__([])
+                self.snapshots = iter(snapshots)
+                self.reads = 0
+            def list_memories(self):
+                self.reads += 1
+                return next(self.snapshots)
+        self.record['status'] = 'deleted'
+        present = [dict(id='remote-a', memory=self.record['statement'], metadata={'status': 'active'})]
+        for initial, final, expected_code in (([], present, 1), (present, [], 0)):
+            for apply in (False, True):
+                with self.subTest(initial_present=bool(initial), apply=apply):
+                    client = ChangingSnapshot([initial, final])
+                    code, result = self.cli('sync', client, apply=apply)
+                    self.assertEqual(code, expected_code)
+                    self.assertEqual(client.reads, 2)
+                    self.assertEqual(result['expected_absent'], int(not final))
+                    self.assertEqual(result['unexpected_remote_ids'], ['remote-a'] if final else [])
+                    self.assertEqual((result['total'], result['verified']), (0, 0))
+                    self.assertEqual(client.added, [])
+                    self.assertEqual(client.updated, [])
+                    self.assertEqual(client.deleted, [])
+
+    def test_deleted_old_binding_is_expected_absent_and_audit_succeeds(self):
+        self.record['status'] = 'deleted'
+        code, result = self.cli('audit', FakeMem0([]))
+        self.assertEqual(code, 0)
+        self.assertEqual(result['expected_absent'], 1)
+        self.assertEqual(result['missing_remote'], [])
+        self.assertEqual((result['total'], result['verified']), (0, 0))
+        self.assertEqual(hafiza.load_catalog(self.v)[0]['mem0_id'], 'remote-a')
+
+    def test_active_missing_still_fails_audit_and_sync(self):
+        for command in ('audit', 'sync'):
+            with self.subTest(command=command):
+                code, result = self.cli(command, FakeMem0([]))
+                self.assertEqual(code, 1)
+                self.assertEqual(result['expected_absent'], 0)
+                self.assertEqual((result['total'], result['verified']), (1, 0))
+                self.assertTrue(result['missing_remote'])
+
+    def test_sync_never_readds_or_updates_tombstones(self):
+        for reason in ('deleted', 'expired', 'forgotten'):
+            for linked in (True, False):
+                with self.subTest(reason=reason, linked=linked):
+                    record = dict(self.record)
+                    if reason == 'deleted': record['status'] = 'deleted'
+                    if reason == 'expired': record['valid_to'] = '2000-01-01'
+                    if reason == 'forgotten':
+                        if not linked: continue  # Makbuz uzak kimliği bağlar.
+                        self.forget_receipt()
+                    if not linked: record['mem0_id'] = None
+                    before = dict(record)
+                    client = FakeMem0([])
+                    result = hafiza.sync_existing(self.v, [record], client, apply=True)
+                    self.assertEqual((result['total'], result['verified']), (0, 0))
+                    self.assertEqual(result['expected_absent'], 1)
+                    self.assertEqual(result['missing_remote'], 0)
+                    self.assertEqual(client.added, [])
+                    self.assertEqual(client.updated, [])
+                    self.assertEqual(record, before)
+
+    def test_expired_and_confirmed_forget_are_expected_absent_in_audit(self):
+        expired = dict(self.record, valid_to='2000-01-01')
+        result = hafiza.audit(self.v, [expired], FakeMem0([]))
+        self.assertEqual(result['expected_absent'], 1)
+        self.forget_receipt()
+        result = hafiza.audit(self.v, [self.record], FakeMem0([]))
+        self.assertEqual(result['expected_absent'], 1)
+        self.assertEqual(result['missing_remote'], [])
+
+    def test_validity_boundary_and_other_inactive_statuses(self):
+        import datetime as dt
+        today = dt.datetime.now(dt.timezone.utc).date()
+        expired = dict(self.record, valid_to=today.isoformat())
+        result = hafiza.audit(self.v, [expired], FakeMem0([]))
+        self.assertEqual((result['total'], result['expected_absent']), (0, 1))
+        future = dict(self.record, valid_to=(today+dt.timedelta(days=1)).isoformat())
+        result = hafiza.audit(self.v, [future], FakeMem0([]))
+        self.assertEqual((result['total'], result['expected_absent']), (1, 0))
+        for status in ('quarantined', 'superseded'):
+            result = hafiza.audit(self.v, [dict(self.record, status=status)], FakeMem0([]))
+            self.assertEqual((result['total'], result['expected_absent']), (0, 0))
+            self.assertEqual(result['missing_remote'], [])
+
+    def test_active_unlinked_record_is_missing(self):
+        result = hafiza.audit(self.v, [dict(self.record, mem0_id=None)], FakeMem0([]))
+        self.assertEqual(result['missing_remote'], ['pref-a'])
+        self.assertEqual((result['total'], result['verified']), (1, 0))
+
+    def test_planned_unapproved_or_malformed_forget_cannot_hide_missing(self):
+        for payload in (dict(result='planned'), dict(approved_by=None)):
+            self.forget_receipt(**payload)
+        directory = self.v/'günlük/hafıza-makbuzları'
+        (directory/'bad-forget-test.json').write_text('{', encoding='utf-8')
+        (directory/'list-forget-test.json').write_text('[]', encoding='utf-8')
+        result = hafiza.audit(self.v, [self.record], FakeMem0([]))
+        self.assertEqual(result['expected_absent'], 0)
+        self.assertEqual(result['missing_remote'], ['pref-a'])
+
+    def test_present_tombstone_is_reported_and_sync_does_not_touch_it(self):
+        self.record['status'] = 'deleted'
+        client = FakeMem0([dict(id='remote-a', memory=self.record['statement'],
+                               metadata=hafiza.memory_metadata(self.v, self.record))])
+        for command in ('audit', 'sync'):
+            code, result = self.cli(command, client)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['expected_absent'], 0)
+            self.assertEqual(result['unexpected_remote_ids'], ['remote-a'])
+            self.assertEqual(result['verified'], 0)
+        result = hafiza.sync_existing(self.v, [self.record], client, apply=True)
+        self.assertEqual(client.updated, [])
+        self.assertEqual(client.deleted, [])
+
+    def test_only_active_records_contribute_to_verified_total(self):
+        active = dict(self.record, memory_id='pref-b', mem0_id='remote-b')
+        self.record['status'] = 'deleted'
+        client = FakeMem0([dict(id='remote-b', memory=active['statement'],
+                               metadata=hafiza.memory_metadata(self.v, active))])
+        for function in (hafiza.audit, hafiza.sync_existing):
+            result = function(self.v, [self.record, active], client)
+            self.assertEqual((result['total'], result['verified']), (1, 1))
+            self.assertEqual(result['expected_absent'], 1)
+
+
 class HafizaDogrulamaTesti(unittest.TestCase):
     def test_gecerli_katalogu_okur_ve_hashi_dogrular(self):
         with tempfile.TemporaryDirectory() as tmp:

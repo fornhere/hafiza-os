@@ -38,6 +38,12 @@ class HealthTests(unittest.TestCase):
     def test_orphans_fail_even_without_missing_records(self):
         self.scan();self.audit(orphan_remote_ids=['orphan'])
         self.assertEqual('failed',snapshot(self.v,self.now)['status'])
+    def test_expected_absence_is_healthy_but_present_tombstone_fails(self):
+        self.scan(); self.audit(expected_absent=1, total=1, verified=1)
+        self.assertEqual('healthy', snapshot(self.v, self.now)['status'])
+        self.audit(expected_absent=0, unexpected_remote_ids=['remote-a'])
+        self.assertEqual('failed', snapshot(self.v, self.now)['status'])
+
     def test_success_and_stopped_scheduler(self):
         self.scan();self.audit()
         self.assertEqual('healthy',snapshot(self.v,self.now)['status'])
