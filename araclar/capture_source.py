@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+from jsonl_lines import split_jsonl
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -79,7 +81,7 @@ def snapshot(path, completed_prefix=False, end_line=None):
     after = path.stat()
     if not (completed_prefix or end_line is not None) and (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
         raise ValueError('transcript okuma sırasında değişti')
-    lines = raw.decode('utf-8').splitlines()
+    lines = split_jsonl(raw.decode('utf-8'))
     # Establish rollout ownership before examining copied history or its partial writes.
     for line in lines:
         try: first = json.loads(line)
@@ -162,7 +164,7 @@ def excluded(vault, session):
 
 def validate_source(vault, session, source):
     if excluded(vault, session): raise ValueError('oturum kaydetmeme politikasıyla dışlandı')
-    for line in Path(source['path']).read_text().splitlines():
+    for line in split_jsonl(Path(source['path']).read_bytes().decode('utf-8')):
         try: event = json.loads(line)
         except json.JSONDecodeError: continue
         payload = event.get('payload', {})
@@ -197,7 +199,7 @@ def record_gate(vault, session, turn, source=None):
 
 def exclusion_evidence(path, evidence):
     if len(evidence) < 10: return False
-    for line in Path(path).read_text().splitlines():
+    for line in split_jsonl(Path(path).read_bytes().decode('utf-8')):
         try: item = json.loads(line)
         except json.JSONDecodeError: continue
         p = item.get('payload', {})
@@ -233,7 +235,7 @@ def read_completed_prefix(vault, session, source):
     actual = validate_source(vault, session, source)
     if actual.get('prefix_end_line') is None:
         raise ValueError('sınırlı okuma için prefix snapshot gerekli')
-    text = '\n'.join(Path(actual['path']).read_text().splitlines()[:actual['prefix_end_line']])
+    text = '\n'.join(split_jsonl(Path(actual['path']).read_bytes().decode('utf-8'))[:actual['prefix_end_line']])
     if hashlib.sha256(text.encode()).hexdigest() != actual['prefix_hash']:
         raise ValueError('prefix okuma sırasında değişti')
     return text
@@ -282,7 +284,7 @@ def validate_candidate_evidence(vault, session, source, evidence_source, evidenc
     for field in ('session_id', 'path', 'prefix_end_line', 'prefix_hash', 'source_hash'):
         if evidence_source.get(field) != actual.get(field):
             raise ValueError('aday kanıtı kaynak snapshot ile uyuşmuyor')
-    lines = read_completed_prefix(vault, session, source).splitlines()
+    lines = split_jsonl(read_completed_prefix(vault, session, source))
     line = evidence_source.get('line')
     if type(line) is not int or not 1 <= line <= len(lines):
         raise ValueError('özgün kullanıcı mesaj satırı gerekli')
