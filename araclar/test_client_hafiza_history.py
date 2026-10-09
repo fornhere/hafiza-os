@@ -9,6 +9,10 @@ import client_hafiza
 import gorev_baglam
 import jev_client
 
+# Transcript okuyucusu sembolik bağlantılı yolları reddeder; macOS /var → /private/var
+# ve Windows kısa adları için geçici dizin kökünü gerçek yola çevir.
+tempfile.tempdir = str(Path(tempfile.gettempdir()).resolve())
+
 
 class HistoryTests(unittest.TestCase):
     def test_syn_lagging_transcript_refresh(self):
