@@ -363,7 +363,9 @@ class ProjectState(NativeFixture):
         ident = self.register()['id']
         sessions.review(self.vault,ident,self.decision(ident),True)
         root,state=sessions.layout(self.vault)
+        self.assertEqual(sessions.COUNT_VERSION, sessions.load(root/(ident+'.json'))['count_version'])
         item=sessions.load(state/(ident+'.json'))
+        item.pop('count_version')  # Alansız tarihsel makbuz fixture'ı.
         old=parse(self.client,self.session,self.path,legacy_interrupts=True)
         item['count']=old['count']
         item['message_ids_sha256']=sessions.sha(json.dumps(old['message_ids']).encode())
@@ -614,6 +616,7 @@ class NativeSessions(NativeFixture):
         ident = self.register()['id']
         item = sessions.load(state / (ident + '.json'))
         self.assertEqual(6, item['count'])
+        self.assertEqual(sessions.COUNT_VERSION, item['count_version'])
         self.assertEqual(sessions.sha(json.dumps([f'u{i}' for i in range(6)]).encode()),
                          item['message_ids_sha256'])
         with patch.object(sessions, 'parse', wraps=parse) as reader:
@@ -647,6 +650,61 @@ class NativeSessions(NativeFixture):
         changed = parse(self.client, self.session, self.path, _receipt_metadata=True)
         with patch.object(sessions, 'parse', side_effect=[original, changed]):
             with self.assertRaisesRegex(SourceError, 'source_mutated'):
+                sessions._validate(item, state)
+
+    def historical_variant_receipt(self, variant, count=6):
+        def user(ident, text):
+            return dict(type='user', uuid=ident, sessionId=self.session,
+                isSidechain=False, message=dict(role='user', content=text))
+        self.rows = [user('wrapped', '<system-reminder>harness</system-reminder>Gerçek istek'),
+            user('slash', '<command-name>/demo</command-name>'),
+            user('expanded', '# /demo — genişletilmiş yönerge')] + self.claude_rows(count)
+        self.write()
+        current = parse(self.client, self.session, self.path)
+        ids = (['wrapped'] if variant == 'count_variant_5c0fa24' else [])
+        ids += ['slash', 'expanded'] + [f'u{i}' for i in range(count)]
+        item = {k: current[k] for k in ('client', 'session', 'path', 'end_line', 'prefix_sha256')}
+        item.update(version=1, id=sessions.snapshot_id(current), count=len(ids),
+            message_ids_sha256=sessions.sha(json.dumps(ids).encode()))
+        _, state = sessions.layout(self.vault)
+        return item, state
+
+    def test_proven_count_variants_are_metadata_only(self):
+        for variant in ('count_variant_5e735eb', 'count_variant_5c0fa24'):
+            for versioned in (False, True):
+                with self.subTest(variant=variant, versioned=versioned):
+                    item, state = self.historical_variant_receipt(variant)
+                    if versioned:
+                        item['count_version'] = variant
+                    source = sessions._validate(item, state)
+                    self.assertEqual(7, source['count'])
+                    self.assertEqual(['wrapped'] + [f'u{i}' for i in range(6)], source['message_ids'])
+                    self.assertNotIn('expanded', [e['message_id'] for e in source['entries']])
+                    self.assertNotIn('_receipt_counts', source)
+
+    def test_count_variants_reject_wrong_mixed_or_unknown_metadata(self):
+        first, state = self.historical_variant_receipt('count_variant_5e735eb')
+        second, _ = self.historical_variant_receipt('count_variant_5c0fa24')
+        for item in (dict(first, count=second['count']),
+                     dict(second, count=first['count']),
+                     dict(first, count_version='count_variant_5c0fa24'),
+                     dict(second, count_version='count_variant_5e735eb'),
+                     dict(first, count_version=sessions.COUNT_VERSION)):
+            with self.subTest(item=item), self.assertRaisesRegex(SourceError, 'source_mutated'):
+                sessions._validate(item, state)
+        with self.assertRaisesRegex(SourceError, 'invalid_count_version'):
+            sessions._validate(dict(first, count_version='unknown'), state)
+
+    def test_historical_variants_cannot_bypass_current_threshold_or_terminal(self):
+        for variant in ('count_variant_5e735eb', 'count_variant_5c0fa24'):
+            item, state = self.historical_variant_receipt(variant, count=4)
+            self.assertGreater(item['count'], 5)
+            with self.assertRaisesRegex(SourceError, 'threshold_or_incomplete'):
+                sessions._validate(item, state)
+            item, state = self.historical_variant_receipt(variant)
+            self.rows[-1]['message']['stop_reason'] = 'tool_use'
+            self.write()
+            with self.assertRaisesRegex(SourceError, 'threshold_or_incomplete'):
                 sessions._validate(item, state)
 
     def test_verified_semantic_candidate_queues_and_source_note_replays(self):
