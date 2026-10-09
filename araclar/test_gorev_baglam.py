@@ -327,8 +327,9 @@ class SubtaskFocus(unittest.TestCase):
   (self.v/'bilgi').mkdir()
   with patch.object(konu_sentezi,'retrieve',return_value=dict(text='',records=[],source_versions={})) as reader:
    p=build_task_package(self.v,'karşılaştırma',cwd=self.root/'atlas-mercek',budget=2000,history='never')
-  self.assertEqual([i for i in p['selected_ids'] if i in ('direct','incidental')],['direct'])
-  self.assertIn('incidental:budget',p['omitted_reasons'])
+  # Compressed delivery can fit both; focus and expansion still prefer direct.
+  self.assertEqual([i for i in p['selected_ids'] if i in ('direct','incidental')],['direct','incidental'])
+  self.assertLessEqual(len(p['text']),2000)
   self.assertEqual(reader.call_args.kwargs['linked_paths'],['direct.md'])
   self.assertNotIn('Delta sponsoru incele',reader.call_args.kwargs['expansion'])
 
@@ -1072,9 +1073,10 @@ class ProjectStatusTests(unittest.TestCase):
                 self.assertIn('work',result['selected_ids'])
                 self.assertNotIn('work:budget',result['omitted_reasons'])
                 self.assertEqual('work',result['selected_ids'][0] if result['selected_ids'][0]!='scope-header' else result['selected_ids'][1])
-                for label in ('Hedef: Durumu görünür yap','Son sonuç: Düzeltme uygulandı',
-                              'Açık iş/engel: Regresyon kontrolü','Sonraki adım: Testleri doğrula','Tarih: '+dt.date.today().isoformat()):
+                for label in ('Açık iş/engel: Regresyon kontrolü','Sonraki adım: Testleri doğrula','Tarih: '+dt.date.today().isoformat()):
                     self.assertIn(label,result['text'])
+                if 'Hedef: Durumu görünür yap' not in result['text']:
+                    self.assertIn('devamı: kaynak',result['text'])
                 self.assertLessEqual(len(result['text']),1000)
 
     def test_old_task_has_dated_label_and_never_suggests_action(self):
@@ -1152,8 +1154,9 @@ class BoundedStatusRegressionTests(unittest.TestCase):
         self.assertIsNone(full['capsule']['suggested_next_step'])
         short = build_task_package(self.vault, 'alpha devam', budget=370, history='never')
         self.assertLessEqual(len(short['text']), 370)
-        self.assertEqual(1, len(short['capsule']['tasks']))
-        self.assertIn('3 aktif iş daha', short['text'])
+        # Compression admits two complete bounded cards at this budget.
+        self.assertEqual(2, len(short['capsule']['tasks']))
+        self.assertEqual(2, short['capsule']['omitted_task_count'])
 
     def test_unique_legacy_title_restores_scope_without_overriding_explicit_scope(self):
         from gorev_baglam import digest
@@ -1223,6 +1226,7 @@ class BoundedStatusRegressionTests(unittest.TestCase):
         full=build_task_package(self.vault, 'alpha devam', budget=5000, history='never')
         self.assertIn('Son sonuç: Kaynaklı ayrıntı.', full['text'])
         self.assertIn(path, full['text'])
+        self.assertEqual(digest(self.vault/path), full['source_versions'][path])
         small=build_task_package(self.vault, 'alpha devam', budget=20, history='never')
         self.assertEqual({}, small['source_references'])
 
@@ -2578,3 +2582,220 @@ class SubtaskBaseComparison(unittest.TestCase):
      self.assertLessEqual(len(after['text']),budget)
      self.assertNotIn(self.quote,after['text'])
   self.assertGreater(delivered,0)
+class CompactTaskCardTests(unittest.TestCase):
+    setUp=ScopeContextPackageTests.setUp
+    task=ProjectStatusTests.task
+
+    def test_sentences_keep_turkish_abbreviations_and_decimal(self):
+        from gorev_baglam import task_sentences
+        text='Ses için ör. 2.5 dk. ve vb. kontroller yapılır. Başlık seçilir!'
+        self.assertEqual(task_sentences(text),[text.split(' Başlık')[0], 'Başlık seçilir!'])
+
+    def test_each_stage_moves_its_sentence_first(self):
+        from gorev_baglam import bounded_task_card, task_stages
+        for stage in ('başlık','kapak','SEO','açıklama','altyazı','SRT','ses','kurgu','senaryo','çekim','yayın'):
+            sentence=stage+' aşamasını kontrol et.'
+            text,step=bounded_task_card('Kart', 'Eski kontrolü tamamla. '+sentence+' '+('Eski kontrolü tamamla. '*40),
+                '; Tarih: 2026-10-01 (kaynak: source.md)', 'zihin/is-durumu.jsonl#work',task_stages(stage),2000)
+            self.assertTrue(step.startswith(sentence),stage)
+            self.assertLessEqual(len(text),450)
+            self.assertIn('… (devamı: kaynak zihin/is-durumu.jsonl#work)',text)
+
+    def test_short_stage_inflections_do_not_match_unrelated_words(self):
+        from gorev_baglam import task_stages
+        self.assertEqual(task_stages('sesi sesini sesine'),{4})
+        self.assertEqual(task_stages("SRT’yi SEO’ya"),{2,3})
+        self.assertEqual(task_stages('sesyon sezon seoul'),set())
+
+    def test_compressed_cost_admits_card_that_full_text_cannot_fit(self):
+        self.task(next_step='Ses sürümünü dinle. '+('Kurgu kontrolü tamamla. '*140))
+        query='alpha ses devam'
+        compact=build_task_package(self.vault,query,budget=2000,history='never')
+        def full(header,step,footer,*args,**kwargs): return header+'; Sonraki adım: '+step+footer,step
+        with patch('gorev_baglam.bounded_task_card',side_effect=full):
+            original=build_task_package(self.vault,query,budget=2000,history='never')
+        self.assertIn('work',compact['selected_ids'])
+        self.assertNotIn('work',original['selected_ids'])
+        self.assertIn('devamı: kaynak',compact['delivered_segments']['work'])
+        self.assertLessEqual(len(compact['text']),2000)
+
+    def test_generic_query_keeps_first_complete_sentences(self):
+        from gorev_baglam import bounded_task_card
+        text,step=bounded_task_card('Kart','İlk kontrolü yap. '+('Uzun kontrolü yap. '*60),
+            '; Tarih: 2026-10-01 (kaynak: source.md)','zihin/is-durumu.jsonl#work',set(),2000)
+        self.assertTrue(step.startswith('İlk kontrolü yap.'))
+        self.assertLessEqual(len(text),450)
+        self.assertEqual(step.split('…')[0].rstrip()[-1],'.')
+
+    def test_long_single_sentence_is_not_split_and_budget_is_respected(self):
+        from gorev_baglam import bounded_task_card
+        for budget in (0,50,370,1000,2000,5000):
+            text,step=bounded_task_card('Kart','Ses '+('kontrol '*200)+'.',
+                '; Tarih: 2026-10-01 (kaynak: source.md)','zihin/is-durumu.jsonl#work',{4},budget)
+            self.assertLessEqual(len(text),min(budget,max(180,budget*225//1000)))
+            self.assertNotIn('kontrol',text)
+            if budget>=180: self.assertIn('devamı: kaynak',step)
+
+    def test_package_capsule_uses_bounded_step_without_mutating_source(self):
+        task=self.task(next_step='Kurgu kontrolü tamamla. '+('Eski kontrolü yap. '*45)+' Ses sürümünü dinle.')
+        from is_ve_ders import TASKS
+        before=(self.vault/TASKS).read_bytes()
+        package=build_task_package(self.vault,'alpha ses devam',budget=2000,history='never')
+        self.assertLessEqual(len(package['delivered_segments']['work']),450)
+        self.assertTrue(package['capsule']['tasks'][0]['next_step'].startswith('Ses sürümünü dinle.'))
+        self.assertIn('zihin/is-durumu.jsonl#work',package['source_references'])
+        self.assertEqual(before,(self.vault/TASKS).read_bytes())
+        self.assertEqual(task['next_step'],self.task_value()['next_step'])
+
+    def task_value(self):
+        from is_ve_ders import latest
+        return latest(self.vault,'task')['work']
+
+    def test_same_id_in_catalog_and_task_is_delivered_once(self):
+        self.task(next_step='Sunum sesini dinle.')
+        h._write_jsonl(self.vault/h.CATALOG_PATH,[dict(self.row,memory_id='work')])
+        package=build_task_package(self.vault,'alpha sunum devam',budget=2000,history='never')
+        self.assertEqual(package['selected_ids'].count('work'),1)
+        self.assertEqual(package['text'].count('Devam kartı'),1)
+        self.assertNotIn('work',package['summary']['record_ids'])
+        self.assertEqual(package['summary']['task_ids'],['work'])
+        self.assertEqual([t['id'] for t in package['capsule']['tasks']],['work'])
+        self.assertEqual(package['capsule']['facts'],[])
+
+    def test_repeated_current_task_id_is_one_card(self):
+        import gorev_baglam as g
+        self.task()
+        original=g.brief
+        with patch.object(g,'brief',side_effect=lambda *a,**kw: original(*a,**kw)*2):
+            package=build_task_package(self.vault,'alpha devam',budget=2000,history='never')
+        self.assertEqual(package['selected_ids'].count('work'),1)
+        self.assertEqual(package['text'].count('Devam kartı'),1)
+        self.assertEqual(package['summary']['task_ids'],['work'])
+        self.assertEqual([t['id'] for t in package['capsule']['tasks']],['work'])
+        self.assertEqual(package['capsule']['available_task_count'],1)
+
+    def test_marker_only_card_does_not_suggest_an_action(self):
+        self.task(next_step='Ses '+('kontrol '*200)+'.')
+        package=build_task_package(self.vault,'alpha ses devam',budget=2000,history='never')
+        self.assertIsNone(package['capsule']['suggested_next_step'])
+
+    def test_duplicate_catalog_card_is_one_summary_and_capsule_fact(self):
+        with patch('jev_retrieval.catalog',side_effect=lambda v,q,r,rank,scope: ([self.row,self.row],None)):
+            package=build_task_package(self.vault,'alpha sunum devam',budget=2000,history='never')
+        ident=self.row['memory_id']
+        self.assertEqual(package['selected_ids'].count(ident),1)
+        self.assertEqual(package['summary']['record_ids'],[ident])
+        self.assertEqual([r['id'] for r in package['capsule']['facts']],[ident])
+        self.assertEqual(package['text'].count('Bilgi kartı:'),1)
+
+
+class CurrentTaskCardTests(unittest.TestCase):
+    setUp=ScopeContextPackageTests.setUp
+    task=ProjectStatusTests.task
+    def test_package_budget_preserves_all_short_card_sentences(self):
+        sentences=['Yeni koşuların sonuçları sonrası senaryo hazırlanacak.',
+                   'Önce kapının ve son düzeltme turlarının sonuçlarını kontrol etmek.',
+                   'Yayın beyanını bağlantı ve son paket kontrolleriyle doğrula.']
+        self.task(next_step=' '.join(sentences))
+        p=build_task_package(self.vault,'alpha devam',budget=2000,history='never')
+        card=p['delivered_segments']['work']
+        self.assertLessEqual(len(card),450)
+        self.assertNotIn('devamı: kaynak',card)
+        for sentence in sentences:
+            self.assertIn(sentence,card)
+            self.assertIn(sentence,p['capsule']['tasks'][0]['next_step'])
+
+    def test_card_ratio_uses_package_budget_with_separate_selection_ceiling(self):
+        from gorev_baglam import bounded_task_card, task_sentences
+        step='İlk adımı gerçekleştir. İkinci adımı gerçekleştir.'
+        footer='; Tarih: 2026-10-09 (kaynak: source.md)'
+        text,kept=bounded_task_card('Kart',step,footer,'ledger#work',set(),2000,max_chars=300)
+        self.assertEqual(set(task_sentences(step)),set(task_sentences(kept)))
+        self.assertNotIn('devamı: kaynak',text)
+        self.assertLessEqual(len(text),300)
+
+    def test_current_action_precedes_optional_result_at_tight_ceiling(self):
+        from gorev_baglam import bounded_task_card
+        action='Önce kapının ve son düzeltme turlarının sonuçlarını kontrol etmek.'
+        text,kept=bounded_task_card('İş durum kartı [devam edilebilir]: Çalışma',action,
+            '; Tarih: 2026-10-09 (kaynak: source.md)','ledger#work',set(),2000,
+            fields=[('last_result','Son sonuç ve ek doğrulama kararı bekleniyor. '*5)],max_chars=234)
+        self.assertIn(action,text)
+        self.assertIn(action,kept)
+        self.assertIn('devamı: kaynak',text)
+        self.assertLessEqual(len(text),234)
+
+    def test_fresh_conditions_precede_old_stage_reports(self):
+        from gorev_baglam import bounded_task_card,task_stages
+        pending='Kullanıcı son olarak altyazıyı açmayı istedi; açıldığı teyitsiz.'
+        acceptance='Son seçim ve kullanıcı kabulü yok.'
+        old='Ses ve altyazı kurgu teslimi bildirildi. '
+        text,step=bounded_task_card('Kart',old*20+acceptance+' '+pending,
+            '; Tarih: 2026-10-09 (kaynak: source.md)','ledger#work',task_stages('altyazı'),2000)
+        self.assertTrue(step.startswith(pending))
+        self.assertIn(acceptance,text)
+        self.assertIn('devamı: kaynak',text)
+        self.assertNotIn(old.strip(),text.split(pending)[0])
+
+    def test_both_blocker_and_open_work_survive_text_and_capsule(self):
+        blocker='Kullanıcı onayı bekleniyor; onay gelmeden yayınlama.'
+        open_work='Son düzeltme sonuçları bekleniyor.'
+        self.task(next_step='Ses kontrolünü yap. '*12,blocker=blocker,open_work=open_work)
+        p=build_task_package(self.vault,'alpha ses devam',budget=2000,history='never')
+        self.assertIn(blocker,p['text']); self.assertIn(open_work,p['text'])
+        card=p['capsule']['tasks'][0]
+        self.assertEqual(card['blocker'],blocker); self.assertEqual(card['open_work'],open_work)
+        self.assertIsNone(p['capsule']['suggested_next_step'])
+        self.assertIn('devamı: kaynak',p['text'])
+
+    def test_warning_text_and_origin_survive_optional_overflow(self):
+        from gorev_baglam import bounded_task_card
+        notices=['karar bekliyor: İlk tercihi seç. Son kabulü ayrıca ver. (kaynak: decision.md)',
+                 'sonuç teyitsiz (kaynak: result.md)']
+        text,step=bounded_task_card('Kart','Ses kontrolünü yap.',
+            '; Tarih: 2026-10-09 (kaynak: source.md)','ledger#work',set(),2000,
+            fields=[('last_result','Eski teslim ayrıntısı. '*100)]+[('state_warning',n) for n in notices])
+        for notice in notices: self.assertIn(notice,text)
+        self.assertIn('Ses kontrolünü yap.',step)
+        self.assertIn('devamı: kaynak',text)
+        self.assertLessEqual(len(text),450)
+
+    def test_dropped_optional_field_is_marked_even_when_step_fits(self):
+        from gorev_baglam import bounded_task_card
+        retained={}
+        text,step=bounded_task_card('Kart','Ses kontrolünü yap.',
+            '; Tarih: 2026-10-09 (kaynak: source.md)','ledger#work',set(),2000,
+            fields=[('goal','Uzun hedef '+('ayrıntı '*100)+'.')],retained=retained)
+        self.assertIn('Ses kontrolünü yap.',step)
+        self.assertIn('devamı: kaynak',text)
+        self.assertIn('continuation',retained)
+
+    def test_extra_evidence_condition_is_preserved_or_marked(self):
+        from gorev_baglam import bounded_task_card
+        condition='Ek test sonucu ve kullanıcı kararı bekleniyor.'
+        retained={}
+        text,step=bounded_task_card('Kart','Ses kontrolünü yap.',
+            '; Tarih: 2026-10-09 (kaynak: source.md)','ledger#work',set(),2000,
+            fields=[('extra',condition),('extra','Eski teslim '+('ayrıntı '*100)+'.')],retained=retained)
+        self.assertIn(condition,text); self.assertEqual(retained['extra'],condition)
+        self.assertIn('devamı: kaynak',text)
+
+    def test_unfittable_condition_never_becomes_suggested_action(self):
+        self.task(next_step='Ses kontrolünü yap.',blocker='Onay '+('bekleniyor '*200)+'.')
+        p=build_task_package(self.vault,'alpha ses devam',budget=5000,history='never')
+        self.assertIn('devamı: kaynak',p['text'])
+        self.assertIsNone(p['capsule']['suggested_next_step'])
+
+
+
+class GroupedTaskCardFieldsTests(unittest.TestCase):
+    setUp=Package.setUp
+    state_fixture=Package.state_fixture
+
+    def test_validated_supplement_keeps_condition_and_source(self):
+        self.state_fixture()
+        p=build_task_package(self.v,'kapak durumu',budget=2000)
+        self.assertIn('Ek kapak kontrolü bekleniyor.',p['text'])
+        self.assertIn('zihin/is-durumu.jsonl#work',p['text'])
+        self.assertEqual('work.md',p['source_references']['zihin/is-durumu.jsonl#work']['path'])
+        self.assertIsNone(p['capsule']['suggested_next_step'])

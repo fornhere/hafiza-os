@@ -36,6 +36,111 @@ def query_words(text):
     text = re.sub(r"(?<=\w)['’](?=\w)", '', text)
     return re.findall(r"[^\W_]+", text)
 
+# Küçük, genel aşama sözlüğü; proje kimliği veya platform varsayımı yok.
+_TASK_STAGES = (('başlık',), ('kapak','thumbnail'), ('seo','açıklama'),
+                ('altyazı','srt'), ('ses','audio'), ('kurgu','montaj'),
+                ('senaryo',), ('çekim',), ('yayın',))
+_SHORT_STAGE_SUFFIXES = _SUFFIXES|{'ini','ine','inin','inde','inden'}
+
+def task_sentences(text):
+    # Kısaltmanın noktası cümle sonu değildir; ondalık ve dosya yolları bölünmez.
+    parts=[]; start=0
+    for match in re.finditer(r'[.!?]+(?:\s+|$)', text):
+        before=text[max(start,match.start()-8):match.start()+1]
+        if re.search(r'\b(?:vb|vs|ör|örn|dk|sn|dr|prof)\.$', before, re.I): continue
+        parts.append(text[start:match.end()].strip()); start=match.end()
+    if text[start:].strip(): parts.append(text[start:].strip())
+    return parts
+
+def task_stages(text):
+    words=query_words(text)
+    return {i for i,terms in enumerate(_TASK_STAGES)
+            if any(inflected(term,word) or (len(term)<4 and word.startswith(term)
+                   and word[len(term):] in _SHORT_STAGE_SUFFIXES)
+                   for term in terms for word in words)}
+
+def _stage_sentences(text, stages):
+    sentences=task_sentences(text)
+    if not stages: return sentences
+    matching=[]; other=[]
+    for sentence in sentences:
+        (matching if task_stages(sentence)&stages else other).append(sentence)
+    return matching+other
+
+def current_task_sentence(sentence):
+    """Recorded open conditions, not inferred task outcomes."""
+    text=sentence.casefold().translate(str.maketrans('ıİşğüöç','iIsguoc'))
+    return bool(re.search(r'bekl[ei]|teyit|engel|karar|onay|kabul|'
+                          r'\bacik\b|son olarak|son duzeltme|kontrol edilmeli|'
+                          r'sinanmali|dogrulanmamis|bilinmiyor', text))
+
+def protected_task_sentences(text):
+    sentences=task_sentences(text)
+    protected=[s for s in sentences if current_task_sentence(s)]
+    # Cards are generally chronological. With no explicit state signal, reserve
+    # the latest complete sentence in a multi-sentence record.
+    return protected or (sentences[-1:] if sentences and len(sentences[-1])<=180
+                         and sentences.count(sentences[-1])==1 else [])
+
+def bounded_task_card(header, next_step, footer, reference, stages, budget,
+                      fields=(), retained=None, max_chars=None):
+    marker='… (devamı: kaynak '+reference+')'
+    labels={'goal':'Hedef','last_result':'Son sonuç','blocker':'Engel',
+            'open_work':'Açık iş/engel','extra':'Ek alan','state_warning':''}
+    entries=[]
+    for name,value in fields:
+        for sentence in ([value] if name == 'state_warning' else task_sentences(value)):
+            entries.append((name,sentence))
+    protected=protected_task_sentences(next_step)
+    critical=[e for e in entries if e[0] in ('blocker','open_work','state_warning') or current_task_sentence(e[1])]
+    # Fresh state precedes stage relevance; reverse traversal gives recent
+    # conditions first if even the total package budget is too small.
+    # Structured blockers/open work remain first. Reserve the current action
+    # before conditions in optional result/evidence fields at a tight ceiling.
+    mandatory=[e for e in critical if e[0] in ('blocker','open_work','state_warning')]
+    priority=mandatory+[(None,s) for s in reversed(protected)]
+    priority += [e for e in critical if e not in mandatory]
+    priority += [(None,s) for s in _stage_sentences(next_step,stages) if s not in protected]
+    priority += [e for e in entries if e not in critical]
+    def render(chosen, truncated):
+        field_text=''
+        for name in labels:
+            values=[s for n,s in chosen if n==name]
+            if values: field_text+='; '+(labels[name]+': ' if labels[name] else '')+' '.join(values)
+        step=' '.join(s for n,s in chosen if n is None)
+        if truncated: step+=(' ' if step else '')+marker
+        return header+field_text+'; Sonraki adım: '+step+footer,step
+    full,step=render(priority,False)
+    base_limit=min(budget,max(180,budget*225//1000))
+    delivery_budget=min(budget,max_chars) if max_chars is not None else budget
+    # Reserve complete critical conditions even when they exceed the usual
+    # card cap, within the actual package budget.
+    required,_=render(critical+[(None,s) for s in reversed(protected)],True)
+    limit=min(delivery_budget,max(base_limit,len(required))) if critical or protected else min(delivery_budget,base_limit)
+    if len(full)<=limit:
+        chosen=priority; text=full
+    else:
+        footer=footer.split(' (kaynak:',1)[0]
+        required,_=render(critical+[(None,s) for s in reversed(protected)],True)
+        if len(required)>limit and (critical or protected):
+            header=header.split(': ',1)[0]
+            header=re.sub(r'son bilinen durum \(\d{4}-\d{2}-\d{2}, ([^)]+)\)',r'\1',header)
+        chosen=[]
+        for entry in priority:
+            trial,_=render(chosen+[entry],True)
+            if len(trial)<=limit: chosen.append(entry)
+        text,step=render(chosen,True)
+        if len(text)>limit:
+            text=header.split(': ',1)[0]+'; '+marker+footer
+            if len(text)>limit: text=marker if len(marker)<=limit else ''
+            step=marker if text else ''; chosen=[]
+    if retained is not None:
+        for name in labels:
+            values=[s for n,s in chosen if n==name]
+            if values: retained[name]=' '.join(values)
+        if marker in text: retained['continuation']=marker
+    return text,step
+
 @functools.lru_cache(maxsize=65536)
 def inflected(base, word):
     if base == word: return True
@@ -1048,6 +1153,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     resume = view == "resume" or (view == "auto" and continuation_request(query))
     resume_tasks = []; card_facts = []; task_duplicates = {}
     task_warning_versions = {}
+    task_steps = {}; task_texts = {}; task_originals = {}; task_references = {}; task_fields = {}; task_conditions = {}
+    stages=task_stages(query)
     vault = Path(vault).resolve(); words = tokens(query)
     selected=[]; omitted=[]; lines=[]; used=0; assets=[]; source_versions=RevisionMap()
     budget=max(0, int(budget)); candidates=[]; current_facts=[]; current_tasks=[]
@@ -1411,6 +1518,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
                 omitted.append(task['id']+':source_changed')
             else:
                 valid_tasks.append(task)
+        # Aynı kimliğin katalog/özet/kart yollarından yeniden gelmesini önle.
+        valid_tasks=list({t['id']:t for t in valid_tasks}.values())
         groups = unique_states([t for t in valid_tasks if t.get('source_content_hash')])
         groups.extend([t] for t in valid_tasks if not t.get('source_content_hash'))
         groups.sort(key=lambda group: min(project_tasks.index(t) for t in group))
@@ -1443,38 +1552,65 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             def field(name, fallback):
                 value = task.get(name) or report_fields.get(name)
                 return value if isinstance(value, str) and value and not h.contains_secret(value) else fallback
-            text = prefix+' ['+state_label+']: '+task['title']
+            header = prefix+' ['+state_label+']: '+task['title']
+            text = header
             # Preserve recorded facts; repeated title and absent fields add no evidence.
             optional_fields = (('Hedef', field('goal', '')),
                                  ('Son sonuç', field('last_result', '')),
                                  ('Açık iş/engel', field('blocker', field('open_work', ''))))
             for label, value in optional_fields:
                 if value and not (compact and sum(len(v) for _, v in optional_fields) > 200): text += '; '+label+': '+value
+            footer='; Tarih: '+date+' (kaynak: '+source_reference(task, 'zihin/is-durumu.jsonl')+')'
+            delivery_fields=[(name,field(name,'')) for name in ('goal','last_result','blocker','open_work') if field(name,'')]
             def warnings(card):
                 result = ''
                 notices = state_warnings(vault, card)
                 task_warning_versions[card['id']] = notices
                 for warning, origin in notices:
-                    result += '; '+warning+' (kaynak: '+origin['source_path']+')'
+                    notice = warning+' (kaynak: '+origin['source_path']+')'
+                    result += '; '+notice
+                    delivery_fields.append(('state_warning', notice))
                     source_versions[origin['source_path']] = digest(h.source_file(vault, origin['source_path']))
                 return result
             text += warnings(task)
-            text += ('; Sonraki adım: '+task['next_step']+'; Tarih: '+date+
-                     ' (kaynak: '+source_reference(task, 'zihin/is-durumu.jsonl')+')')
+            text += '; Sonraki adım: '+task['next_step']+footer
             values = state_values(task)
-            duplicates = []
+            duplicates = []; supplements=[]
             for older in group[1:]:
                 # Supplements retain their uncertainty and provenance; they do
                 # not verify the representative report or merge distinct decisions.
                 text += warnings(older)
                 extra = [v for v in state_values(older) if v not in values]
                 if extra:
+                    delivery_fields.extend(('extra',v) for v in extra)
+                    supplements.append(older)
                     text += '; Ek alan: ' + '; '.join(extra) + ' (kaynak: '+older['source_path']+')'
                     values.extend(extra)
                 source_versions[older['source_path']] = digest(h.source_file(vault, older['source_path']))
                 duplicates.append(older['id'])
             task_duplicates[task['id']] = duplicates
-            add(task['id'],text)
+            task_originals[task['id']]=text
+            references=[('zihin/is-durumu.jsonl#'+t['id'],t) for t in [task]+supplements]
+            reference=', '.join(ref for ref,_ in references)
+            if supplements: footer+=' (ek kaynak: '+', '.join(ref for ref,_ in references[1:])+')'
+            kept_fields={}
+            text,task_steps[task['id']]=bounded_task_card(
+                header,task['next_step'],footer,reference,stages,budget,
+                fields=delivery_fields,retained=kept_fields,max_chars=len(text))
+            # A delivered card must never lose a decision/verification notice.
+            if not text or any(value not in text for name,value in delivery_fields if name == 'state_warning'):
+                omitted.append(task['id']+':budget'); continue
+            task_fields[task['id']]=kept_fields
+            task_conditions[task['id']]=bool(
+                any(name in ('blocker','open_work') or current_task_sentence(value)
+                    for name,value in delivery_fields) or
+                any(current_task_sentence(s) for s in task_sentences(task['next_step'])))
+            task_texts[task['id']]=text
+            for ref,source_task in references:
+                if ref in text:
+                    task_references[ref]=dict(path=source_task['source_path'],sha256=source_versions[source_task['source_path']])
+            # Admission and delivery use the same compressed text and cost.
+            add(task['id'],task_texts[task['id']])
             # One relevant primary card comes first; notes precede additional
             # cards and unrelated recency hints, so a long card cannot starve notes.
             primary = visible_count==1 and (resume or bool(task_focus) or bool(topical_ids) or not unguarded_knowledge or not unguarded_knowledge['text'])
@@ -1554,6 +1690,20 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         for alias in project.get('aliases',[]):
             topic={t for t in topic if not any(word_match(t,a) for a in query_words(alias))}
     # Only candidates that fit the actual bounded package can satisfy coverage.
+    # Kart metni tek kanaldan teslim edilir; çoklu kaynak/knowledge kanalları korunur.
+    card_ids=set(task_texts)|{r['memory_id'] for r in current_facts}
+    unique_candidates=[]; card_candidates={}
+    for candidate in candidates:
+        ident=candidate[2]
+        if ident in task_texts:
+            if candidate[3]!=task_texts[ident]: continue
+        if ident in card_ids:
+            if ident not in card_candidates or candidate[:2]<card_candidates[ident][:2]:
+                card_candidates[ident]=candidate
+        else: unique_candidates.append(candidate)
+    candidates=unique_candidates+list(card_candidates.values())
+    current_facts=list({r['memory_id']:r for r in current_facts if r['memory_id'] not in task_texts}.values())
+    card_facts=list({r['memory_id']:r for r in card_facts if r['memory_id'] not in task_texts}.values())
     preview_ids=set(); preview_used=0
     for _,_,ident,text in sorted(candidates):
         cost=delivery_costs.get((ident,text), len(text))+(1 if preview_ids else 0)
@@ -1646,11 +1796,12 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         admitted.append(candidate);used+=cost
     delivered_segments={}
     for _, _, ident, text in sorted(admitted):
+        text=task_texts.get(ident,text)
         lines.append(text);selected.append(ident)
         if ident == 'inventory':
             source_versions[inventory['path']] = inventory['sha256']
             source_versions.single_reads[inventory['path']] = inventory['revision']
-        selected.extend(task_duplicates.get(ident, []))
+        selected.extend(i for i in task_duplicates.get(ident, []) if i not in selected)
         # One channel may deliver several roots or working sources.
         if ident in delivered_segments:
             delivered_segments[ident] += '\n' + text
@@ -1676,6 +1827,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     assets=[asset for asset in assets if asset['id'] in selected]
     result={'workflow_ids':[w['id'] for w in workflows],'match_reason':match_reason,'project_id':project['id'] if project else None,'assets':assets,'source_versions':source_versions,'selected_ids':selected,'omitted_reasons':omitted,'text':'\n'.join(lines),'delivered_segments':delivered_segments}
     result['project_source'] = match_reason
+    source_references.update(task_references)
     result['source_references'] = {ref: data for ref, data in source_references.items()
                                    if ref in result['text']}
     result['deduplicated_tasks'] = {ident: ids for ident, ids in task_duplicates.items() if ids and ident in selected}
@@ -1733,9 +1885,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     visible_tasks = [t for t in current_tasks if t['id'] in selected][:3]
     visible_facts = [f for f in card_facts if f['memory_id'] in selected][:5]
     task_cards = [dict(id=t['id'], title=t['title'], status=t['status'],
-                       next_step=t['next_step'], source_path=t['source_path'],
+                       next_step=task_steps[t['id']], source_path=t['source_path'],
                        source_sha256=source_versions[t['source_path']],
-                       verified_at=t.get('last_verified')) for t in visible_tasks]
+                       verified_at=t.get('last_verified'), **task_fields[t['id']]) for t in visible_tasks]
     fact_cards = [dict(id=f['memory_id'], statement=f['statement'], kind=f['kind'],
                        source_path=f['source_path'], source_sha256=source_versions[f['source_path']],
                        observed_at=f.get('observed_at')) for f in visible_facts]
@@ -1744,7 +1896,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     task_covers_topic = all(any(word_match(t,w) for w in task_words) for t in topic)
     # Only a single current active project task can be suggested, never executed.
     single = (task_cards[0] if len(resume_tasks) == 1 and len(task_cards) == 1
-              and task_cards[0]['status'] == 'active' and task_covers_topic and not explicit_history else None)
+              and task_cards[0]['status'] == 'active' and task_covers_topic and not explicit_history
+              and not task_cards[0]['next_step'].startswith('…')
+              and not task_conditions[task_cards[0]['id']] else None)
     delivered_outputs=[o for o in output_data['outputs'][:3]
                        if 'output:'+o['task_id']+':'+o['id'] in selected]
     latest_output=(delivered_outputs[0] if delivered_outputs and
