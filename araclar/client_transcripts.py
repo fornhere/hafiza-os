@@ -14,6 +14,9 @@ MAX_SOURCE = 64 * 1024 * 1024
 MAX_LINE = 16 * 1024 * 1024
 MAX_LINES = 200000
 CLIENTS = ('claude', 'antigravity')
+COUNT_VERSION = 'count_v1'
+COUNT_VARIANTS = ('legacy_commands', 'legacy_interrupts',
+                  'count_variant_5e735eb', 'count_variant_5c0fa24')
 
 
 class SourceError(ValueError):
@@ -153,6 +156,53 @@ def claude_user_text(text):
     return clean_user(''.join(pieces))
 
 
+# Kanıtlanmış tarihsel temizleyiciler; yalnız sayım metadata uyumluluğu.
+def count_variant_5e735eb(text):
+    for tag in ('recommended_plugins', 'environment_context', 'permissions instructions', 'in-app-browser-context'):
+        text = re.sub(r'<' + tag + r'(?:\s[^>]*)?>.*?</' + tag + r'>', '', text, flags=re.S)
+    text = text.strip()
+    if text.startswith('## My request:'):
+        text = text[len('## My request:'):].strip()
+    excluded = ('# AGENTS.md instructions', '<subagent_notification', '<turn_aborted',
+        '<hook_prompt', '[HAFIZA_KAPANIS]', '[HAFIZA_OTOMASYON]', '<system-reminder', '<goal>',
+        '<heartbeat', '<collaboration', '<codex_internal_context', '<in-app-browser-context',
+        '<task-notification')
+    return '' if text.startswith(excluded) else text
+
+
+def count_variant_5c0fa24(text):
+    # Tarihsel harness temizliği: kapanmamış sarmalayıcı kalan metni tüketir.
+    harness_tags = ('subagent_notification', 'turn_aborted', 'hook_prompt',
+        'system-reminder', 'goal', 'heartbeat', 'collaboration',
+        'codex_internal_context', 'task-notification', 'cross-session-message')
+    token = re.compile(r'<(?P<end>/)?(?P<tag>' + '|'.join(harness_tags)
+                       + r')(?=\s|/?>)(?P<attrs>[^>]*)>', re.I)
+    pieces = []; stack = []; cursor = 0
+    for match in token.finditer(text):
+        tag = match['tag'].lower()
+        if not stack:
+            pieces.append(text[cursor:match.start()])
+        if match['end']:
+            if stack and tag == stack[-1]:
+                stack.pop()
+        elif not match['attrs'].rstrip().endswith('/'):
+            stack.append(tag)
+        cursor = match.end()
+    if not stack:
+        pieces.append(text[cursor:])
+    text = ''.join(pieces)
+    for tag in ('recommended_plugins', 'environment_context', 'permissions instructions', 'in-app-browser-context'):
+        text = re.sub(r'<' + tag + r'(?:\s[^>]*)?>.*?</' + tag + r'>', '', text, flags=re.S)
+    text = text.strip()
+    if text.startswith('## My request:'):
+        text = text[len('## My request:'):].strip()
+    excluded = ('# AGENTS.md instructions', '<subagent_notification', '<turn_aborted',
+        '<hook_prompt', '[HAFIZA_KAPANIS]', '[HAFIZA_OTOMASYON]', '<system-reminder', '<goal>',
+        '<heartbeat', '<collaboration', '<codex_internal_context', '<in-app-browser-context',
+        '<task-notification', '<cross-session-message')
+    return '' if text.startswith(excluded) else text
+
+
 def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_interrupts=False,
           _receipt_metadata=False):
     # Capture rejects worker sessions; offline readers may filter individual turns.
@@ -168,6 +218,7 @@ def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_
     entries, ids, seen, user_count, prefix_count = [], [], {}, 0, 0
     # Historical Claude IDs are metadata only; never create legacy evidence.
     receipt_ids, receipt_interrupt_ids = [], []
+    variant_ids = {name: [] for name in COUNT_VARIANTS[2:]}
     terminal, prefix_terminal, previous_step = False, False, -1
     worker = False
     for number, raw in enumerate(lines, 1):
@@ -208,7 +259,11 @@ def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_
             seen[ident] = fingerprint
             text, tools = _text(msg.get('content'), user=kind == 'user')
             if _receipt_metadata and number <= boundary and kind == 'user' and not row.get('isMeta') and not tools:
-                # Exact pre-T63 (HEAD~1) predicate, plus pre-T45 interrupts.
+                # T63 metadata desenleri ve kanıtlanmış tarihsel sayımlar.
+                for name, cleaner in ((COUNT_VARIANTS[2], count_variant_5e735eb),
+                                      (COUNT_VARIANTS[3], count_variant_5c0fa24)):
+                    if cleaner(text):
+                        variant_ids[name].append(ident)
                 old_user = bool(clean_user(text))
                 old_interrupt = bool(re.fullmatch(
                     r'\s*\[Request interrupted by user(?: for tool use)?\]\s*', text, re.I))
@@ -294,6 +349,7 @@ def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_
                 total_lines=len(lines), latest_user=next((e for e in reversed(entries) if e['role'] == 'user'), None))
 
     if _receipt_metadata:
-        result['_receipt_counts'] = [dict(count=len(old_ids), message_ids=old_ids)
-                                     for old_ids in (receipt_ids, receipt_interrupt_ids)]
+        result['_receipt_counts'] = [dict(count_version=name, count=len(old_ids), message_ids=old_ids)
+            for name, old_ids in zip(COUNT_VARIANTS,
+                (receipt_ids, receipt_interrupt_ids, *variant_ids.values()))]
     return result

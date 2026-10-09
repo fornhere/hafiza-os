@@ -16,7 +16,7 @@ import time
 
 from platform_lock import exclusive_lock
 from hafiza import add_candidate, category_errors, contains_secret, valid_candidate_scope
-from client_transcripts import CLIENTS, SourceError, parse, private, read_bytes, safe_path, sha, strict_json
+from client_transcripts import COUNT_VERSION, COUNT_VARIANTS, CLIENTS, SourceError, parse, private, read_bytes, safe_path, sha, strict_json
 
 INBOX = Path('gelen-kutusu/ajan-oturumlari')
 MAX_REGISTRY = 5000
@@ -201,17 +201,24 @@ def _validate(item, state):
         raise SourceError('threshold_or_incomplete')
     if source['prefix_sha256'] != item['prefix_sha256'] or snapshot_id(source) != item['id']:
         raise SourceError('source_mutated')
+    count_version = item.get('count_version')
+    if count_version is not None and count_version not in (COUNT_VERSION, *COUNT_VARIANTS):
+        raise SourceError('invalid_count_version')
     def counts_match(parsed):
         return (parsed['count'] == item['count'] and
                 sha(json.dumps(parsed['message_ids']).encode()) == item['message_ids_sha256'])
     if not counts_match(source):
+        if count_version == COUNT_VERSION:
+            raise SourceError('source_mutated')
         # Compatibility is limited to old metadata, never threshold/evidence.
         # Recheck prefix/identity on this second read before matching any IDs.
         legacy = parse(item['client'], item['session'], item['path'], item['end_line'],
                        reject_workers=True, _receipt_metadata=True)
         if (legacy['prefix_sha256'] != item['prefix_sha256'] or
                 snapshot_id(legacy) != item['id'] or
-                not any(counts_match(counts) for counts in legacy['_receipt_counts'])):
+                legacy['count'] <= 5 or not legacy['terminal'] or
+                not any(counts_match(counts) for counts in legacy['_receipt_counts']
+                    if count_version is None or counts['count_version'] == count_version)):
             raise SourceError('source_mutated')
     return source
 
@@ -256,7 +263,7 @@ def register(vault, client, session, path, payload):
             _validate(item, state)
             return {'status': item['status'], 'id': ident}
         item = {k: source[k] for k in ('client', 'session', 'path', 'end_line', 'prefix_sha256', 'count')}
-        item.update(version=1, id=ident, status='pending', created_ns=time.time_ns(),
+        item.update(version=1, count_version=COUNT_VERSION, id=ident, status='pending', created_ns=time.time_ns(),
                     message_ids_sha256=sha(json.dumps(source['message_ids']).encode()))
         # Only the latest completed boundary of a session remains pending.
         for old_path in scan(state):
@@ -532,7 +539,7 @@ def review(vault, ident, decision, apply=False):
         operational = project_state_result(decision, source)
         candidate_results = semantic_results(decision, source, vault)
         note = semantic_note(ident, decision, candidate_results)
-        receipt = dict(version=1, id=ident, scope='episodic_candidate', decision=decision['decision'],
+        receipt = dict(version=1, count_version=COUNT_VERSION, id=ident, scope='episodic_candidate', decision=decision['decision'],
                        meaningful=decision['meaningful'], reviewer_role=decision['reviewer_role'],
                        reason=decision['reason'], summary=decision['summary'], evidence=refs,
                        semantic_candidates=[dict(result) for result in candidate_results],
@@ -541,6 +548,8 @@ def review(vault, ident, decision, apply=False):
             receipt['project_state'] = operational
         if target.exists():
             previous_receipt = load(target)
+            if 'count_version' not in previous_receipt:
+                receipt.pop('count_version')
             if any(previous_receipt.get(k) != value for k, value in receipt.items() if k != 'reviewed_ns'):
                 raise SourceError('receipt_conflict')
             if note is not None and not note_path.exists():
