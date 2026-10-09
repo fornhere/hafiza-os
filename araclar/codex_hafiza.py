@@ -35,9 +35,17 @@ def latest_session_command(vault):
     return shlex.join(argv)
 
 
-def opening_brief(vault):
+def opening_brief(vault, project_id=None):
     from is_ve_ders import brief
-    tasks = brief(vault)
+    tasks = brief(vault, limit=10000) if project_id else brief(vault)
+    if project_id:
+        from gorev_baglam import config
+        project = next((p for p in config(vault).get('projects', []) if p['id'] == project_id), {})
+        ids = set(project.get('task_ids', []))
+        tasks = [t for t in tasks
+                 if t.get('project_id') == project_id or (not t.get('project_id') and t['id'] in ids)][:3]
+        return '\n'.join(f"- {t['title']}: {t['next_step']} (kaynak: {t['source_path']}; teyit: {t['last_verified']})"
+                         for t in tasks)
     parts = ['## Güncel, teyitli açık işler\n' + ('\n'.join(
         f"- {t['title']}: {t['next_step']} (kaynak: {t['source_path']}; teyit: {t['last_verified']})"
         for t in tasks) or 'Güncel teyitli açık iş yok; eski işi kendiliğinden açma.')]
@@ -193,8 +201,11 @@ def _session_open_items_block(vault, section, limit):
     return block if block != header else ''
 
 
-def latest_session_section(vault, limit=2500, today=None):
+def latest_session_section(vault, limit=2500, today=None, project_id=None):
     """Read a fresh journal section, otherwise recent non-canonical receipts."""
+    # Serbest günlük/özet proje sahipliğini kanıtlamaz. Kapsamlı makbuzlar
+    # hook'un source-validated recall okuyucusundan ayrıca gelir.
+    if project_id: return ''
     today = today or dt.date.today()
     limit = max(0, limit)
     path = vault / 'zihin/son-oturum.md'
@@ -297,11 +308,11 @@ def account_context(state, emitted, suppressed=0):
     usage['token_count_method'] = 'not_measured'
 
 
-def shared_reviewed_context(vault):
+def shared_reviewed_context(vault, project_id=None):
     """Optional source-validated native recall; no model and no startup dependency."""
     try:
         from client_sessions import recall
-        return recall(vault, budget=1800)
+        return recall(vault, budget=1800, **(dict(project_id=project_id) if project_id else {}))
     except Exception:
         return ''
 
@@ -389,50 +400,61 @@ def _hook(vault, data):
         if not isinstance(turn, str) or not turn:
             raise ValueError('UserPromptSubmit turn_id gerekli')
         new_turn = turn not in state['turns']
+        if not new_turn and state.get('delivered_turn') == turn: return {}
         if new_turn:
             state['turns'].append(turn)
             state['count'] += 1
             state.pop('requested_turn', None)
             atomic(state_path, json.dumps(state))
-        from gorev_baglam import build_task_package
+        from gorev_baglam import build_task_package, config, memoryless_continuation
+        from client_hafiza import package_delta, recall_package, refresh_due, mark_refresh, final_delivered_lessons
+        renewal = bool(state.get("recontext_pending")) or refresh_due(state, state["count"])
+        no_memory = (not renewal and state['count'] > 1 and memoryless_continuation(current_user) and memoryless_continuation(
+            current_user, config(vault).get('projects', [])))
+        if no_memory:
+            from is_ve_ders import latest
+            no_memory = memoryless_continuation(current_user, cards=latest(vault, 'task').values())
         # The semantic advisor follows komuta/jev.json; HAFIZA_HOOK_JEV=0 keeps
         # this hook local (e.g. for latency or privacy checks).
         import contextlib, jev_client
         advisor = jev_client.disabled() if os.environ.get('HAFIZA_HOOK_JEV') == '0' else contextlib.nullcontext()
         previous_user = state.get('previous_user') if new_turn else None
-        with advisor:
-            package = build_task_package(vault, clean_user(str(data.get('prompt', ''))), cwd=data.get('cwd'), budget=2000,
-                                         previous_user=previous_user, session_project_id=state.get('session_project_id'))
+        package = dict(text='', selected_ids=[], project_id=state.get('session_project_id'))
+        if not no_memory:
+            with advisor:
+                package = build_task_package(vault, current_user, cwd=data.get('cwd'), budget=2000,
+                                             previous_user=previous_user, session_project_id=state.get('session_project_id'))
         if new_turn:
             if not private_scope:
                 state['previous_user'] = current_user[:800]
             else:
                 state.pop('previous_user', None)
-        lesson_text = package['text']
-        # One consecutive repeat may be omitted; the next prompt refreshes it.
-        # Hash includes source versions, not only rendered prose.
-        package_hash = hashlib.sha256(json.dumps(
-            {'text': lesson_text, 'sources': package.get('source_versions', {}),
-             'selected': package.get('selected_ids', [])},
-            sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-        cache = state.get('package_cache', {})
-        suppress = bool(lesson_text and package_hash == cache.get('hash') and not cache.get('suppressed'))
-        original_chars = len(lesson_text)
-        if suppress: lesson_text = ''
-        if lesson_text and not private_scope:
-            state['session_project_id'] = package.get('project_id')
-        state['package_cache'] = {'hash': package_hash, 'suppressed': suppress}
-        parts = ([opening_brief(vault)] if state['count'] == 1 and not state.get('opening_brief_sent') else [])
+        delivered = {} if renewal else dict(state.get('delivered_records', {}))
+        original_chars = len(package['text'])
+        lesson_text, pending = package_delta(package, delivered)
+        suppress = bool(original_chars and not lesson_text)
+        scope = dict(project_id=package['project_id']) if package.get('project_id') else {}
+        parts = ([opening_brief(vault, **scope)] if state['count'] == 1 and not state.get('opening_brief_sent') else [])
         if lesson_text:
             parts.append(lesson_text)
             if package.get('source_versions'):
                 parts.append('HAFIZA GÖRÜNÜRLÜĞÜ: Bu bağlamın gelmesi kullanım kanıtı değildir. Geçmiş bilgi somut seçimini etkilediyse kısa bir cümlede neyi nasıl uyguladığını kaynak bağlantısıyla belirt; etkilemediyse kullanım iddiası üretme. Aynı bildirimi değişiklik yokken tekrarlama. Uyarlama önerisini yeni kullanıcı onayı sayma. Kayıt bildirimi yalnız başarılı yazma ve geri okuma kanıtından sonra; dry-run, bekleyen aday veya değişmeyen kayıt için kaydettim deme.')
-        shared = shared_reviewed_context(vault)
+        shared = shared_reviewed_context(vault, **scope) if not no_memory else ''
         if shared:
-            parts.append(shared)
+            shared, markers = package_delta(recall_package(shared, package.get('project_id')), delivered, shared)
+            pending.extend(markers)
+            if shared: parts.append(shared)
+        parts = [part for part in parts if part.strip()]
         emitted = '\n\n'.join(parts)
-        state['delivered_lessons']=[r for r in package.get('delivered_lessons', [])
-            if lesson_text and package['delivered_lesson_segments'][r['id']] in emitted]
+        if lesson_text and not private_scope:
+            state['session_project_id'] = package.get('project_id')
+        state['last_delivery'] = {key: version for key, version, shown in pending if shown in emitted}
+        delivered.update(state['last_delivery'])
+        state['delivered_records'] = delivered
+        state['delivered_turn'] = turn
+        if renewal or 'refresh_turn' not in state:
+            mark_refresh(state, state['count'])
+        state['delivered_lessons'] = final_delivered_lessons(package, pending, emitted)
         state['package_id']=package.get('package_id')
         from fayda_olc import record_delivery
         source_end_line=None
@@ -450,10 +472,14 @@ def _hook(vault, data):
         atomic(state_path, json.dumps(state))
         if parts:
             return {'hookSpecificOutput': {'hookEventName': event,
-                    'additionalContext': '\n\n'.join(parts)}}
+                    'additionalContext': emitted}}
         return {}
     if event == 'SessionStart':
+        state['context_generation'] = state.get('context_generation', 0) + 1
+        state['recontext_pending'] = True
         state.pop('package_cache', None)
+        state.pop('delivered_records', None)
+        state.pop('delivered_turn', None)
         state['opening_brief_sent'] = True
         queue = vault / INBOX
         missing = len(list(queue.glob('*.pending.json')))
@@ -471,10 +497,15 @@ def _hook(vault, data):
             f'Bu oturumda sayılan kullanıcı mesajı: {state["count"]}. '
             'Hafıza kaydı arka plan konsolidasyonunda yapılır; cevap sonunda makbuz '
             'isteme ve sohbeti kayıt bildirimiyle bölme. Basit kısa sorular hafızaya girmez. '
-            'Kataloğa ve Mem0’a doğrudan yazma.\n\n' + health_notice + '\n\n' + opening_brief(vault))
-        shared = shared_reviewed_context(vault)
+            'Kataloğa ve Mem0’a doğrudan yazma.\n\n' + health_notice + '\n\n' + opening_brief(vault,
+                **(dict(project_id=state['session_project_id']) if state.get('session_project_id') else {})))
+        shared = shared_reviewed_context(vault,
+            **(dict(project_id=state['session_project_id']) if state.get('session_project_id') else {}))
         if shared:
             context += '\n\n' + shared
+            from client_hafiza import package_delta, recall_package
+            _, markers = package_delta(recall_package(shared, state.get('session_project_id')), {}, shared)
+            state['delivered_records'] = {key: version for key, version, _ in markers}
         account_context(state, len(context))
         atomic(state_path, json.dumps(state))
         return {'hookSpecificOutput': {'hookEventName': event, 'additionalContext': context}}

@@ -300,6 +300,66 @@ class ProjectState(NativeFixture):
         card = self.work.latest(self.vault, 'task')['project-state:demo']
         self.assertEqual(sessions.recall(self.vault, exclude_cards=[card]), '')
 
+    def test_recall_requires_matching_explicit_project(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        sessions.review(self.vault, ident, decision, True)
+        project = decision['project_state']['project_id']
+        self.assertIn('Asistan bildirimi',sessions.recall(self.vault,project_id=project))
+        self.assertEqual(sessions.recall(self.vault,project_id='proj-b'),'')
+        # Özetsiz sahiplik tahmini yapılmaz; eski belirsiz kapsam yolu korunur.
+        self.assertIn('Asistan bildirimi',sessions.recall(self.vault))
+
+    def test_old_interrupt_count_receipt_requires_exact_source_and_id_hash(self):
+        notice = dict(type='user', uuid='native-interrupt', sessionId=self.session,
+            isSidechain=False, message=dict(role='user',content='[Request interrupted by user]'))
+        self.rows.insert(2, notice)
+        self.write()
+        ident = self.register()['id']
+        sessions.review(self.vault,ident,self.decision(ident),True)
+        root,state=sessions.layout(self.vault)
+        item=sessions.load(state/(ident+'.json'))
+        old=parse(self.client,self.session,self.path,legacy_interrupts=True)
+        item['count']=old['count']
+        item['message_ids_sha256']=sessions.sha(json.dumps(old['message_ids']).encode())
+        sessions.atomic(state/(ident+'.json'),item)
+        self.assertIn('Asistan bildirimi',sessions.recall(self.vault,project_id='demo'))
+        item['message_ids_sha256']='0'*64
+        sessions.atomic(state/(ident+'.json'),item)
+        self.assertEqual(sessions.recall(self.vault,project_id='demo'),'')
+
+    def test_unscoped_verified_receipt_matches_explicit_alias_only(self):
+        ident = self.register()['id']
+        decision = self.decision(ident)
+        decision['project_state']['project_id'] = None
+        decision['project_state']['rationale'] = 'Atlas için etkin kimlik bulunamadı; PR #64 ve K4c korunmalı.'
+        decision['summary'] = 'Asistan #64 PR açtı; iki izin listesi mapping kontrolü ve K4c doğrulaması sürüyor.'
+        sessions.review(self.vault, ident, decision, True)
+        with patch('gorev_baglam.config', return_value={'projects':[dict(id='proj-a', aliases=['Atlas'])]}):
+            text = sessions.recall(self.vault,project_id='proj-a',budget=500)
+            for marker in ('#64','izin listesi','mapping','K4c','Proje kimliği yok'):
+                self.assertIn(marker,text)
+            for foreign in ('proj-b','At','AtlasX'):
+                self.assertEqual(sessions.recall(self.vault,project_id=foreign),'')
+            import codex_hafiza as codex
+            for client in ('claude','codex'):
+                package=dict(text='Yerel kart', project_id='proj-a',selected_ids=[])
+                with (patch.object(hooks,'claude_task_package',return_value=package),
+                      patch('gorev_baglam.build_task_package',return_value=package),
+                      patch.object(codex,'opening_brief',return_value=''),
+                      patch.object(codex,'latest_session_section',return_value='')):
+                    if client=='claude':
+                        output=hooks.context(self.vault,client,'scoped-reader',None,
+                            {'prompt':'Atlas durumunu incele'},'UserPromptSubmit')
+                    else:
+                        output=str(codex.hook(self.vault,dict(session_id='scoped-reader',
+                            hook_event_name='UserPromptSubmit',turn_id='1',prompt='Atlas durumunu incele')))
+                    for marker in ('#64','izin listesi','mapping','K4c'):
+                        self.assertIn(marker,output)
+            # Still requires the original source to pass validation.
+            self.path.write_text('changed source')
+            self.assertEqual(sessions.recall(self.vault,project_id='proj-a'),'')
+
     def test_opening_receipt_does_not_repeat_as_first_prompt_state_card(self):
         ident = self.register()['id']
         sessions.review(self.vault, ident, self.decision(ident), True)
@@ -313,7 +373,7 @@ class ProjectState(NativeFixture):
             self.assertIn('Asistan bildirimi',start)
             prompt = hooks.context(self.vault,'claude','new-reader',None,
                                    {'prompt':'Demo durumunu göster'},'UserPromptSubmit')
-            self.assertNotIn(segment,prompt)
+            self.assertIn(segment,prompt)
             marker_path = sessions.policy_path(self.vault / sessions.INBOX / '.state','claude','new-reader')
             self.assertNotIn('Uygulama tamamlandı',marker_path.read_text())
 
@@ -1079,8 +1139,10 @@ class NativeSessions(NativeFixture):
                                      'Reviewed session context', 'Current task context'):
                         self.assertIn(expected, text)
                     repeated, _ = hooks.hook(self.vault, self.client, 'UserPromptSubmit', payload)
-                    self.assertEqual(repeated, {})
-            self.assertEqual(opening.call_count, 4)
+                    self.assertIn('Current task context', repeated['hookSpecificOutput']['additionalContext'])
+                    duplicate, _ = hooks.hook(self.vault, self.client, 'UserPromptSubmit', payload)
+                    self.assertEqual(duplicate, {})
+            self.assertEqual(opening.call_count, 7)
 
     def test_claude_session_start_keeps_existing_privacy_exclusion(self):
         with self.assertRaisesRegex(SourceError, 'privacy_blocked'):
@@ -1139,10 +1201,15 @@ class NativeSessions(NativeFixture):
         self.agy()
         out, _ = self.cli('PreInvocation')
         self.assertIn('injectSteps', out)
+        target = self.vault / sessions.INBOX / '.state' / ('context-' + sessions.sha(
+            (self.client+'\0'+self.session).encode()) + '.json')
+        before = sessions.load(target)['query_sha256']
         repeated = dict(self.rows[-2], step_index=12)
         self.rows.append(repeated); self.write()
         out, _ = self.cli('PreInvocation')
-        self.assertIn('injectSteps', out)
+        self.assertNotEqual(sessions.load(target)['query_sha256'],before)
+        # Yeni tur boş delta taşıyabilir; yalnız güven başlığını teslim etme.
+        self.assertEqual(out,{})
         self.assertEqual(parse(self.client, self.session, self.path)['count'], 7)
 
     def test_terminal_metadata_error_cannot_register_success(self):

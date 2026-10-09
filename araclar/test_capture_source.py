@@ -12,6 +12,12 @@ import codex_hafiza as hook
 
 
 class NativeOriginTests(unittest.TestCase):
+    def test_interruption_notices_preserve_attached_request(self):
+        for notice in ('[Request interrupted by user]', '[Request interrupted by user for tool use]'):
+            self.assertEqual(c.clean_user(notice), '')
+            self.assertEqual(c.clean_user(notice+'\nGerçek istek'), 'Gerçek istek')
+            self.assertEqual(c.clean_user('Gerçek istek\n'+notice), 'Gerçek istek')
+
     def test_t30_delivery_and_attachment_metadata(self):
         # T30 B:9318/9330/9481/9545 and B:9445, synthetic bodies.
         for metadata in (

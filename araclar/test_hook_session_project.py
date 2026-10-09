@@ -38,7 +38,9 @@ class SessionProjectTests(unittest.TestCase):
             kwargs.get('session_project_id'))
         project = projects[0]['id'] if len(projects) == 1 else None
         self.calls.append((kwargs.get('session_project_id'), project, reason))
-        return dict(text=f'Context: {query} ({project})', project_id=project)
+        text = f'Context: {query} ({project})'
+        return dict(text=text, project_id=project, delivered_segments={'card-a':text},
+                    delivery_versions={'card-a':client_sessions.sha(text.encode())})
 
     def prompt(self, client, query, session='s1', turn='t1', **extra):
         if client == 'claude':
@@ -57,9 +59,9 @@ class SessionProjectTests(unittest.TestCase):
             with self.subTest(client=client):
                 self.prompt(client, 'Atlas ne durumda')
                 self.assertEqual(json.loads(self.state_path(client).read_text())['session_project_id'], 'x')
-                self.prompt(client, 'devam et', turn='t2')
+                self.prompt(client, 'kaldığımız yerden devam et', turn='t2')
                 self.assertEqual(self.calls[-1], ('x', 'x', 'session_project'))
-                self.prompt(client, 'devam et', session='s2')
+                self.prompt(client, 'kaldığımız yerden devam et', session='s2')
                 self.assertEqual(self.calls[-1], (None, None, 'unresolved'))
 
     def test_explicit_and_cwd_precedence(self):
@@ -69,7 +71,7 @@ class SessionProjectTests(unittest.TestCase):
                 self.prompt(client, 'Boreal ne durumda', turn='t2')
                 self.assertEqual(self.calls[-1], ('x', 'y', 'explicit'))
                 self.prompt(client, 'Atlas ne durumda', turn='t3')
-                self.prompt(client, 'devam et', turn='t4', cwd=str(self.vault / 'workspace'))
+                self.prompt(client, 'kaldığımız yerden devam et', turn='t4', cwd=str(self.vault / 'workspace'))
                 self.assertEqual(self.calls[-1], ('x', 'y', 'cwd'))
 
     def test_archived_and_removed_project_not_inherited(self):
@@ -82,7 +84,7 @@ class SessionProjectTests(unittest.TestCase):
                     original = list(self.projects)
                     if status == 'removed': self.projects = self.projects[1:]
                     else: self.projects[0]['status'] = status
-                    self.prompt(client, 'devam et', session=session, turn='t2')
+                    self.prompt(client, 'kaldığımız yerden devam et', session=session, turn='t2')
                     self.assertEqual(self.calls[-1], ('x', None, 'unresolved'))
                     self.projects = original
 
@@ -95,14 +97,14 @@ class SessionProjectTests(unittest.TestCase):
                 except SourceError as error:
                     self.assertEqual(str(error), 'private_context')
                 self.assertIsNone(json.loads(self.state_path(client).read_text()).get('session_project_id'))
-                self.prompt(client, 'devam et', turn='t3')
+                self.prompt(client, 'kaldığımız yerden devam et', turn='t3')
                 self.assertEqual(self.calls[-1], (None, None, 'unresolved'))
 
     def test_private_prompt_clears_scope_and_blocks_inheritance(self):
         for client in ('claude', 'codex'):
             with self.subTest(client=client):
                 self.prompt(client, 'Atlas ne durumda')
-                for query, turn in [('Bu oturumu kaydetme.', 't2'), ('devam et', 't3')]:
+                for query, turn in [('Bu oturumu kaydetme.', 't2'), ('kaldığımız yerden devam et', 't3')]:
                     try:
                         self.prompt(client, query, turn=turn)
                     except SourceError as error:
@@ -214,7 +216,9 @@ class SessionProjectTests(unittest.TestCase):
     def test_codex_suppressed_package_does_not_replace_last_delivered_scope(self):
         self.prompt('codex', 'Atlas ne durumda')
         with patch.object(gorev_baglam, 'build_task_package', return_value={
-                'text': 'Context: Atlas ne durumda (x)', 'project_id': 'y'}):
+                'text': 'Context: Atlas ne durumda (x)', 'project_id': 'y',
+                'delivered_segments': {'card-a':'Context: Atlas ne durumda (x)'},
+                'delivery_versions': {'card-a':client_sessions.sha(b'Context: Atlas ne durumda (x)')}}):
             self.prompt('codex', 'Continue', turn='t2')
         self.assertEqual(json.loads(self.state_path('codex').read_text())['session_project_id'], 'x')
 
@@ -223,7 +227,7 @@ class SessionProjectTests(unittest.TestCase):
         for mode in ('off', 'on', 'shadow'):
             with self.subTest(mode=mode), patch.object(jev_client, 'load_config', return_value=dict(
                     jev_client.DEFAULTS, mode=mode, claude_hook_mode=mode)):
-                claude.claude_task_package(self.vault, 'devam et', session_project_id='x')
+                claude.claude_task_package(self.vault, 'kaldığımız yerden devam et', session_project_id='x')
                 self.assertEqual(self.calls[-1], ('x', 'x', 'session_project'))
 
     def test_real_package_builder_continues_delivered_project(self):
@@ -234,7 +238,7 @@ class SessionProjectTests(unittest.TestCase):
             for client in ('claude', 'codex'):
                 with self.subTest(client=client):
                     self.prompt(client, 'Atlas ne durumda')
-                    self.prompt(client, 'devam et', turn='t2')
+                    self.prompt(client, 'kaldığımız yerden devam et', turn='t2')
                     self.assertEqual(build.call_args.kwargs['session_project_id'], 'x')
                     self.assertEqual(json.loads(self.state_path(client).read_text())['session_project_id'], 'x')
 
@@ -245,5 +249,5 @@ class SessionProjectTests(unittest.TestCase):
         source = dict(latest_user=dict(quote='Atlas ne durumda', message_id='old'),
                       entries=[dict(role='user', quote='Atlas ne durumda')])
         claude.context(self.vault, 'claude', 's1', source,
-                       dict(prompt='devam et'), 'UserPromptSubmit')
+                       dict(prompt='kaldığımız yerden devam et'), 'UserPromptSubmit')
         self.assertEqual(self.calls[-1], (None, None, 'unresolved'))

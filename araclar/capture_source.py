@@ -27,6 +27,8 @@ def installation_version():
 
 
 def clean_user(text):
+    # Kesinti bildirimi niyet değildir; yanındaki gerçek isteği koru.
+    text = re.sub(r'\[Request interrupted by user(?: for tool use)?\]', '', text, flags=re.I)
     # A slash invocation and its expansion are separate native user records
     # (T30 A:2938/2939). Only explicit arguments carry user intent.
     if re.search(r'<command-(?:message|name|args)(?=\s|/?>)', text, re.I):

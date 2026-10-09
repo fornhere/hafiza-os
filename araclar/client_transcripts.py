@@ -126,7 +126,7 @@ def source_path(client, session, path):
     return path
 
 
-def parse(client, session, path, end_line=None, *, reject_workers=False):
+def parse(client, session, path, end_line=None, *, reject_workers=False, legacy_interrupts=False):
     # Capture rejects worker sessions; offline readers may filter individual turns.
     path = source_path(client, session, path)
     data = read_bytes(path)
@@ -178,7 +178,8 @@ def parse(client, session, path, end_line=None, *, reject_workers=False):
             seen[ident] = fingerprint
             text, tools = _text(msg.get('content'), user=kind == 'user')
             # Harness notifications arrive as user rows but are not user requests.
-            genuine = kind == 'user' and not row.get('isMeta') and not tools and bool(clean_user(text))
+            genuine = kind == 'user' and not row.get('isMeta') and not tools and (bool(clean_user(text)) or
+                legacy_interrupts and bool(re.fullmatch(r'\s*\[Request interrupted by user(?: for tool use)?\]\s*', text, re.I)))
             usable = kind == 'assistant' and not tools and not row.get('isMeta') and not any(row.get(k) or msg.get(k) for k in ('error', 'isApiErrorMessage')) and isinstance(msg.get('model'), str) and msg['model'] not in ('<synthetic>', 'synthetic') and row.get('model') not in ('<synthetic>', 'synthetic')
             terminal = usable and bool(text.strip()) and msg.get('stop_reason') in ('end_turn', 'stop_sequence')
             role = 'user' if genuine else 'assistant' if usable else None

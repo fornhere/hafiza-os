@@ -199,8 +199,19 @@ def _validate(item, state):
     source = source_with_policy(state, item['client'], item['session'], item['path'], item['end_line'])
     if source['count'] <= 5 or not source['terminal']:
         raise SourceError('threshold_or_incomplete')
-    if source['prefix_sha256'] != item['prefix_sha256'] or snapshot_id(source) != item['id'] or source['count'] != item['count'] or sha(json.dumps(source['message_ids']).encode()) != item['message_ids_sha256']:
+    if source['prefix_sha256'] != item['prefix_sha256'] or snapshot_id(source) != item['id']:
         raise SourceError('source_mutated')
+    def counts_match(parsed):
+        return (parsed['count'] == item['count'] and
+                sha(json.dumps(parsed['message_ids']).encode()) == item['message_ids_sha256'])
+    if not counts_match(source):
+        # T45 stopped counting native interrupt notices as genuine requests.
+        # Old receipts must still match their exact byte prefix, identity, and
+        # old count/ID hash. The >5 gate above always uses today's genuine count.
+        legacy = parse(item['client'], item['session'], item['path'], item['end_line'],
+                       reject_workers=True, legacy_interrupts=True)
+        if not counts_match(legacy):
+            raise SourceError('source_mutated')
     return source
 
 
@@ -674,7 +685,21 @@ def unique_states(cards):
     return groups
 
 
-def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), delivered_cards=None):
+def receipt_project_matches(vault, receipt, project_id):
+    """Called only after receipt/source hashes pass; explicit IDs take precedence."""
+    report = receipt.get('project_state') or {}
+    if report.get('project_id'):
+        return report['project_id'] == project_id
+    from gorev_baglam import config
+    project = next((p for p in config(vault).get('projects', []) if p['id'] == project_id), {})
+    names = [project_id, *project.get('aliases', [])]
+    # Ownership must be explicit in the reviewed rationale/note, not free agenda.
+    text = '\n'.join(str(x or '') for x in (receipt.get('reason'), report.get('rationale')))
+    return any(re.search(r'(?<!\w)' + re.escape(name) + r'(?!\w)', text, re.IGNORECASE)
+               for name in names if isinstance(name, str) and name)
+
+
+def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), delivered_cards=None, project_id=None):
     budget = max(0, min(int(budget), 6500))
     oldest_ns = time.time_ns() - int(max_age_days * 86400 * 1e9)
     with locked(vault) as (root, state):
@@ -707,6 +732,8 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), d
                 if not isinstance(summary, str) or contains_secret(summary) or private(summary):
                     continue
                 report = receipt.get('project_state')
+                if project_id and not receipt_project_matches(vault, receipt, project_id):
+                    continue
                 if not isinstance(report, dict) and identity in seen_sessions:
                     continue
                 if isinstance(report, dict) and report.get('assertion_kind') == 'assistant_report':
@@ -722,7 +749,11 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), d
                                    + '\nSonraki adım: ' + report['next_step'])
                     if contains_secret(report_text) or private(report_text):
                         continue
-                    summary = report_text + '\n' + summary
+                    if project_id and not report.get('project_id'):
+                        # Put the reviewed task details before verbose state fields.
+                        summary = 'Proje kimliği yok; kapsam gerekçeden eşleşti.\n' + summary + '\n' + report_text
+                    else:
+                        summary = report_text + '\n' + summary
                 header = f"Episodic candidate ({item['client']}, {item['id']}): "
                 available = budget - used - len(header) - (1 if parts else 0)
                 if available < 80:
