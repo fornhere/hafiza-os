@@ -39,7 +39,8 @@ class Capsule(unittest.TestCase):
         self.assertIsNone(p['capsule']['suggested_next_step'])
     def test_limits_and_dropped_tasks_do_not_create_single_choice(self):
         for i in range(5):self.task(str(i))
-        for i in range(7):self.fact(str(i))
+        # Distinct records exercise the capsule limit; shared IDs collapse by design.
+        for i in range(7):self.fact('fact-'+str(i))
         p=self.package();c=p['capsule'];self.assertEqual(len(c['tasks']),3);self.assertEqual(len(c['facts']),5)
         self.assertEqual(c['available_task_count'],5);self.assertEqual(c['omitted_task_count'],2)
         self.assertIsNone(c['suggested_next_step']);self.assertIn('birden fazla',p['text'])
