@@ -67,8 +67,8 @@
       "path": "araclar/konsolidasyon.py",
       "mode": "reviewed-variant",
       "reason": "Private historic exclusion and memory ID prefix versus public defaults.",
-      "local_sha256": "bf26187dfcfe0b390a0793db66d7c9c812e1ec4f421b6ed467aff4c5537d5fbf",
-      "public_sha256": "b1cb527972a0a35dfb385dbeac4092ab2d2c56713a2f7061034b6f579d8510d1"
+      "local_sha256": "74ccb3916230d567f05e57cb543dcd39fd4dcf6bc0747127ee04bc3a6d83c9f3",
+      "public_sha256": "9b1dac397ab034bc4eb542c038c63be77b28499e9ceedfb01f0e2e025fcf50af"
     },
     {
       "path": "araclar/kullanim_kontrol.py",
