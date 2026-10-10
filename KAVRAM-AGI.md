@@ -42,7 +42,10 @@ python3 araclar/kavram_agi.py --vault . export --apply
 `beyin/Beyin.md` kavramları listeler; `beyin/kavramlar/` her kavram için
 üye kayıtları, bilgi kartlarını, ilgili kavramları ve projeleri bağlar;
 `beyin/hafıza/` her etkin, normal hassasiyetli ve kaynağı geçerli katalog
-kaydı için bir not taşır. Karantinadaki, silinmiş veya kaynağı değişmiş kayıt
+kaydı için bir not taşır. Kavram notları ayrıca başlığı (Codex makbuzunda ilk
+özet paragrafı) kavram sözcükleriyle eşleşen oturumları listeler; bir oturum en
+fazla üç kavrama bağlanır, eski kayıtlar düzenlenmez. Bu konu ilişkisidir, kanıt
+veya karar değildir. Karantinadaki, silinmiş veya kaynağı değişmiş kayıt
 dökülmez. Dosyalar yönetilen anlık görüntüdür: sonlarındaki işaret içerik
 hash'ini taşır, elle değişen dosyanın üzerine yazılmaz, artık karşılığı
 olmayan dosya silinir. Aramanın doğruluk kaynağı katalogdur, bu sayfalar değil.

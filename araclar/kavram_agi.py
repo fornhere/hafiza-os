@@ -160,6 +160,52 @@ def _project(scope):
     return scope.split(':', 1)[1] if isinstance(scope, str) and scope.startswith('project:') else None
 
 
+SESSION_DIRS = (Path('günlük/oturumlar'), Path('gelen-kutusu/codex-oturumları'))
+SESSION_LIMIT = 3
+
+
+def _session_topic(path):
+    """Session title (H1) or, for hash-named receipts, the first summary paragraph."""
+    lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+    title = next((l[2:].strip() for l in lines if l.startswith('# ')), path.stem)
+    if 'makbuzu' in title.lower() or re.fullmatch(r'[0-9a-f]{16,}', path.stem):
+        body = [l for l in lines if l.strip() and not l.startswith(('#', '<!--', 'Durum:', '[[', '---'))]
+        return (body[0][:240] if body else ''), title
+    return title, title
+
+
+def sessions(vault, concepts):
+    """concept id -> [(relative path, label)]; topic association, never evidence.
+
+    Only a session's own title/summary is read and old receipts are not edited;
+    each session joins at most SESSION_LIMIT concepts, the strongest matches."""
+    from gorev_baglam import content_words, word_match
+    vault = Path(vault)
+    vocab = {c['id']: content_words(' '.join(c['selectors'] + c.get('aliases', []))) for c in concepts}
+    result = {c['id']: [] for c in concepts}
+    for folder in SESSION_DIRS:
+        root = vault / folder
+        if not root.is_dir() or root.is_symlink():
+            continue
+        for path in sorted(root.glob('*.md'), reverse=True):
+            if path.name.lower() == 'readme.md' or path.is_symlink():
+                continue
+            try:
+                topic, title = _session_topic(path)
+            except OSError:
+                continue
+            if not topic or h.contains_secret(topic):
+                continue
+            words = content_words(topic)
+            hits = sorted(((sum(any(word_match(v, w) for v in vocab[cid]) for w in words), cid)
+                           for cid in vocab), reverse=True)
+            for count, cid in hits[:SESSION_LIMIT]:
+                if count:
+                    label = _short(title if not title.lower().startswith('codex') else topic, 70)
+                    result[cid].append((path.relative_to(vault).with_suffix('').as_posix(), label))
+    return result
+
+
 def build(vault):
     """Pure graph model: concepts, memory nodes, knowledge cards, edges."""
     import bilgi_agi
@@ -193,6 +239,9 @@ def build(vault):
         for i, a in enumerate(ids):
             for b in ids[i + 1:]:
                 edges.setdefault(tuple(sorted((a, b))), set()).add('ortak kayıt')
+    linked = sessions(vault, concepts)
+    for cid, node in nodes.items():
+        node['sessions'] = linked.get(cid, [])
     return dict(concepts=nodes, memories=catalog, names=names, memberships=mem_of,
                 cards=cards, card_memberships=card_of, edges=edges, diagnostics=diagnostics)
 
@@ -219,7 +268,8 @@ def render(vault, model):
 
     hub = ['# Beyin', '', CAUTION, '', '## Kavramlar', '']
     for cid, n in sorted(concepts.items(), key=lambda kv: (-len(kv[1]['memories']) - len(kv[1]['cards']), kv[0])):
-        hub.append(f"- {link(cid)} — {len(n['memories'])} kayıt, {len(n['cards'])} bilgi kartı")
+        hub.append(f"- {link(cid)} — {len(n['memories'])} kayıt, {len(n['cards'])} bilgi kartı, "
+                   f"{len(n.get('sessions', []))} oturum")
     loose = [r for r in model['memories'] if r['memory_id'] not in model['memberships']]
     if loose:
         hub += ['', '## Kavramı olmayan kayıtlar', '']
@@ -251,6 +301,9 @@ def render(vault, model):
             lines += [f"- {link(o)} — {', '.join(sorted(why))}" for o, why in near]
         if n['projects']:
             lines += ['', '## Projeler', ''] + [f"- {project_link(p)}" for p in n['projects']]
+        if n.get('sessions'):
+            lines += ['', '## İlgili oturumlar', '', 'Başlık/özet eşleşmesi; kayıt veya karar değildir.', '']
+            lines += [f"- [[{path}|{label.replace('|', '/').replace(']', ')')}]]" for path, label in n['sessions']]
         lines += ['', '---', CAUTION]
         files[f"kavramlar/{_filename(c['title'])}.md"] = '\n'.join(lines) + '\n'
 

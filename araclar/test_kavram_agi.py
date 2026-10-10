@@ -115,6 +115,17 @@ class ExportTests(Fixture):
         self.assertFalse(any("sarı-beyaz" in p.read_text(encoding="utf-8")
                              for p in (self.vault / "beyin").rglob("*.md")))
 
+    def test_sessions_link_by_title_without_editing_them(self):
+        log = self.vault / "günlük" / "oturumlar" / "2026-01-01 Mikrofon ayarı konuşuldu.md"
+        log.parent.mkdir(parents=True)
+        log.write_text("# Mikrofon ayarı konuşuldu\n\nGövde.\n", encoding="utf-8")
+        before = log.read_bytes()
+        k.export(self.vault, apply=True)
+        concept = (self.vault / "beyin" / "kavramlar" / "Çekim ve ses.md").read_text(encoding="utf-8")
+        self.assertIn("[[günlük/oturumlar/2026-01-01 Mikrofon ayarı konuşuldu|", concept)
+        self.assertNotIn("Mikrofon ayarı", (self.vault / "beyin" / "kavramlar" / "Kurgu.md").read_text(encoding="utf-8"))
+        self.assertEqual(log.read_bytes(), before)
+
     def test_dry_run_writes_nothing(self):
         result = k.export(self.vault)
         self.assertFalse(result["applied"])
