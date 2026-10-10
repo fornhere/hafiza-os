@@ -1408,13 +1408,15 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if suppressed_count:
         add('suppressed-history',f'{suppressed_count} eski kayıt bastırıldı; tarihçe için karar_gecmisi.')
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
+    concept_rank = None
     if skip_memory:
         ranked_catalog, knowledge_data, catalog_evaluation = [], None, None
     elif rerank_state is None:
         from jev_retrieval import catalog as semantic_catalog
         # Local ranking only; a semantic advisor keeps its own inputs.
         from kavram_agi import ranker as concept_ranker
-        local_rank = functools.partial(concept_ranker(vault, rank_records), ignore=project_terms(project) if project else (),
+        concept_rank = concept_ranker(vault, rank_records)
+        local_rank = functools.partial(concept_rank, ignore=project_terms(project) if project else (),
                                        context=previous_user, expansion=area_expansion(query),
                                        tie_break=lambda row: (row.get('scope') != scope, row.get('memory_id', '')))
         catalog_future = submit(semantic_catalog, vault, query, eligible, local_rank, scope)
@@ -1426,7 +1428,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
         if catalog_evaluation.get('degraded'):
             from konu_sentezi import _retrieve_local
             from kavram_agi import ranker as concept_ranker
-            ranked_catalog = concept_ranker(vault, rank_records)(eligible, query)
+            concept_rank = concept_ranker(vault, rank_records)
+            ranked_catalog = concept_rank(eligible, query)
             knowledge_data = _retrieve_local(vault, query, project_id=project['id'] if project else None,
                                              budget=min(1800, budget)) if (vault / 'bilgi').is_dir() else None
     from jev_retrieval import static_preferences, recall_settings
@@ -1463,7 +1466,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     omitted.extend(row['memory_id']+':other_subtask_catalog' for row in profile_rows
                    if row['memory_id'] in foreign_catalog and row['memory_id']+':other_subtask_catalog' not in omitted)
     profile_rows = [row for row in profile_rows if row['memory_id'] not in foreign_catalog]
-    ranked_ids = {row['memory_id'] for row in ranked_catalog}
+    concept_additions = getattr(concept_rank, 'additions', set()) if concept_rank else set()
+    ranked_ids = {row['memory_id'] for row in ranked_catalog if row['memory_id'] not in concept_additions}
     profile_ids = set()
     profile_used = 0
     # A reserved, bounded share; complete claims only, no truncated conditions.
@@ -1497,6 +1501,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             source_versions[row['source_path']]=eligible_versions[row['source_path']]
 
     for rank_index, row in enumerate(ranked_catalog):
+        if row['memory_id'] in concept_additions and row['memory_id'] in profile_ids: continue
         rank_index = catalog_indices[row['memory_id']]
         # A source-derived card requires a reviewed source revision, not a new
         # hash computed from an unreviewed legacy statement's current file.

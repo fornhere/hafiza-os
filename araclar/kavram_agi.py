@@ -140,6 +140,7 @@ def ranker(vault, rank):
         from gorev_baglam import content_words, word_match
         rows = list(rows)
         base = rank(rows, query, **options)
+        ranked.additions = set()
         keys = concept_keys(vault, rows)
         terms = content_words(query)
         hit = {mid for mid, words in keys.items()
@@ -151,8 +152,12 @@ def ranker(vault, rank):
         back = {id(k): r for k, r in zip(keyed, rows)}
         chosen = {id(r) for r in base}
         extra = [back.get(id(r), r) for r in rank(keyed, query, **options)]
-        extra = [r for r in extra if id(r) not in chosen and r.get('memory_id') in hit]
-        return base + extra[:ADDITIONS]
+        extra = [r for r in extra if id(r) not in chosen and r.get('memory_id') in hit][:ADDITIONS]
+        # Callers with other channels (e.g. scope profiles) must let those
+        # channels claim a record first; an addition never displaces it.
+        ranked.additions = {r.get('memory_id') for r in extra}
+        return base + extra
+    ranked.additions = set()
     return ranked
 
 
