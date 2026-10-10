@@ -1521,7 +1521,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             priority,sequence,ident,text=candidates[-1]
             # Alternate catalog cards and note cards at the same priority.
             # A whole note dossier must not exhaust the record budget first.
-            candidates[-1]=(0.5,2*rank_index,ident,text)
+            # Concept additions only use budget left after every real segment.
+            candidates[-1]=(19 if row['memory_id'] in concept_additions else 0.5,2*rank_index,ident,text)
             source_versions[row['source_path']]=eligible_versions[row['source_path']]
     if project:
         add('project', 'Proje: '+project['id'])

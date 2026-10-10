@@ -242,8 +242,16 @@ class TaskPackageTests(unittest.TestCase):
                       ("kayıt öncesinde denetlemeyi", "sabit tutmayı", "denemeyle belirlemeyi",
                        "cihaz üzerinden ayarlamayı", "işlem sonrasında yeniden ölçmeyi")]
         statements.append("Kullanıcı video anlatımını kısa tutmayı tercih eder.")
+        (self.root / "komuta").mkdir(exist_ok=True)
+        (self.root / "working").mkdir()
+        (self.root / "komuta" / "gorev-baglam.json").write_text(json.dumps(
+            {"projects": [dict(id="atlas", aliases=["atlas"], roots=[str(self.root / "working")])]}))
+        (self.root / "komuta" / "jev.json").write_text('{"mode":"off"}\n')
+        self.catalog(statements)
+
+    def catalog(self, statements):
         source = self.root / "projeler" / "atlas" / "tercihler.md"
-        source.parent.mkdir(parents=True)
+        source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("\n".join(statements) + "\n", encoding="utf-8")
         rows = [dict(memory_id=f"r{i:02}", kind="semantic", scope="project:atlas" if i % 2 else "user",
                      subject_key=f"test.r{i:02}", statement=text, status="active",
@@ -254,17 +262,12 @@ class TaskPackageTests(unittest.TestCase):
                      reviewed_by="reviewer", schema_version=1)
                 for i, text in enumerate(statements)]
         h._write_jsonl(self.root / h.CATALOG_PATH, rows)
-        (self.root / "komuta").mkdir(exist_ok=True)
-        (self.root / "working").mkdir()
-        (self.root / "komuta" / "gorev-baglam.json").write_text(json.dumps(
-            {"projects": [dict(id="atlas", aliases=["atlas"], roots=[str(self.root / "working")])]}))
-        (self.root / "komuta" / "jev.json").write_text('{"mode":"off"}\n')
 
-    def package(self, aliases):
+    def package(self, aliases, selectors=("anlatım",), budget=5000):
         (self.root / k.DEFINITIONS).write_text(json.dumps({"kavramlar": [
-            {"id": "c", "title": "Anlatım", "selectors": ["anlatım"], "aliases": aliases}]}), encoding="utf-8")
+            {"id": "c", "title": "Anlatım", "selectors": list(selectors), "aliases": aliases}]}), encoding="utf-8")
         result = g.build_task_package(self.root, "video gain seviye metin", cwd=str(self.root / "working"),
-                                      budget=5000, history="never", view="resume")
+                                      budget=budget, history="never", view="resume")
         self.assertNotIn("kavram_anahtarlari", json.dumps(result, ensure_ascii=False))
         return result
 
@@ -273,6 +276,17 @@ class TaskPackageTests(unittest.TestCase):
         keyed = self.package(["gain"])
         self.assertLessEqual(set(base["summary"]["record_ids"]), set(keyed["summary"]["record_ids"]))
         self.assertNotIn("r05:card_limit", keyed["omitted_reasons"])
+
+    def test_addition_only_uses_leftover_budget(self):
+        self.catalog(["Kullanıcı video gain değerini " + a + " tercih eder." for a in
+                      ("kayıt öncesinde denetlemeyi", "sabit tutmayı", "denemeyle belirlemeyi",
+                       "cihaz üzerinden ayarlamayı")] +
+                     ["Kullanıcı video konuşmasını doğal tutmayı tercih eder.",
+                      "Kullanıcı video anlatımını kısa tutmayı tercih eder."])
+        for budget in (800, 1800):
+            base = self.package([], selectors=("konuşma",), budget=budget)
+            keyed = self.package(["gain"], selectors=("konuşma",), budget=budget)
+            self.assertLessEqual(set(base["summary"]["record_ids"]), set(keyed["summary"]["record_ids"]), budget)
 
 
 if __name__ == "__main__":
