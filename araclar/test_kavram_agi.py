@@ -289,5 +289,56 @@ class TaskPackageTests(unittest.TestCase):
             self.assertLessEqual(set(base["summary"]["record_ids"]), set(keyed["summary"]["record_ids"]), budget)
 
 
+class ProjectAndUpkeepTests(Fixture):
+    def projects(self, *ids):
+        path = self.vault / "komuta" / "gorev-baglam.json"
+        path.write_text(json.dumps({"projects": [{"id": i, "aliases": [i + " videosu"]} for i in ids]}), encoding="utf-8")
+
+    def test_project_concepts_join_by_scope_and_never_touch_retrieval(self):
+        self.rows[1] = dict(self.rows[1], scope="project:atlas")
+        h._write_jsonl(self.vault / h.CATALOG_PATH, self.rows)
+        self.projects("atlas", "bos")
+        log = self.vault / "günlük" / "oturumlar" / "2026-01-02 Bir oturum.md"
+        log.parent.mkdir(parents=True)
+        log.write_text('---\nprojeler: ["atlas"]\n---\n\n# Bir oturum\n', encoding="utf-8")
+        k.export(self.vault, apply=True)
+        page = (self.vault / "beyin" / "kavramlar" / "Proje atlas.md").read_text(encoding="utf-8")
+        self.assertIn("hızlı tempoyu", page)
+        self.assertNotIn("mikrofon", page)
+        self.assertIn("[[günlük/oturumlar/2026-01-02 Bir oturum|", page)
+        self.assertNotIn("proje-atlas", json.dumps(k.concept_keys(self.vault, self.rows)))
+        before = [r["memory_id"] for r in g.rank_records([r for r in self.rows if h.retrievable(r)], "atlas tempo")]
+        after = [r["memory_id"] for r in k.ranker(self.vault, g.rank_records)([r for r in self.rows if h.retrievable(r)], "atlas tempo")]
+        self.assertEqual(before, after)
+
+    def test_project_concept_yields_to_hand_written_one(self):
+        self.write_concepts({"kavramlar": CONCEPTS["kavramlar"] + [
+            {"id": "proje-kurgu", "title": "Elle", "selectors": ["kurgu"]}]})
+        self.projects("kurgu")
+        ids = [c["id"] for c in k.project_concepts(self.vault, k.definitions(self.vault))]
+        self.assertEqual(ids, [])
+
+    def test_suggestions_skip_boilerplate_and_covered_topics(self):
+        folder = self.vault / "günlük" / "oturumlar"
+        folder.mkdir(parents=True)
+        for i in range(4):
+            (folder / f"o{i}.md").write_text(f"# Kullanıcı zeplin yol haritası {i}\n", encoding="utf-8")
+        (folder / "m.md").write_text("# Mikrofon zeplin\n", encoding="utf-8")
+        words = [x["word"] for x in k.status(self.vault)["suggestions"]]
+        self.assertIn("zeplin", words)
+        self.assertNotIn("kullanıcı", words)
+        self.assertNotIn("mikrofon", words)
+
+    def test_upkeep_runs_every_step_and_reports_failure(self):
+        folder = self.vault / "bilgi" / "konu-sentezleri"
+        folder.mkdir(parents=True)
+        (folder / "user.md").write_text("elle yazılmış\n", encoding="utf-8")
+        result = k.maintain(self.vault, apply=True)
+        self.assertFalse(result["ok"])
+        self.assertTrue((self.vault / "beyin" / "Beyin.md").is_file())
+        self.assertEqual((folder / "user.md").read_text(encoding="utf-8"), "elle yazılmış\n")
+        self.assertTrue(any("error" in step for step in result["steps"]))
+
+
 if __name__ == "__main__":
     unittest.main()

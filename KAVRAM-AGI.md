@@ -51,3 +51,49 @@ veya karar değildir. Karantinadaki, silinmiş veya kaynağı değişmiş kayıt
 dökülmez. Dosyalar yönetilen anlık görüntüdür: sonlarındaki işaret içerik
 hash'ini taşır, elle değişen dosyanın üzerine yazılmaz, artık karşılığı
 olmayan dosya silinir. Aramanın doğruluk kaynağı katalogdur, bu sayfalar değil.
+
+## Proje kavramları ve öneriler
+
+`komuta/gorev-baglam.json` içindeki her proje kendiliğinden bir grafik
+kavramı olur (`Proje <id>`). Üyelik kelimeyle değil kapsamla kurulur:
+kapsamı `project:<id>` olan kayıtlar ve kartlar, ön bilgisinde
+`projeler: [...]` listesinde o proje geçen oturum kayıtları. Proje
+kavramlarının eş sözcüğü yoktur, aramayı değiştirmez. Aynı kimlikte veya
+dosya adında elle yazılmış bir kavram varsa proje kavramı oluşturulmaz.
+
+`Beyin.md` sonunda "Kavram adayları" listesi bulunur: hiçbir konu
+kavramına bağlanmayan oturum başlıklarında en az üç kez geçen kelimeler.
+Oturum kalıp kelimeleri ve bütün başlıkların %8'inden fazlasında geçen
+kelimeler elenir. Liste karar değildir; sözlüğe eklemeden önce erişimi ölç.
+
+## Zamanlayıcıyla bakım
+
+`bakim` komutu modelsiz ve ağsızdır: kavram dökümünü ve zaten var olan konu
+sentezi dökümlerini yeniler, kanonik kayıt yazmaz. Her adımı dener; biri
+hata verirse sonuç `ok: false` ve çıkış kodu 1 olur.
+
+```sh
+python3 araclar/kavram_agi.py --vault . bakim --apply
+```
+
+Model gerektiren aday incelemesi ayrı inceleme rolünde kalır. Kişisel bir
+systemd kullanıcı zamanlayıcısı örneği (`<KASA>` yerine kasa yolunu yaz):
+
+```ini
+# ~/.config/systemd/user/hafiza-bakim.service
+[Service]
+Type=oneshot
+WorkingDirectory=<KASA>
+ExecStart=/usr/bin/python3 -X utf8 araclar/kavram_agi.py --vault . bakim --apply
+Nice=15
+
+# ~/.config/systemd/user/hafiza-bakim.timer
+[Timer]
+OnCalendar=hourly
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+`systemctl --user enable --now hafiza-bakim.timer` ile etkinleştirilir;
+son sonuç `journalctl --user -u hafiza-bakim.service` ile okunur.
