@@ -294,7 +294,7 @@ def sessions(vault, concepts):
                 if count:
                     label = _short(title if not title.lower().startswith('codex') else topic, 70)
                     result[cid].append((relative, label))
-    # Words in more than 8% of all session titles are boilerplate, not topics.
+    # Words in more than max(10, 8% of all) session titles are boilerplate, not topics.
     sessions.uncovered = collections.Counter({w: n for w, n in uncovered.items()
                                               if everywhere[w] <= max(10, total * 0.08)})
     return result
