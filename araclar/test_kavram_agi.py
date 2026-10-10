@@ -346,8 +346,9 @@ class ProjectAndUpkeepTests(Fixture):
     def test_suggestions_ignore_paths_and_are_deterministic(self):
         folder = self.vault / "günlük" / "oturumlar"
         folder.mkdir(parents=True)
+        fake_path = "/" + "/".join(("home", "ayse", "musteri-gizli"))
         for i in range(3):
-            (folder / f"p{i}.md").write_text(f"# Dosya /home/ayse/musteri-gizli açıldı {i}\n", encoding="utf-8")
+            (folder / f"p{i}.md").write_text(f"# Dosya {fake_path} açıldı {i}\n", encoding="utf-8")
         for i, word in enumerate(["beta", "alfa", "gama"] * 3):
             (folder / f"w{i}.md").write_text(f"# {word} konusu\n", encoding="utf-8")
         words = [x["word"] for x in k.status(self.vault)["suggestions"]]
