@@ -264,7 +264,9 @@ def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expans
             # A concept synonym only completes a record its own text already
             # anchors with a distinguishing word (the project name may serve).
             direct = {term for term in matched if any(word_match(term, word) for word in own[index])}
-            if not direct & (informative | scoped): continue
+            # With no distinguishing term at all, any own query word anchors,
+            # exactly as for records without concept keys.
+            if not direct & ((informative or terms) | scoped): continue
         score = sum(weight(term) if term in direct else weight(term) / 2 for term in matched)
         # Long prompts share incidental words with almost every record; measured on
         # real prompts with erisim_olc.py, one overlapping word selected mostly noise.

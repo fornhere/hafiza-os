@@ -226,10 +226,11 @@ def build(vault):
     names, used, lead = {}, set(), subjects(vault)
     for row in sorted(catalog, key=lambda r: r['memory_id']):
         base = _slug(row['statement'], lead)
-        name = base
-        if name in used:
-            name = base + '-' + hashlib.sha256(row['memory_id'].encode()).hexdigest()[:4]
-        used.add(name)
+        name, digest, width = base, hashlib.sha256(row['memory_id'].encode()).hexdigest(), 4
+        while name.casefold() in used:
+            name = base + '-' + digest[:width]
+            width += 4
+        used.add(name.casefold())
         names[row['memory_id']] = name
     nodes = {}
     for c in concepts:
@@ -385,7 +386,7 @@ def _export(vault, apply):
         for p in stale:
             p.unlink()
     rel = lambda ps: _shown([str(p.relative_to(vault)) for p in sorted(ps)])
-    return dict(path=str(root), files=len(wanted), changed=rel(changed), removed=rel(stale),
+    return dict(path=EXPORT_DIR.as_posix(), files=len(wanted), changed=rel(changed), removed=rel(stale),
                 applied=bool(apply and (changed or stale)), snapshot_only=True)
 
 

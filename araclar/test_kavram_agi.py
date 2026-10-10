@@ -81,6 +81,15 @@ class RetrievalTests(Fixture):
         ranked = k.ranker(self.vault, g.rank_records)(active, "çekim", expansion=g.area_expansion("çekim"))
         self.assertNotIn("gain", [r["memory_id"] for r in ranked])
 
+    def test_unused_alias_never_suppresses_direct_matches(self):
+        rows = [self.row("m1", "Kullanıcı mikrofon kazancını ayarlar."),
+                self.row("m2", "Kullanıcı mikrofon yerini seçer."), self.row("t", TEMPO)]
+        self.write_concepts({"kavramlar": [{"id": "c", "title": "C", "selectors": ["kazanç"], "aliases": ["gain"]}]})
+        plain = [r["memory_id"] for r in g.rank_records(rows, "mikrofon")]
+        keyed = [r["memory_id"] for r in k.ranker(self.vault, g.rank_records)(rows, "mikrofon")]
+        self.assertEqual(sorted(plain), ["m1", "m2"])
+        self.assertEqual(sorted(keyed), sorted(plain))
+
     def test_missing_or_invalid_definitions_are_a_no_op(self):
         (self.vault / k.DEFINITIONS).unlink()
         self.assertEqual(self.rank("mikrofon sesi düşük gain artırayım mı"), [])
@@ -185,6 +194,12 @@ class ExportTests(Fixture):
         with self.assertRaises(ValueError) as caught:
             k.export(self.vault, apply=True)
         self.assertNotIn("a1B2c3D4" * 5, str(caught.exception))
+
+    def test_memory_note_names_never_collide(self):
+        rows = [self.row(f"memory-{i:04d}", TEMPO) for i in range(400)]
+        h._write_jsonl(self.vault / h.CATALOG_PATH, rows)
+        k.export(self.vault, apply=True)
+        self.assertEqual(len(list((self.vault / "beyin" / "hafıza").glob("*.md"))), 400)
 
     def test_colliding_concept_filenames_are_rejected(self):
         self.write_concepts({"kavramlar": [{"id": "a", "title": "Ses/Ayar", "selectors": ["ses"]},
