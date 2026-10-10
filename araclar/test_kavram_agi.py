@@ -151,6 +151,15 @@ class ExportTests(Fixture):
         everything = "".join(p.read_text(encoding="utf-8") for p in (self.vault / "beyin").rglob("*.md"))
         self.assertNotIn(secret, everything)
 
+    def test_secret_in_session_filename_is_not_exported(self):
+        secret = "sk-" + "a1B2c3D4" * 5
+        log = self.vault / "günlük" / "oturumlar" / f"Mikrofon {secret}.md"
+        log.parent.mkdir(parents=True)
+        log.write_text("# Mikrofon ayarları\n", encoding="utf-8")
+        k.export(self.vault, apply=True)
+        everything = "".join(p.read_text(encoding="utf-8") for p in (self.vault / "beyin").rglob("*.md"))
+        self.assertNotIn(secret, everything)
+
     def test_colliding_concept_filenames_are_rejected(self):
         self.write_concepts({"kavramlar": [{"id": "a", "title": "Ses/Ayar", "selectors": ["ses"]},
                                            {"id": "b", "title": "Ses:Ayar", "selectors": ["ayar"]}]})

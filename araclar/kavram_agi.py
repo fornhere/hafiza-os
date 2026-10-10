@@ -198,7 +198,9 @@ def sessions(vault, concepts):
                 topic, title = _session_topic(path)
             except OSError:
                 continue
-            if not topic or h.contains_secret(topic) or h.contains_secret(title):
+            relative = path.relative_to(vault).with_suffix('').as_posix()
+            # The path becomes a link target, so it is screened like the text.
+            if not topic or any(h.contains_secret(x) for x in (topic, title, relative)):
                 continue
             words = content_words(topic)
             hits = sorted(((sum(any(word_match(v, w) for v in vocab[cid]) for w in words), cid)
@@ -206,7 +208,7 @@ def sessions(vault, concepts):
             for count, cid in hits[:SESSION_LIMIT]:
                 if count:
                     label = _short(title if not title.lower().startswith('codex') else topic, 70)
-                    result[cid].append((path.relative_to(vault).with_suffix('').as_posix(), label))
+                    result[cid].append((relative, label))
     return result
 
 
