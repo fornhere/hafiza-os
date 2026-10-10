@@ -63,8 +63,9 @@ dosya adında elle yazılmış bir kavram varsa proje kavramı oluşturulmaz.
 
 `Beyin.md` sonunda "Kavram adayları" listesi bulunur: hiçbir konu
 kavramına bağlanmayan oturum başlıklarında en az üç kez geçen kelimeler.
-Oturum kalıp kelimeleri ve bütün başlıkların %8'inden fazlasında geçen
-kelimeler elenir. Liste karar değildir; sözlüğe eklemeden önce erişimi ölç.
+Oturum kalıp kelimeleri, dosya yolu parçaları ve 10'dan ve bütün
+başlıkların %8'inden fazlasında geçen kelimeler elenir; eşit sıklıkta
+alfabetik sıralanır. Liste karar değildir; sözlüğe eklemeden önce erişimi ölç.
 
 ## Zamanlayıcıyla bakım
 

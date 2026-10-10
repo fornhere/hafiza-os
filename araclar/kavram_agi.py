@@ -277,6 +277,8 @@ def sessions(vault, concepts):
             # The path becomes a link target, so it is screened like the text.
             if not topic or any(h.contains_secret(x) for x in (topic, title, relative)):
                 continue
+            # Path-like fragments (e.g. /home/<user>/...) are not topics.
+            topic = re.sub(r'\S*[/\\]\S*', ' ', topic)
             listed = _session_projects(path)
             for c in concepts:
                 if c.get('project') in listed:
@@ -336,7 +338,8 @@ def build(vault):
     linked = sessions(vault, concepts)
     # Suggestions only: frequent words in sessions no topical concept covers.
     skip = _BOILERPLATE | {w.casefold() for w in subjects(vault)}
-    suggestions = [(w, n) for w, n in getattr(sessions, 'uncovered', collections.Counter()).most_common()
+    ranked_words = sorted(getattr(sessions, 'uncovered', collections.Counter()).items(), key=lambda kv: (-kv[1], kv[0]))
+    suggestions = [(w, n) for w, n in ranked_words
                    if n >= 3 and w.casefold() not in skip and not h.contains_secret(w)][:SUGGESTIONS]
     for cid, node in nodes.items():
         node['sessions'] = linked.get(cid, [])
@@ -514,7 +517,13 @@ def maintain(vault, apply=False):
         if (folder / 'user.md').is_file():
             targets.append(('konu', None))
         for path in sorted(folder.glob('project-*.md')):
-            targets.append(('konu', path.stem[len('project-'):]))
+            project = path.stem[len('project-'):]
+            # A file name is untrusted input: never echo or reuse a bad one.
+            if h.contains_secret(project) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,79}', project):
+                ok = False
+                steps.append(dict(step='konu', project='<gizli>', error='invalid_project_snapshot_name'))
+                continue
+            targets.append(('konu', project))
     for kind, project in targets:
         try:
             if kind == 'kavram':

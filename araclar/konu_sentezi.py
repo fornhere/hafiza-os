@@ -80,7 +80,8 @@ def render_markdown(result):
         lines.extend('- ' + unknown for unknown in topic['unknowns'])
     if result['diagnostics']:
         lines.extend(['', '## Dışlanan kaynaklar', ''] +
-                     ['- ' + item for item in result['diagnostics']])
+                     ['- ' + (item if not knowledge.h.contains_secret(item) else '<gizli kaynak adı>')
+                      for item in result['diagnostics']])
     return '\n'.join(lines) + '\n'
 
 
@@ -180,6 +181,9 @@ def _export(vault, project_id=None, apply=False):
             raise ValueError('snapshot_manually_changed')
     scope = f'user + project:{project_id}' if project_id is not None else 'user'
     body = f'Döküm kapsamı: {scope}\n\n' + render_markdown(build(vault, project_id))
+    # Fail closed: a managed page never carries a secret-shaped string.
+    if knowledge.h.contains_secret(body):
+        raise ValueError('restricted_snapshot')
     version = hashlib.sha256(body.encode()).hexdigest()
     content = f'<!-- konu-sentezi-v1 sha256:{version} -->\n' + body
     changed = content != before

@@ -329,6 +329,31 @@ class ProjectAndUpkeepTests(Fixture):
         self.assertNotIn("kullanıcı", words)
         self.assertNotIn("mikrofon", words)
 
+    def test_upkeep_never_echoes_secret_snapshot_or_card_names(self):
+        secret = "sk-" + "a1B2c3D4" * 5
+        folder = self.vault / "bilgi" / "konu-sentezleri"
+        folder.mkdir(parents=True)
+        (folder / f"project-{secret}.md").write_text("elle\n", encoding="utf-8")
+        import konu_sentezi
+        konu_sentezi.export(self.vault, None, True)
+        (self.vault / "bilgi" / f"{secret}.md").write_text("bozuk kart\n", encoding="utf-8")
+        result = k.maintain(self.vault, apply=True)
+        self.assertFalse(result["ok"])
+        self.assertNotIn(secret, json.dumps(result))
+        written = "".join(p.read_text(encoding="utf-8") for p in (self.vault / "bilgi" / "konu-sentezleri").glob("*.md"))
+        self.assertNotIn(secret, written)
+
+    def test_suggestions_ignore_paths_and_are_deterministic(self):
+        folder = self.vault / "günlük" / "oturumlar"
+        folder.mkdir(parents=True)
+        for i in range(3):
+            (folder / f"p{i}.md").write_text(f"# Dosya /home/ayse/musteri-gizli açıldı {i}\n", encoding="utf-8")
+        for i, word in enumerate(["beta", "alfa", "gama"] * 3):
+            (folder / f"w{i}.md").write_text(f"# {word} konusu\n", encoding="utf-8")
+        words = [x["word"] for x in k.status(self.vault)["suggestions"]]
+        self.assertFalse({"ayse", "musteri", "gizli", "home"} & set(words))
+        self.assertEqual([w for w in words if w in ("alfa", "beta", "gama")], ["alfa", "beta", "gama"])
+
     def test_upkeep_runs_every_step_and_reports_failure(self):
         folder = self.vault / "bilgi" / "konu-sentezleri"
         folder.mkdir(parents=True)
