@@ -172,6 +172,20 @@ class ExportTests(Fixture):
         everything = "".join(p.name + p.read_text(encoding="utf-8") for p in (self.vault / "beyin").rglob("*.md"))
         self.assertNotIn(secret, everything)
 
+    def test_secret_paths_never_echoed_in_results_or_errors(self):
+        secret = "sk-" + "a1B2c3D4" * 5
+        k.export(self.vault, apply=True)
+        note = next((self.vault / "beyin" / "hafıza").glob("*.md"))
+        note.rename(note.with_name(f"{secret}.md"))
+        dry = k.export(self.vault)
+        self.assertNotIn(secret, json.dumps(dry))
+        done = k.export(self.vault, apply=True)
+        self.assertNotIn(secret, json.dumps(done))
+        self.write_concepts({"kavramlar": [{"id": "s", "title": "sk/" + "a1B2c3D4" * 5, "selectors": ["mikrofon"]}]})
+        with self.assertRaises(ValueError) as caught:
+            k.export(self.vault, apply=True)
+        self.assertNotIn("a1B2c3D4" * 5, str(caught.exception))
+
     def test_colliding_concept_filenames_are_rejected(self):
         self.write_concepts({"kavramlar": [{"id": "a", "title": "Ses/Ayar", "selectors": ["ses"]},
                                            {"id": "b", "title": "Ses:Ayar", "selectors": ["ayar"]}]})

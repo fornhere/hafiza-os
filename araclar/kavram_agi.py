@@ -336,6 +336,11 @@ def export(vault, apply=False):
     return h.serialized(_export)(vault, True) if apply else _export(vault, False)
 
 
+def _shown(names):
+    """Names for stdout/stderr: a secret-shaped path or id is never echoed."""
+    return [n if not h.contains_secret(n) else '<gizli>' for n in names]
+
+
 def _managed(path):
     match = _MARK_RE.fullmatch(path.read_text(encoding='utf-8'))
     return bool(match) and hashlib.sha256(match[1].encode()).hexdigest() == match[2]
@@ -352,7 +357,7 @@ def _export(vault, apply):
     # a secret-shaped string (link targets and labels included).
     leaked = sorted(rel for rel, body in files.items() if h.contains_secret(rel + '\n' + body))
     if leaked:
-        raise ValueError('restricted_export: ' + ', '.join(leaked[:5]))
+        raise ValueError(f'restricted_export: {len(leaked)} sayfa')
     base = vault.resolve()
 
     def unsafe(path):
@@ -365,11 +370,11 @@ def _export(vault, apply):
     risky = sorted(str(p.relative_to(vault)) for p in list(wanted) + (list(root.rglob('*')) if root.is_dir() else [])
                    if unsafe(p))
     if risky:
-        raise ValueError('unsafe_export_path: ' + ', '.join(risky[:5]))
+        raise ValueError('unsafe_export_path: ' + ', '.join(_shown(risky[:5])))
     existing = {p for p in root.rglob('*.md')} if root.is_dir() else set()
     blocked = sorted(str(p.relative_to(vault)) for p in existing if not _managed(p))
     if blocked:
-        raise ValueError('export_manually_changed: ' + ', '.join(blocked[:5]))
+        raise ValueError('export_manually_changed: ' + ', '.join(_shown(blocked[:5])))
     changed = [p for p, text in wanted.items() if not p.exists() or p.read_text(encoding='utf-8') != text]
     stale = sorted(existing - set(wanted))
     if apply:
@@ -379,7 +384,7 @@ def _export(vault, apply):
                 raise ValueError('export_readback_failed')
         for p in stale:
             p.unlink()
-    rel = lambda ps: [str(p.relative_to(vault)) for p in sorted(ps)]
+    rel = lambda ps: _shown([str(p.relative_to(vault)) for p in sorted(ps)])
     return dict(path=str(root), files=len(wanted), changed=rel(changed), removed=rel(stale),
                 applied=bool(apply and (changed or stale)), snapshot_only=True)
 
@@ -389,9 +394,9 @@ def status(vault):
     model = build(vault)
     return dict(concepts={cid: dict(memories=len(n['memories']), cards=len(n['cards']))
                           for cid, n in model['concepts'].items()},
-                memories=len(model['memories']), unassigned=sorted(r['memory_id'] for r in model['memories']
-                                                                  if r['memory_id'] not in model['memberships']),
-                edges=len(model['edges']), diagnostics=model['diagnostics'])
+                memories=len(model['memories']), unassigned=_shown(sorted(r['memory_id'] for r in model['memories']
+                                                                         if r['memory_id'] not in model['memberships'])),
+                edges=len(model['edges']), diagnostics=_shown(model['diagnostics']))
 
 
 def main():
@@ -405,7 +410,8 @@ def main():
     try:
         result = export(args.vault, args.apply) if args.command == 'export' else status(args.vault)
     except (ValueError, OSError, KeyError, TypeError) as exc:
-        parser.exit(1, f'{exc}\n')
+        message = str(exc)
+        parser.exit(1, (message if not h.contains_secret(message) else type(exc).__name__ + ': <gizli>') + '\n')
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
