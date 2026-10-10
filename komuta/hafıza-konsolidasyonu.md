@@ -296,6 +296,14 @@ hatası veya konu kaydı yokluğu yeni tercih yazma gerekçesi değildir.
 Bu, mevcut bakım turunun bir adımıdır; ayrıca zamanlayıcı eklenmez. Görev
 bağlamı sayfaların bakım zamanını beklemeden özgün kartları yeniden doğrular.
 
+## Kavram ağı görünümünü yenileme
+
+Katalog veya bilgi kartları değiştiyse bakım sonunda
+`python3 araclar/kavram_agi.py --vault . export --apply` çalıştır. `beyin/`
+yönetilen bir dökümdür; elle değişen dosya varsa komut durur, dosyayı silmek
+yerine nedenini incele. `komuta/kavramlar.json` yönlendirme sözlüğüdür; yeni
+eş sözcük eklemeden önce ve sonra erişimi ölç ([KAVRAM-AGI](../KAVRAM-AGI.md)).
+
 ## Claude adayları ve tekrarlanan ertelemeler
 
 `proposed_by=claude-review` adaylarında `evidence_source` alanı **bulunmaz ve
