@@ -21,12 +21,14 @@ katman hiçbir şeyi değiştirmez.
 
 ## Arama kuralları
 
-Eş sözcük tek başına kayıt seçemez; kayıt kendi metninde ayırt edici bir
-kelimeyle (veya proje adıyla) zaten eşleşmelidir. Sıklık hesabı kayıtların
-kendi kelimelerinden yapılır; eş sözcük gerçek bir kelimenin ağırlığını
-düşürmez. Altıdan fazla içerik kelimesi olan uzun istemlerde eş sözcükler
-kullanılmaz: gerçek istem ölçümünde rastlantısal kelimeleri eşleştirip bilgi
-notlarını bütçeden itiyordu. Anahtarlar bağlam metnine girmez.
+Kavram katmanı yalnız ekleme yapar. Önce olağan sıralama hiç değiştirilmeden
+çalışır ve sonucu olduğu gibi, başta kalır. Ardından sorgudaki bir kelime bir
+kaydın eş sözcüğüyle gerçekten eşleşiyorsa, olağan sıralamanın seçmediği en
+fazla üç kayıt sona eklenir. Sonuç her zaman olağan sonucun üst kümesidir;
+sorguda hiçbir eş sözcük geçmiyorsa birebir aynıdır. Eklenen kayıt da kendi
+metninde sorguyla eşleşmelidir; eş sözcük tek başına kayıt seçemez. Altıdan
+fazla içerik kelimesi olan uzun istemlerde ekleme yapılmaz. Anahtarlar bağlam
+metnine girmez.
 
 Tanım dosyasını değiştirdikten sonra aynı soru kümesiyle önce/sonra ölç
 (`araclar/erisim_olc.py evaluate`); tek bir soruya göre kelime eklemek

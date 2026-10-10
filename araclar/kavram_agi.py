@@ -122,21 +122,37 @@ def concept_keys(vault, rows):
     return keys
 
 
-def ranker(vault, rank):
-    """Wrap a rank_records-like callable so catalog rows carry concept keys.
+ADDITIONS = 3
 
-    Ranking sees keyed copies; callers get their original row objects back, so
-    keys never leak into context text, profiles or canonical writes.
+
+def ranker(vault, rank):
+    """Wrap a rank_records-like callable with additive concept completion.
+
+    The original ranking runs untouched and its result is kept as-is, first.
+    Concept synonyms may only append records it did not select, and only when
+    a query word actually matches a synonym of that record. So the result is
+    always a superset of the original, and identical to it when no synonym is
+    used. Mixing synonyms into one ranking changed rarity and dropped direct
+    results (independent verification, 2026-10-10). Callers get their original
+    row objects back; keys never reach context text or canonical writes.
     """
     def ranked(rows, query, **options):
+        from gorev_baglam import content_words, word_match
         rows = list(rows)
+        base = rank(rows, query, **options)
         keys = concept_keys(vault, rows)
-        if not keys:
-            return rank(rows, query, **options)
-        keyed = [dict(r, kavram_anahtarlari=keys[r.get('memory_id')]) if r.get('memory_id') in keys else r
+        terms = content_words(query)
+        hit = {mid for mid, words in keys.items()
+               if any(word_match(t, w) for t in terms for w in content_words(' '.join(words)))}
+        if not hit:
+            return base
+        keyed = [dict(r, kavram_anahtarlari=keys[r.get('memory_id')]) if r.get('memory_id') in hit else r
                  for r in rows]
         back = {id(k): r for k, r in zip(keyed, rows)}
-        return [back.get(id(r), r) for r in rank(keyed, query, **options)]
+        chosen = {id(r) for r in base}
+        extra = [back.get(id(r), r) for r in rank(keyed, query, **options)]
+        extra = [r for r in extra if id(r) not in chosen and r.get('memory_id') in hit]
+        return base + extra[:ADDITIONS]
     return ranked
 
 

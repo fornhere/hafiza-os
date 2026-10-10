@@ -90,6 +90,24 @@ class RetrievalTests(Fixture):
         self.assertEqual(sorted(plain), ["m1", "m2"])
         self.assertEqual(sorted(keyed), sorted(plain))
 
+    def test_concepts_only_ever_add_to_the_original_ranking(self):
+        import random
+        rng = random.Random(7)
+        vocab = ["mikrofon", "kazanç", "seviye", "kapak", "maskot", "metin", "tempo", "kurgu", "çekim", "gain"]
+        for trial in range(300):
+            rows = [self.row(f"r{i}", "Kullanıcı " + " ".join(rng.sample(vocab, 3)) + " ister.") for i in range(5)]
+            sel = rng.sample(vocab, 2)
+            self.write_concepts({"kavramlar": [{"id": "c", "title": "C", "selectors": sel[:1],
+                                                "aliases": [w for w in rng.sample(vocab, 2) if w not in sel[:1]] or ["gain"]}]})
+            query = " ".join(rng.sample(vocab, rng.randint(1, 4)))
+            context = rng.choice([None, " ".join(rng.sample(vocab, 2))])
+            plain = g.rank_records(rows, query, context=context)
+            keyed = k.ranker(self.vault, g.rank_records)(rows, query, context=context)
+            self.assertEqual(keyed[:len(plain)], plain, (trial, query))
+            aliases = json.loads((self.vault / k.DEFINITIONS).read_text())["kavramlar"][0]["aliases"]
+            if not any(g.word_match(t, a) for t in g.content_words(query) for a in g.content_words(" ".join(aliases))):
+                self.assertEqual(keyed, plain, (trial, query))
+
     def test_missing_or_invalid_definitions_are_a_no_op(self):
         (self.vault / k.DEFINITIONS).unlink()
         self.assertEqual(self.rank("mikrofon sesi düşük gain artırayım mı"), [])
