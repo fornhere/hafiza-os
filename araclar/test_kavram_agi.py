@@ -74,6 +74,13 @@ class RetrievalTests(Fixture):
         self.assertTrue(all(any(r is a for a in active) for r in ranked))
         self.assertFalse(any("kavram_anahtarlari" in r for r in ranked))
 
+    def test_area_expansion_cannot_select_by_synonym(self):
+        self.write_concepts({"kavramlar": [{"id": "cekim", "title": "Çekim", "selectors": ["mikrofon"],
+                                            "aliases": ["çekim", "anlatım", "konuşma"]}]})
+        active = [r for r in self.rows if h.retrievable(r)]
+        ranked = k.ranker(self.vault, g.rank_records)(active, "çekim", expansion=g.area_expansion("çekim"))
+        self.assertNotIn("gain", [r["memory_id"] for r in ranked])
+
     def test_missing_or_invalid_definitions_are_a_no_op(self):
         (self.vault / k.DEFINITIONS).unlink()
         self.assertEqual(self.rank("mikrofon sesi düşük gain artırayım mı"), [])
@@ -125,6 +132,30 @@ class ExportTests(Fixture):
         self.assertIn("[[günlük/oturumlar/2026-01-01 Mikrofon ayarı konuşuldu|", concept)
         self.assertNotIn("Mikrofon ayarı", (self.vault / "beyin" / "kavramlar" / "Kurgu.md").read_text(encoding="utf-8"))
         self.assertEqual(log.read_bytes(), before)
+
+    def test_symlinked_subfolder_is_refused(self):
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        (self.vault / "beyin").mkdir()
+        (self.vault / "beyin" / "kavramlar").symlink_to(outside.name, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            k.export(self.vault, apply=True)
+        self.assertEqual(list(Path(outside.name).iterdir()), [])
+
+    def test_secret_in_session_title_is_not_exported(self):
+        log = self.vault / "günlük" / "oturumlar" / "gizli.md"
+        log.parent.mkdir(parents=True)
+        secret = "sk-" + "a1B2c3D4" * 5
+        log.write_text(f"# Oturum makbuzu {secret}\n\nMikrofon ayarları konuşuldu.\n", encoding="utf-8")
+        k.export(self.vault, apply=True)
+        everything = "".join(p.read_text(encoding="utf-8") for p in (self.vault / "beyin").rglob("*.md"))
+        self.assertNotIn(secret, everything)
+
+    def test_colliding_concept_filenames_are_rejected(self):
+        self.write_concepts({"kavramlar": [{"id": "a", "title": "Ses/Ayar", "selectors": ["ses"]},
+                                           {"id": "b", "title": "Ses:Ayar", "selectors": ["ayar"]}]})
+        with self.assertRaises(ValueError):
+            k.definitions(self.vault)
 
     def test_dry_run_writes_nothing(self):
         result = k.export(self.vault)

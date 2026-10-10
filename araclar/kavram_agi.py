@@ -73,6 +73,10 @@ def definitions(vault):
     for item in items:
         if any(r not in seen or r == item['id'] for r in item.get('related', [])):
             raise ValueError('invalid_concept_related')
+    # Distinct titles must not share one export file (case-insensitive file systems too).
+    names = [_filename(item['title']).casefold() for item in items]
+    if len(set(names)) != len(names):
+        raise ValueError('duplicate_concept_filename')
     return items
 
 
@@ -194,7 +198,7 @@ def sessions(vault, concepts):
                 topic, title = _session_topic(path)
             except OSError:
                 continue
-            if not topic or h.contains_secret(topic):
+            if not topic or h.contains_secret(topic) or h.contains_secret(title):
                 continue
             words = content_words(topic)
             hits = sorted(((sum(any(word_match(v, w) for v in vocab[cid]) for w in words), cid)
@@ -342,10 +346,21 @@ def _export(vault, apply):
             root.exists() and not root.resolve().is_relative_to(vault.resolve())):
         raise ValueError('unsafe_export_path')
     files = render(vault, build(vault))
+    base = vault.resolve()
+
+    def unsafe(path):
+        # Every component below the vault must be a real directory/file, so a
+        # symlinked subfolder can never redirect a write outside the vault.
+        parts = path.relative_to(vault).parts
+        return (any((vault.joinpath(*parts[:i])).is_symlink() for i in range(1, len(parts) + 1))
+                or not path.resolve().is_relative_to(base))
     wanted = {root / rel: body + MARK.format(hashlib.sha256(body.encode()).hexdigest()) for rel, body in files.items()}
+    risky = sorted(str(p.relative_to(vault)) for p in list(wanted) + (list(root.rglob('*')) if root.is_dir() else [])
+                   if unsafe(p))
+    if risky:
+        raise ValueError('unsafe_export_path: ' + ', '.join(risky[:5]))
     existing = {p for p in root.rglob('*.md')} if root.is_dir() else set()
-    blocked = sorted(str(p.relative_to(vault)) for p in existing
-                     if p.is_symlink() or not _managed(p))
+    blocked = sorted(str(p.relative_to(vault)) for p in existing if not _managed(p))
     if blocked:
         raise ValueError('export_manually_changed: ' + ', '.join(blocked[:5]))
     changed = [p for p, text in wanted.items() if not p.exists() or p.read_text(encoding='utf-8') != text]

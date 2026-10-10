@@ -287,7 +287,9 @@ def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expans
         expanded = content_words(expansion) - terms
         additions = []
         selected_ids = {row.get('memory_id') for _, _, row in ranked}
-        for row, words in documents:
+        # Area expansion reads only the records' own words: concept synonyms
+        # must not select a record here either.
+        for row, words in zip(rows, own):
             if row.get('memory_id') in selected_ids: continue
             matched = {t for t in terms if any(word_match(t, w) for w in words)}
             related = {w for w in words if any(word_match(t, w) for t in expanded)}
