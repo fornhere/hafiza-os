@@ -140,7 +140,7 @@ içindedir; `yayinla.py --apply` ölçüm komutu değildir, yayın yapar.
 
 - Açılış: [agents.md](agents.md); merkez: [Ana Sayfa](<Ana Sayfa.md>).
 - İşletim/bakım: [ajan işletimi](komuta/ajan-isletimi.md), [konsolidasyon](komuta/hafıza-konsolidasyonu.md).
-- Erişim/bilgi: [BILGI-AGI](BILGI-AGI.md); türetilmiş konu görünümü [KONU-SENTEZI](KONU-SENTEZI.md); bildirim [HAFIZA-GORUNURLUGU](HAFIZA-GORUNURLUGU.md).
+- Erişim/bilgi: [BILGI-AGI](BILGI-AGI.md); türetilmiş konu görünümü [KONU-SENTEZI](KONU-SENTEZI.md); kavram ağı ve Obsidian beyni [KAVRAM-AGI](KAVRAM-AGI.md); bildirim [HAFIZA-GORUNURLUGU](HAFIZA-GORUNURLUGU.md).
 - Koşullu ders ve cevap kontrolü: [HAFIZA-DONGUSU](HAFIZA-DONGUSU.md).
 - Ayrı deney/migrasyon: [GOREV-PLANI](GOREV-PLANI.md), [GELISIM-DONGUSU](GELISIM-DONGUSU.md), [KAYIT-UZLASTIRMA](KAYIT-UZLASTIRMA.md).
 - Geliştirme ve test: [CONTRIBUTING](CONTRIBUTING.md); genel başlangıç: [README](README.md).

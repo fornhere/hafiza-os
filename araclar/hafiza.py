@@ -1713,7 +1713,8 @@ def main(argv: list[str] | None = None) -> int:
         valid = [row for row in records if retrievable(row, scope) and not context_record_errors(vault, row)]
         project = next((p for p in project_config(vault).get("projects", []) if p.get("id") == project_id), None)
         previous = args.previous if args.previous and not contains_secret(args.previous) else None
-        ranked = rank_records(valid, args.query, ignore=project_terms(project) if project else (), context=previous)
+        from kavram_agi import ranker as concept_ranker
+        ranked = concept_ranker(vault, rank_records)(valid, args.query, ignore=project_terms(project) if project else (), context=previous)
         results = [{'memory':row['statement'], 'metadata':row} for row in ranked]
         mode = 'local'; fallback = None
         if not args.local and (args.remote or mem0_config(vault).get("enabled", False)):

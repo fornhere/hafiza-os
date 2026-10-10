@@ -216,6 +216,13 @@ def search_text(row):
     keys = row.get('arama_anahtarlari')
     return ' '.join([row.get('statement', '')] + ([k for k in keys if isinstance(k, str)] if isinstance(keys, list) else []))
 
+CONCEPT_MAX_TERMS = 6
+
+def _concept_words(row):
+    """Concept-layer synonyms (kavram_agi.ranker); weaker than the record's own words."""
+    keys = row.get('kavram_anahtarlari')
+    return content_words(' '.join(k for k in keys if isinstance(k, str))) if isinstance(keys, (list, tuple)) else set()
+
 def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expansion=None):
     """Query coverage weighted by corpus rarity; order cannot affect selection.
 
@@ -232,9 +239,16 @@ def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expans
     scoped = {t for t in terms if any(word_match(t, w) for w in ignore)}
     extra = {t for t in content_words(context) - terms
              if not any(word_match(t, u) for u in terms) and not any(word_match(t, w) for w in ignore)} if context else set()
-    documents = [(row, content_words(search_text(row))) for row in rows]
-    frequencies = {term: sum(any(word_match(term, word) for word in words)
-                             for _, words in documents) for term in terms | extra}
+    own = [content_words(search_text(row)) for row in rows]
+    # Concept synonyms help short questions; on long conversational prompts they
+    # matched incidental words and crowded out notes (erisim_olc, 2026-10-10).
+    concept = [_concept_words(row) if len(terms) <= CONCEPT_MAX_TERMS else set() for row in rows]
+    documents = [(row, words | keys) for row, words, keys in zip(rows, own, concept)]
+    # Rarity reads the records' own words; concept synonyms count only for a
+    # term no record states itself, so they never dilute a real word's weight.
+    def frequency(term, corpus): return sum(any(word_match(term, word) for word in words) for words in corpus)
+    frequencies = {term: frequency(term, own) or (frequency(term, concept) if any(concept) else 0)
+                   for term in terms | extra}
     def rare(term): return 0 < frequencies[term] < max(2, len(rows)*0.5)
     def weight(term): return 1 + math.log((len(rows) + 1) / (frequencies[term] + 1))
     informative = {term for term in terms if rare(term)}
@@ -242,10 +256,18 @@ def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expans
     # Without a distinguishing term, a word shared by most records (e.g. the
     # user's name) selects only when it covers at least half of the query.
     ranked = []; completions = []
-    for row, words in documents:
+    for index, (row, words) in enumerate(documents):
         matched = {term for term in terms if any(word_match(term, word) for word in words)}
         if not matched or (informative and not matched.intersection(informative)): continue
-        score = sum(weight(term) for term in matched)
+        direct = matched
+        if concept[index]:
+            # A concept synonym only completes a record its own text already
+            # anchors with a distinguishing word (the project name may serve).
+            direct = {term for term in matched if any(word_match(term, word) for word in own[index])}
+            # With no distinguishing term at all, any own query word anchors,
+            # exactly as for records without concept keys.
+            if not direct & ((informative or terms) | scoped): continue
+        score = sum(weight(term) if term in direct else weight(term) / 2 for term in matched)
         # Long prompts share incidental words with almost every record; measured on
         # real prompts with erisim_olc.py, one overlapping word selected mostly noise.
         anchors = (matched & informative if informative else matched) - scoped
@@ -267,7 +289,9 @@ def rank_records(rows, query, *, tie_break=None, ignore=(), context=None, expans
         expanded = content_words(expansion) - terms
         additions = []
         selected_ids = {row.get('memory_id') for _, _, row in ranked}
-        for row, words in documents:
+        # Area expansion reads only the records' own words: concept synonyms
+        # must not select a record here either.
+        for row, words in zip(rows, own):
             if row.get('memory_id') in selected_ids: continue
             matched = {t for t in terms if any(word_match(t, w) for w in words)}
             related = {w for w in words if any(word_match(t, w) for t in expanded)}
@@ -1384,12 +1408,15 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     if suppressed_count:
         add('suppressed-history',f'{suppressed_count} eski kayıt bastırıldı; tarihçe için karar_gecmisi.')
     # Out-of-scope, stale and replaced rows must not influence corpus rarity.
+    concept_rank = None
     if skip_memory:
         ranked_catalog, knowledge_data, catalog_evaluation = [], None, None
     elif rerank_state is None:
         from jev_retrieval import catalog as semantic_catalog
         # Local ranking only; a semantic advisor keeps its own inputs.
-        local_rank = functools.partial(rank_records, ignore=project_terms(project) if project else (),
+        from kavram_agi import ranker as concept_ranker
+        concept_rank = concept_ranker(vault, rank_records)
+        local_rank = functools.partial(concept_rank, ignore=project_terms(project) if project else (),
                                        context=previous_user, expansion=area_expansion(query),
                                        tie_break=lambda row: (row.get('scope') != scope, row.get('memory_id', '')))
         catalog_future = submit(semantic_catalog, vault, query, eligible, local_rank, scope)
@@ -1400,7 +1427,9 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             vault, query, eligible, project['id'] if project else None, rerank_state, budget)
         if catalog_evaluation.get('degraded'):
             from konu_sentezi import _retrieve_local
-            ranked_catalog = rank_records(eligible, query)
+            from kavram_agi import ranker as concept_ranker
+            concept_rank = concept_ranker(vault, rank_records)
+            ranked_catalog = concept_rank(eligible, query)
             knowledge_data = _retrieve_local(vault, query, project_id=project['id'] if project else None,
                                              budget=min(1800, budget)) if (vault / 'bilgi').is_dir() else None
     from jev_retrieval import static_preferences, recall_settings
@@ -1437,7 +1466,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
     omitted.extend(row['memory_id']+':other_subtask_catalog' for row in profile_rows
                    if row['memory_id'] in foreign_catalog and row['memory_id']+':other_subtask_catalog' not in omitted)
     profile_rows = [row for row in profile_rows if row['memory_id'] not in foreign_catalog]
-    ranked_ids = {row['memory_id'] for row in ranked_catalog}
+    concept_additions = getattr(concept_rank, 'additions', set()) if concept_rank else set()
+    ranked_ids = {row['memory_id'] for row in ranked_catalog if row['memory_id'] not in concept_additions}
     profile_ids = set()
     profile_used = 0
     # A reserved, bounded share; complete claims only, no truncated conditions.
@@ -1471,6 +1501,7 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             source_versions[row['source_path']]=eligible_versions[row['source_path']]
 
     for rank_index, row in enumerate(ranked_catalog):
+        if row['memory_id'] in concept_additions and row['memory_id'] in profile_ids: continue
         rank_index = catalog_indices[row['memory_id']]
         # A source-derived card requires a reviewed source revision, not a new
         # hash computed from an unreviewed legacy statement's current file.
@@ -1490,7 +1521,8 @@ def _build_task_package(vault, query, cwd, budget, history, view, submit, rerank
             priority,sequence,ident,text=candidates[-1]
             # Alternate catalog cards and note cards at the same priority.
             # A whole note dossier must not exhaust the record budget first.
-            candidates[-1]=(0.5,2*rank_index,ident,text)
+            # Concept additions only use budget left after every real segment.
+            candidates[-1]=(19 if row['memory_id'] in concept_additions else 0.5,2*rank_index,ident,text)
             source_versions[row['source_path']]=eligible_versions[row['source_path']]
     if project:
         add('project', 'Proje: '+project['id'])

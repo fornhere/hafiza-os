@@ -1,0 +1,14 @@
+{
+  "ozne": ["Kullanıcı"],
+  "kavramlar": [
+    {"id": "kapak", "title": "Kapak ve thumbnail", "selectors": ["kapak", "thumbnail"],
+     "aliases": ["küçük resim", "kapak görseli", "okunurluk"], "related": ["baslik"]},
+    {"id": "baslik", "title": "Başlık ve açıklama", "selectors": ["başlık", "açıklama", "seo"],
+     "aliases": ["title", "description", "hashtag"]},
+    {"id": "ses", "title": "Kayıt ve ses", "selectors": ["mikrofon", "kayıt", "kazanç"],
+     "aliases": ["gain", "seviye", "gürültü"]},
+    {"id": "iletisim", "title": "Ajanla iletişim", "selectors": ["rapor", "paragraf", "cevap"],
+     "aliases": ["yanıt", "üslup", "yazım tarzı"],
+     "note": "Ajanın kullanıcıyla konuşma biçimi; içerik anlatımı değil."}
+  ]
+}

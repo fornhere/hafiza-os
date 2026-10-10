@@ -21,6 +21,8 @@ okuma, kaynaklı geri çağırma ve oturum kaydı farklı katmanlardır.
   kapsamlarıyla birleştir; Obsidian'da kaynaklarına git.
 - **Konu dosyaları oluştur:** [konu sentezi](KONU-SENTEZI.md) ile incelenmiş
   bilgileri birlikte gör. Bunlar kaynaklardan türetilen, yenilenebilir görünümlerdir.
+- **Beynini Obsidian'da gör:** [kavram ağı](KAVRAM-AGI.md) katalogdaki kayıtları
+  kavramlara bağlar, grafikte görünür kılar ve kısa sorularda eş sözcükle bulur.
 - **İş ve çıktıları takip et:** [devam kapsülü, karar geçmişi ve çıktı
   takibi](CODEX.md) ile sonraki adımı ve doğrulanmış dosya sürümünü bul.
 - **İstersen erişimi genişlet:** [Mem0](zihin/hafıza-sistemi.md) isteğe bağlı
