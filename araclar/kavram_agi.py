@@ -219,7 +219,7 @@ def build(vault):
     concepts = definitions(vault)
     catalog = [r for r in h.load_catalog(vault)
                if h.retrievable(r) and not h.context_record_errors(vault, r)
-               and not h.contains_secret(r.get('statement', ''))]
+               and not h.contains_secret(json.dumps(r, ensure_ascii=False))]
     cards, diagnostics = bilgi_agi._rows(vault) if (vault / 'bilgi').is_dir() else ([], [])
     mem_of = memberships(vault, catalog, concepts)
     card_of = memberships(vault, cards, concepts, text=lambda r: r['title'] + ' ' + r['statement'])
@@ -348,6 +348,11 @@ def _export(vault, apply):
             root.exists() and not root.resolve().is_relative_to(vault.resolve())):
         raise ValueError('unsafe_export_path')
     files = render(vault, build(vault))
+    # Fail closed: whatever field a value came from, no rendered page may carry
+    # a secret-shaped string (link targets and labels included).
+    leaked = sorted(rel for rel, body in files.items() if h.contains_secret(rel + '\n' + body))
+    if leaked:
+        raise ValueError('restricted_export: ' + ', '.join(leaked[:5]))
     base = vault.resolve()
 
     def unsafe(path):

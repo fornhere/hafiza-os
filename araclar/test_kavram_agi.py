@@ -160,6 +160,18 @@ class ExportTests(Fixture):
         everything = "".join(p.read_text(encoding="utf-8") for p in (self.vault / "beyin").rglob("*.md"))
         self.assertNotIn(secret, everything)
 
+    def test_secret_in_any_record_field_is_not_exported(self):
+        secret = "sk-" + "a1B2c3D4" * 5
+        source = self.vault / f"kaynak-{secret}.md"
+        source.write_text(GAIN, encoding="utf-8")
+        leaky = dict(self.row("leaky", GAIN), source_path=source.name,
+                     source_content_hash=h.statement_hash(GAIN))
+        scoped = dict(self.row("scoped", TEMPO), scope=f"project:{secret}")
+        h._write_jsonl(self.vault / h.CATALOG_PATH, self.rows + [leaky, scoped])
+        k.export(self.vault, apply=True)
+        everything = "".join(p.name + p.read_text(encoding="utf-8") for p in (self.vault / "beyin").rglob("*.md"))
+        self.assertNotIn(secret, everything)
+
     def test_colliding_concept_filenames_are_rejected(self):
         self.write_concepts({"kavramlar": [{"id": "a", "title": "Ses/Ayar", "selectors": ["ses"]},
                                            {"id": "b", "title": "Ses:Ayar", "selectors": ["ayar"]}]})
