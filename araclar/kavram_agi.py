@@ -12,6 +12,7 @@ sözcük eşleşmesiyle belirlenir; model çağrısı yoktur.
   döküm dosyasının üzerine yazılmaz.
 """
 import argparse
+import collections
 import hashlib
 import json
 import re
@@ -80,6 +81,34 @@ def definitions(vault):
     return items
 
 
+PROJECTS = Path('komuta/gorev-baglam.json')
+
+
+def project_concepts(vault, concepts):
+    """One graph-only concept per configured project; membership is scope.
+
+    They carry no aliases, so retrieval never changes. A project whose id or
+    file name collides with a hand-written concept is left to that concept."""
+    path = Path(vault) / PROJECTS
+    try:
+        projects = json.loads(path.read_text(encoding='utf-8')).get('projects', []) if path.is_file() else []
+    except (ValueError, OSError, AttributeError):
+        return []
+    taken = {c['id'] for c in concepts} | {_filename(c['title']).casefold() for c in concepts}
+    result = []
+    for project in projects if isinstance(projects, list) else []:
+        pid = project.get('id') if isinstance(project, dict) else None
+        if not isinstance(pid, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,60}', pid) or h.contains_secret(pid):
+            continue
+        cid, title = 'proje-' + pid.replace('_', '-'), 'Proje ' + pid
+        if not _ID_RE.fullmatch(cid) or cid in taken or _filename(title).casefold() in taken:
+            continue
+        taken |= {cid, _filename(title).casefold()}
+        result.append(dict(id=cid, title=title, selectors=[], aliases=[], project=pid,
+                           note='Otomatik proje kavramı: kapsamı bu proje olan kayıtlar ve oturumlar.'))
+    return result
+
+
 def _member(selectors, text):
     from gorev_baglam import content_words, word_match
     words = content_words(text)
@@ -93,7 +122,9 @@ def memberships(vault, rows, concepts=None, text=lambda r: r.get('statement', ''
     result = {}
     for row in rows:
         own = text(row)
-        ids = [c['id'] for c in concepts if _member(content_words(' '.join(c['selectors'])), own)]
+        ids = [c['id'] for c in concepts
+               if (row.get('scope') == 'project:' + c['project'] if c.get('project')
+                   else _member(content_words(' '.join(c['selectors'])), own))]
         if ids:
             result[row.get('memory_id') or row.get('id')] = ids
     return result
@@ -187,6 +218,11 @@ def _project(scope):
 
 SESSION_DIRS = (Path('günlük/oturumlar'), Path('gelen-kutusu/codex-oturumları'))
 SESSION_LIMIT = 3
+SUGGESTIONS = 12
+# Session/receipt boilerplate that says nothing about the topic.
+_BOILERPLATE = {'kullanıcı', 'kullanıcının', 'asistan', 'asistanın', 'bildirimine', 'bildirdi', 'istedi',
+                'kabul', 'önceki', 'kendi', 'oturum', 'oturumda', 'projesinde', 'videoda', 'videosunda',
+                'göre', 'için', 'yeni', 'sonra', 'üzerine'}
 
 
 def _session_topic(path):
@@ -199,6 +235,23 @@ def _session_topic(path):
     return title, title
 
 
+def _session_projects(path):
+    """Project ids from a session log's YAML front matter (`projeler: [...]`)."""
+    lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+    if not lines or lines[0].strip() != '---':
+        return set()
+    for line in lines[1:40]:
+        if line.strip() == '---':
+            break
+        if line.startswith('projeler:'):
+            try:
+                value = json.loads(line.split(':', 1)[1].strip())
+            except ValueError:
+                return set()
+            return {v for v in value if isinstance(v, str)} if isinstance(value, list) else set()
+    return set()
+
+
 def sessions(vault, concepts):
     """concept id -> [(relative path, label)]; topic association, never evidence.
 
@@ -208,6 +261,7 @@ def sessions(vault, concepts):
     vault = Path(vault)
     vocab = {c['id']: content_words(' '.join(c['selectors'] + c.get('aliases', []))) for c in concepts}
     result = {c['id']: [] for c in concepts}
+    uncovered, everywhere, total = collections.Counter(), collections.Counter(), 0
     for folder in SESSION_DIRS:
         root = vault / folder
         if not root.is_dir() or root.is_symlink():
@@ -223,13 +277,26 @@ def sessions(vault, concepts):
             # The path becomes a link target, so it is screened like the text.
             if not topic or any(h.contains_secret(x) for x in (topic, title, relative)):
                 continue
+            # Path-like fragments (e.g. /home/<user>/...) are not topics.
+            topic = re.sub(r'\S*[/\\]\S*', ' ', topic)
+            listed = _session_projects(path)
+            for c in concepts:
+                if c.get('project') in listed:
+                    result[c['id']].append((relative, _short(title, 70)))
             words = content_words(topic)
             hits = sorted(((sum(any(word_match(v, w) for v in vocab[cid]) for w in words), cid)
                            for cid in vocab), reverse=True)
+            total += 1
+            everywhere.update(set(words))
+            if not any(count for count, _ in hits):
+                uncovered.update(w for w in words if len(w) > 3 and not w.isdigit())
             for count, cid in hits[:SESSION_LIMIT]:
                 if count:
                     label = _short(title if not title.lower().startswith('codex') else topic, 70)
                     result[cid].append((relative, label))
+    # Words in more than max(10, 8% of all) session titles are boilerplate, not topics.
+    sessions.uncovered = collections.Counter({w: n for w, n in uncovered.items()
+                                              if everywhere[w] <= max(10, total * 0.08)})
     return result
 
 
@@ -238,6 +305,7 @@ def build(vault):
     import bilgi_agi
     vault = Path(vault)
     concepts = definitions(vault)
+    concepts = concepts + project_concepts(vault, concepts)
     catalog = [r for r in h.load_catalog(vault)
                if h.retrievable(r) and not h.context_record_errors(vault, r)
                and not h.contains_secret(json.dumps(r, ensure_ascii=False))]
@@ -268,9 +336,14 @@ def build(vault):
             for b in ids[i + 1:]:
                 edges.setdefault(tuple(sorted((a, b))), set()).add('ortak kayıt')
     linked = sessions(vault, concepts)
+    # Suggestions only: frequent words in sessions no topical concept covers.
+    skip = _BOILERPLATE | {w.casefold() for w in subjects(vault)}
+    ranked_words = sorted(getattr(sessions, 'uncovered', collections.Counter()).items(), key=lambda kv: (-kv[1], kv[0]))
+    suggestions = [(w, n) for w, n in ranked_words
+                   if n >= 3 and w.casefold() not in skip and not h.contains_secret(w)][:SUGGESTIONS]
     for cid, node in nodes.items():
         node['sessions'] = linked.get(cid, [])
-    return dict(concepts=nodes, memories=catalog, names=names, memberships=mem_of,
+    return dict(suggestions=suggestions, concepts=nodes, memories=catalog, names=names, memberships=mem_of,
                 cards=cards, card_memberships=card_of, edges=edges, diagnostics=diagnostics)
 
 
@@ -298,10 +371,16 @@ def render(vault, model):
     for cid, n in sorted(concepts.items(), key=lambda kv: (-len(kv[1]['memories']) - len(kv[1]['cards']), kv[0])):
         hub.append(f"- {link(cid)} — {len(n['memories'])} kayıt, {len(n['cards'])} bilgi kartı, "
                    f"{len(n.get('sessions', []))} oturum")
-    loose = [r for r in model['memories'] if r['memory_id'] not in model['memberships']]
+    topical = lambda mid: [c for c in model['memberships'].get(mid, []) if not concepts[c]['concept'].get('project')]
+    loose = [r for r in model['memories'] if not topical(r['memory_id'])]
     if loose:
         hub += ['', '## Kavramı olmayan kayıtlar', '']
         hub += [f"- [[beyin/hafıza/{model['names'][r['memory_id']]}|{_short(r['statement'], 80)}]]" for r in loose]
+    if model.get('suggestions'):
+        hub += ['', '## Kavram adayları (öneri)', '',
+                'Hiçbir konu kavramına bağlanmayan oturum başlıklarında sık geçen kelimeler. '
+                'Sözlüğe eklemeden önce erişimi ölç; bu liste karar değildir.', '']
+        hub += [f"- {w} ({n} oturum)" for w, n in model['suggestions']]
     projects = sorted({p for n in concepts.values() for p in n['projects']})
     if projects:
         hub += ['', '## Projeler', ''] + [f"- {project_link(p)}" for p in projects]
@@ -416,9 +495,49 @@ def status(vault):
     model = build(vault)
     return dict(concepts={cid: dict(memories=len(n['memories']), cards=len(n['cards']))
                           for cid, n in model['concepts'].items()},
-                memories=len(model['memories']), unassigned=_shown(sorted(r['memory_id'] for r in model['memories']
-                                                                         if r['memory_id'] not in model['memberships'])),
-                edges=len(model['edges']), diagnostics=_shown(model['diagnostics']))
+                memories=len(model['memories']), unassigned=_shown(sorted(
+                    r['memory_id'] for r in model['memories']
+                    if not any(not model['concepts'][c]['concept'].get('project')
+                               for c in model['memberships'].get(r['memory_id'], [])))),
+                edges=len(model['edges']), diagnostics=_shown(model['diagnostics']),
+                suggestions=[dict(word=w, sessions=n) for w, n in model['suggestions']])
+
+
+def maintain(vault, apply=False):
+    """Deterministic, offline refresh for a timer: the concept export and the
+    topic snapshots that already exist. No model call, no canonical write;
+    model-based review stays with the consolidation role. Every step runs; any
+    failure is reported and makes the result unsuccessful."""
+    import konu_sentezi
+    vault = Path(vault)
+    steps, ok = [], True
+    targets = [('kavram', None)]
+    folder = vault / 'bilgi' / 'konu-sentezleri'
+    if folder.is_dir() and not folder.is_symlink():
+        if (folder / 'user.md').is_file():
+            targets.append(('konu', None))
+        for path in sorted(folder.glob('project-*.md')):
+            project = path.stem[len('project-'):]
+            # A file name is untrusted input: never echo or reuse a bad one.
+            if h.contains_secret(project) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,79}', project):
+                ok = False
+                steps.append(dict(step='konu', project='<gizli>', error='invalid_project_snapshot_name'))
+                continue
+            targets.append(('konu', project))
+    for kind, project in targets:
+        try:
+            if kind == 'kavram':
+                result = export(vault, apply)
+                steps.append(dict(step='kavram', changed=len(result['changed']), removed=len(result['removed'])))
+            else:
+                result = konu_sentezi.export(vault, project, apply)
+                steps.append(dict(step='konu', project=project, changed=bool(result['changed'])))
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            ok = False
+            message = str(exc)
+            steps.append(dict(step=kind, project=project,
+                              error=message if not h.contains_secret(message) else type(exc).__name__ + ': <gizli>'))
+    return dict(ok=ok, applied=apply, steps=steps)
 
 
 def main():
@@ -428,7 +547,13 @@ def main():
     subs.add_parser('status')
     exp = subs.add_parser('export')
     exp.add_argument('--apply', action='store_true')
+    upkeep = subs.add_parser('bakim')
+    upkeep.add_argument('--apply', action='store_true')
     args = parser.parse_args()
+    if args.command == 'bakim':
+        result = maintain(args.vault, args.apply)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        raise SystemExit(0 if result['ok'] else 1)
     try:
         result = export(args.vault, args.apply) if args.command == 'export' else status(args.vault)
     except (ValueError, OSError, KeyError, TypeError) as exc:
