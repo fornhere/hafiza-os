@@ -87,6 +87,94 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue(path.read_bytes().endswith(b'suffix'))
         self.assertEqual(path.read_text().count(bridge.START), 1)
 
+    def test_claude_legacy_migration_preserves_bytes_and_is_idempotent(self):
+        path = self.home / '.claude/CLAUDE.md'
+        path.parent.mkdir(parents=True)
+        prefix = '# Git kimliği\r\nKişisel yönerge.\r\n\r\n'.encode('utf-8')
+        suffix = ('# Jev\r\nYerel tercih.\r\n\r\n# Paralel ajan işi\n'
+                  'Kullanıcı metni; son satırda newline yok').encode('utf-8')
+        legacy = (bridge.LEGACY_CLAUDE_START + '\r\n# Hafıza OS — global başlangıç\r\n'
+                  'Eski açılış ve makbuz talimatı.\r\n' + bridge.LEGACY_CLAUDE_END + '\r\n').encode('utf-8')
+        shared = bridge.instruction_block(self.vault).encode('utf-8')
+        for agent in ('claude', 'all'):
+            for existing_shared in (b'', shared):
+                with self.subTest(agent=agent, existing_shared=bool(existing_shared)):
+                    # Even repeated complete legacy blocks have one deterministic migration.
+                    original = prefix + existing_shared + legacy + b'\r\n' + legacy + suffix
+                    path.write_bytes(original)
+                    before = self.snapshot()
+                    self.assertTrue(self.install(agent)['targets'][0]['changed'])
+                    self.assertEqual(before, self.snapshot())
+                    result = self.install(agent, apply=True)
+                    expected = (prefix + shared if existing_shared else shared + prefix) + b'\r\n' + suffix
+                    self.assertEqual(path.read_bytes(), expected)
+                    self.assertEqual(Path(result['targets'][0]['backup']).read_bytes(), original)
+                    self.assertEqual(path.read_text(encoding='utf-8').count(bridge.START), 1)
+                    before = self.snapshot()
+                    mtime = path.stat().st_mtime_ns
+                    self.assertTrue(all(not row['changed'] for row in self.install(agent, apply=True)['targets']))
+                    self.assertEqual(before, self.snapshot())
+                    self.assertEqual(path.stat().st_mtime_ns, mtime)
+
+    def test_claude_remove_also_migrates_legacy_and_preserves_unmarked_heading(self):
+        path = self.home / '.claude/CLAUDE.md'
+        path.parent.mkdir(parents=True)
+        personal = '# Hafıza OS — global başlangıç\r\nİşaretsiz kişisel metin'.encode('utf-8')
+        legacy = (bridge.LEGACY_CLAUDE_START + '\nobsolete\n' + bridge.LEGACY_CLAUDE_END + '\n').encode('utf-8')
+        for shared in (b'', bridge.instruction_block(self.vault).encode('utf-8')):
+            with self.subTest(existing_shared=bool(shared)):
+                path.write_bytes(legacy + shared + personal)
+                self.install('claude', remove=True, apply=True)
+                self.assertEqual(path.read_bytes(), personal)
+                before = self.snapshot()
+                self.install('claude', remove=True, apply=True)
+                self.assertEqual(before, self.snapshot())
+
+    def test_malformed_legacy_claude_markers_abort_all_before_mutation(self):
+        start, end = bridge.LEGACY_CLAUDE_START, bridge.LEGACY_CLAUDE_END
+        variants = [start, end, end + '\n' + start,
+                    start + '\n' + start + '\n' + end,
+                    'prefix ' + start + '\n' + end,
+                    start + '\n' + end + ' suffix',
+                    start + '\n' + bridge.START + '\n' + bridge.END + '\n' + end,
+                    start + '\nold\n' + end + '\n' + start]
+        path = self.home / '.claude/CLAUDE.md'
+        path.parent.mkdir(parents=True)
+        for bad in variants:
+            with self.subTest(bad=bad):
+                path.write_text(bad + '\n# Git kimliği\nKoru', encoding='utf-8')
+                before = self.snapshot()
+                for remove in (False, True):
+                    with self.assertRaises(ValueError):
+                        self.install(apply=True, remove=remove)
+                    self.assertEqual(before, self.snapshot())
+                    self.assertFalse((self.home / '.codex').exists())
+
+    def test_legacy_claude_migration_does_not_own_other_clients_or_exports(self):
+        legacy = (bridge.LEGACY_CLAUDE_START + '\r\nA user example\r\n' + bridge.LEGACY_CLAUDE_END).encode('utf-8')
+        for agent in ('codex', 'antigravity', 'generic'):
+            kwargs = {'export': self.root / 'export.md'} if agent == 'generic' else {}
+            path = bridge.targets(agent, self.home, **kwargs)[0]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(legacy)
+            self.install(agent, apply=True, **kwargs)
+            self.assertTrue(path.read_bytes().endswith(legacy))
+            self.install(agent, remove=True, apply=True, **kwargs)
+            self.assertEqual(path.read_bytes(), legacy)
+
+    def test_legacy_migration_still_preflights_all_targets(self):
+        claude = self.home / '.claude/CLAUDE.md'
+        claude.parent.mkdir(parents=True)
+        claude.write_text(bridge.LEGACY_CLAUDE_START + '\nold\n' + bridge.LEGACY_CLAUDE_END,
+                          encoding='utf-8')
+        other = self.home / '.gemini/GEMINI.md'
+        other.parent.mkdir(parents=True)
+        other.write_text(bridge.START, encoding='utf-8')
+        before = self.snapshot()
+        with self.assertRaises(ValueError):
+            self.install(apply=True)
+        self.assertEqual(before, self.snapshot())
+
     def test_malformed_markers_abort_all_before_mutation(self):
         variants = [bridge.START, bridge.END, bridge.END + '\n' + bridge.START,
                     bridge.START + '\n' + bridge.START + '\n' + bridge.END,

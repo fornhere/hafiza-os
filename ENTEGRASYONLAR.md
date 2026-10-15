@@ -42,6 +42,14 @@ python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent all --with-hooks --ap
 
 `--with-hooks` verilmezse yalnız yönerge kurulur. Yalnız kullandığın istemciyi
 `--agent claude`, `codex` veya `antigravity` ile seçebilirsin.
+Claude yönergesi yenilenirken eski `HAFIZA-OS:BAŞLA` / `HAFIZA-OS:BİTİR`
+işaretli global başlangıç bloğu otomatik kaldırılır; tek `SHARED:START/END`
+bloğu kalır. Bu yönerge göçü `--migrate-legacy` veya hook kurulumu gerektirmez.
+Yalnız tam satırlardaki eşleşen işaretler sahiplenilir; bozuk işaretlerde
+yazmadan durulur. İşaretler dışındaki kişisel metin bayt düzeyinde korunur.
+Mevcut bağlantıyı yenilemek için `python3 -X utf8 araclar/ajan_kur.py --vault "$PWD" --agent claude --apply`
+kullan; `install.sh` / `install.ps1` ilk kurulum içindir ve mevcut kurulumu
+yeniden oluşturmaz. `--remove --apply` sahipli iki yönerge bloğunu da çıkarır.
 Windows PowerShell, gerçek Python kurulumu ile:
 
 ```powershell
@@ -77,8 +85,9 @@ uygulamak için ayrıca `--apply` ekle. Yalnız tam bilinen aynı-kasa komutlar�
 Eski Claude yollarının ham ve `shlex.quote` ile tırnaklanmış biçimleri tanınır;
 `bash ...` gibi kullanıcı sarmalayıcıları otomatik sahiplenilmez.
 `kur.sh` eski, isteğe bağlı POSIX yoludur; yeni sessiz kurulumla birlikte yeniden
-çalıştırma. Eski dosyalar ve kişisel yönergeler otomatik silinmez; kullanıcıya
-ait eski kapanış zorlamalarını ayrıca gözden geçir.
+çalıştırma. Yönerge için o da aynı `ajan_kur.py` köprüsünü kullanır.
+Sahipli eski global başlangıç bloğu dışında eski dosyalar ve kişisel yönergeler
+otomatik silinmez; kullanıcıya ait eski kapanış zorlamalarını ayrıca gözden geçir.
 
 İstemciyi yeniden başlat; Claude/Codex `/hooks` ekranından bağlantıları incele.
 Codex'te kullanıcı etkinleştirme/trust kararı ayrıca gerekir; kurucu güven açmaz.

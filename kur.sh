@@ -4,7 +4,7 @@
 # hook'ları Claude Code ayarlarına bağlar, git'i hazırlar, şablonu tarihler.
 #
 #   ./kur.sh            kur
-#   ./kur.sh --kaldir   hook bağlantılarını ayarlardan çıkar (dosyalara dokunmaz)
+#   ./kur.sh --kaldir   hook bağlantılarını ve sahipli yönerge bloklarını çıkar
 set -euo pipefail
 
 HAFIZA="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +19,7 @@ gri()     { printf '\033[90m%s\033[0m\n' "$*"; }
 eksik=()
 command -v jq  >/dev/null 2>&1 || eksik+=("jq")
 command -v git >/dev/null 2>&1 || eksik+=("git")
+command -v python3 >/dev/null 2>&1 || eksik+=("python3")
 if [ ${#eksik[@]} -gt 0 ]; then
   kirmizi "✖ Şunlar kurulu değil: ${eksik[*]}"
   echo "   Arch/Omarchy : sudo pacman -S ${eksik[*]}"
@@ -37,6 +38,15 @@ if ! jq -e . "$AYAR" >/dev/null 2>&1; then
   kirmizi "✖ $AYAR geçerli JSON değil. Önce onu düzelt."
   exit 1
 fi
+
+# --- ortak yönerge ve eski global başlangıç bloğunun göçü ------------------
+# Tek üretici ajan_kur.py: yalnız sahipli blokları değiştirir ve yedekler.
+# Bozuk işaretlerde hook ayarlarını değiştirmeden durur.
+YONERGE_ARGS=(--vault "$HAFIZA" --home "$HOME" --agent claude --apply)
+if [ "${1:-}" = "--kaldir" ]; then
+  YONERGE_ARGS+=(--remove)
+fi
+python3 -X utf8 "$HAFIZA/araclar/ajan_kur.py" "${YONERGE_ARGS[@]}"
 
 YEDEK="$AYAR.yedek-$(date '+%Y%m%d-%H%M%S')"
 cp "$AYAR" "$YEDEK"
@@ -61,20 +71,13 @@ temizle() {
 
 if [ "${1:-}" = "--kaldir" ]; then
   temizle
-  GLOBAL_CLAUDE="$HOME/.claude/CLAUDE.md"
-  if [ -f "$GLOBAL_CLAUDE" ]; then
-    sed '/<!-- HAFIZA-OS:BAŞLA -->/,/<!-- HAFIZA-OS:BİTİR -->/d' \
-      "$GLOBAL_CLAUDE" > "$GLOBAL_CLAUDE.tmp"
-    mv "$GLOBAL_CLAUDE.tmp" "$GLOBAL_CLAUDE"
-    grep -q '[^[:space:]]' "$GLOBAL_CLAUDE" || rm -f "$GLOBAL_CLAUDE"
-  fi
   # Ayar dosyası bizden önce yoktu ve geriye boş bir kabuk kaldıysa, onu da
   # götür — kurulum öncesi hâl "boş dosya" değil, "dosya yok"tu.
   if [ "$(tr -d '[:space:]' < "$AYAR")" = "{}" ] && [ -f "$HAFIZA/.claude/durum/AYAR-BIZDEN" ]; then
     rm -f "$AYAR" "$HAFIZA/.claude/durum/AYAR-BIZDEN"
     gri "Boş ayar dosyası kaldırıldı (kurulumdan önce yoktu)."
   fi
-  yesil "✔ Hook bağlantıları ayarlardan çıkarıldı. Dosyalarına dokunulmadı."
+  yesil "✔ Hook bağlantıları ve sahipli yönerge blokları çıkarıldı."
   echo "  Geri almak için: $HAFIZA/kur.sh"
   exit 0
 fi
@@ -112,28 +115,6 @@ yesil "✔ Hook'lar bağlandı ($AYAR)"
 if [ ! -e "$HAFIZA/CLAUDE.md" ]; then
   ln -s agents.md "$HAFIZA/CLAUDE.md"
 fi
-
-# --- global başlangıç talimatı ---------------------------------------------
-# Claude başka bir projede açılsa bile hafıza anayasasının yüklenmesini sağlar.
-# İşaretli blok tekrar kurulumda güvenle yenilenir; kullanıcının diğer global
-# talimatları korunur.
-GLOBAL_CLAUDE="$HOME/.claude/CLAUDE.md"
-touch "$GLOBAL_CLAUDE"
-sed '/<!-- HAFIZA-OS:BAŞLA -->/,/<!-- HAFIZA-OS:BİTİR -->/d' \
-  "$GLOBAL_CLAUDE" > "$GLOBAL_CLAUDE.tmp"
-cat >> "$GLOBAL_CLAUDE.tmp" <<BOOTSTRAP
-
-<!-- HAFIZA-OS:BAŞLA -->
-# Hafıza OS — global başlangıç
-
-Her oturumda $HAFIZA/agents.md anayasasını ve oradaki açılış sırasını oku.
-Uzun oturumun sonunda zihin/son-oturum.md içine hook'un verdiği oturum kimliği
-ve mesaj sayısıyla bağlantılı bir makbuz bırak. Obsidian notlarını [[wikilink]]
-ile Ana Sayfa veya ilgili proje merkezine bağla. Hook uyarılarını atlama.
-<!-- HAFIZA-OS:BİTİR -->
-BOOTSTRAP
-mv "$GLOBAL_CLAUDE.tmp" "$GLOBAL_CLAUDE"
-yesil "✔ Global başlangıç talimatı güncellendi ($GLOBAL_CLAUDE)"
 
 # --- şablon tarihleri ------------------------------------------------------
 # Yalnızca içerik klasörleri taranır. README.md ve agents.md dışarıda:

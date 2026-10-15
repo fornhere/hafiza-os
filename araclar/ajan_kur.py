@@ -13,6 +13,8 @@ import tempfile
 START = '<!-- HAFIZA-OS:SHARED:START -->'
 END = '<!-- HAFIZA-OS:SHARED:END -->'
 PREFIX = '<!-- HAFIZA-OS:SHARED:'
+LEGACY_CLAUDE_START = '<!-- HAFIZA-OS:BAŞLA -->'
+LEGACY_CLAUDE_END = '<!-- HAFIZA-OS:BİTİR -->'
 REQUIRED = ('agents.md', 'zihin/ruh.md', 'zihin/son-oturum.md',
             'zihin/hafıza-sistemi.md', 'araclar/hafiza.py', 'araclar/codex_hafiza.py')
 
@@ -116,6 +118,27 @@ def rewrite(previous, block, remove=False):
     return ''.join(lines[:starts[0]]) + ('' if remove else block) + ''.join(lines[ends[0] + 1:])
 
 
+def remove_legacy_claude(previous):
+    """Drop only complete, whole-line legacy blocks; preserve all other bytes."""
+    kept = []
+    inside = False
+    for line in previous.splitlines(keepends=True):
+        marker = line.rstrip('\r\n')
+        if marker == LEGACY_CLAUDE_START and not inside:
+            inside = True
+        elif marker == LEGACY_CLAUDE_END and inside:
+            inside = False
+        elif LEGACY_CLAUDE_START in line or LEGACY_CLAUDE_END in line:
+            raise ValueError('Eski Claude yönerge işaretleri bozuk; dosya değiştirilmedi')
+        elif inside and PREFIX in line:
+            raise ValueError('Eski ve ortak yönerge işaretleri iç içe; dosya değiştirilmedi')
+        elif not inside:
+            kept.append(line)
+    if inside:
+        raise ValueError('Eski Claude yönerge işaretleri bozuk; dosya değiştirilmedi')
+    return ''.join(kept)
+
+
 def read_target(path):
     safe_path(path)
     if not path.exists():
@@ -149,6 +172,7 @@ def install(vault, agent, home, *, codex_home=None, export=None, apply=False, re
             with_hooks=False, migrate_legacy=False, hook_shell=None):
     vault = validate_vault(vault)
     paths = targets(agent, home, codex_home, export)
+    claude_target = safe_path(home) / '.claude/CLAUDE.md' if agent in ('claude', 'all') else None
     plans = []
     # Preflight every destination before any mkdir/backup/write (including --agent all).
     for path in paths:
@@ -156,6 +180,8 @@ def install(vault, agent, home, *, codex_home=None, export=None, apply=False, re
             raise ValueError('Hedef kanonik kasanın dışında olmalı')
         original = read_target(path)
         previous = original.decode('utf-8') if original is not None else ''
+        if path == claude_target:
+            previous = remove_legacy_claude(previous)
         updated = rewrite(previous, instruction_block(vault), remove).encode('utf-8')
         plans.append((path, original, updated))
     if migrate_legacy and not with_hooks:
