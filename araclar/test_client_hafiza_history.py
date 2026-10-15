@@ -15,8 +15,8 @@ tempfile.tempdir = str(Path(tempfile.gettempdir()).resolve())
 
 
 class HistoryTests(unittest.TestCase):
-    def test_syn_lagging_transcript_refresh(self):
-        """SYN-lagging-transcript-refresh: stale native IDs cannot stop renewal."""
+    def test_syn_lagging_transcript_dedup(self):
+        """Stale native IDs count new turns without resending unchanged context."""
         with tempfile.TemporaryDirectory() as directory:
             vault = Path(directory)
             package = dict(text='Kaynaklı bellek', selected_ids=[],
@@ -32,7 +32,7 @@ class HistoryTests(unittest.TestCase):
                 self.assertIn(package['text'], event('Kaynağı incele'))
                 for n in range(client_hafiza.REFRESH_TURNS):
                     self.assertEqual(event('devam' if n % 2 else 'tamam'), '')
-                self.assertIn(package['text'], event('devam'))
+                self.assertEqual(event('devam'), '')
                 state_path = next(vault.rglob('context-*.json'))
                 self.assertEqual(json.loads(state_path.read_text())['user_turns'], 10)
                 # Repeated payloads with the stale ID still represent ID-less events.
@@ -46,8 +46,8 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(state_path.read_bytes(), before)
                 self.assertEqual(json.loads(before)['user_turns'], 12)
 
-    def test_syn_no_transcript_refresh(self):
-        """SYN-no-transcript-refresh: identical events are genuine turns without IDs."""
+    def test_syn_no_transcript_dedup(self):
+        """Identical events are genuine turns without IDs, not context resets."""
         with tempfile.TemporaryDirectory() as directory:
             vault = Path(directory)
             package = dict(text='Kaynaklı bellek', selected_ids=[],
@@ -62,11 +62,11 @@ class HistoryTests(unittest.TestCase):
                 self.assertIn(package['text'], event())
                 for _ in range(client_hafiza.REFRESH_TURNS):
                     self.assertEqual(event(), '')
-                self.assertIn(package['text'], event())
+                self.assertEqual(event(), '')
                 state_path = next(vault.rglob('context-*.json'))
                 self.assertEqual(json.loads(state_path.read_text())['user_turns'], 10)
                 with patch.object(client_hafiza.time, 'time', return_value=10**12):
-                    self.assertIn(package['text'], event())
+                    self.assertEqual(event(), '')
                 source = dict(latest_user=dict(quote='devam', message_id='native'), entries=[])
                 event(source)
                 before = state_path.read_bytes()
@@ -289,7 +289,7 @@ class HistoryTests(unittest.TestCase):
                 self.assertNotIn('X'*1500,text)
                 self.assertIn('Y'*400,text)
 
-    def test_generation_and_bounded_refresh_both_clients(self):
+    def test_generation_and_client_specific_refresh(self):
         import codex_hafiza as codex
         import client_sessions as sessions
         package = dict(text='Kaynaklı eşik değeri 42.', project_id='proj-a', selected_ids=['card-a'],
@@ -313,19 +313,29 @@ class HistoryTests(unittest.TestCase):
                       patch.object(client_hafiza, 'recall', return_value='')):
                     self.assertIn(package['text'], event('UserPromptSubmit', 1, 'İncele'))
                     for n, mode in enumerate(('resume','compact','clear','restart','unknown'), 2):
-                        event('SessionStart', n, source=mode)
-                        self.assertIn(package['text'], event('UserPromptSubmit', n))
+                        start = event('SessionStart', n, source=mode)
+                        if client == 'claude':
+                            self.assertIn(package['text'], start)
+                            self.assertEqual(event('UserPromptSubmit', n), '')
+                        else:
+                            self.assertIn(package['text'], event('UserPromptSubmit', n))
                         self.assertNotIn('Güncellendi:', event('UserPromptSubmit', n))
-                    # Eight genuine turns can be suppressed; the ninth renews even "devam".
+                    # Codex retains periodic renewal; Claude waits for a reset/change.
                     for n in range(7, 15):
                         self.assertEqual(event('UserPromptSubmit', n), '')
-                    self.assertIn(package['text'], event('UserPromptSubmit', 15))
+                    if client == 'codex':
+                        self.assertIn(package['text'], event('UserPromptSubmit', 15))
+                    else:
+                        self.assertEqual(event('UserPromptSubmit', 15), '')
                     with patch.object(client_hafiza.time, 'time', return_value=10**12):
-                        self.assertIn(package['text'], event('UserPromptSubmit', 16))
+                        if client == 'codex':
+                            self.assertIn(package['text'], event('UserPromptSubmit', 16))
+                        else:
+                            self.assertEqual(event('UserPromptSubmit', 16), '')
                 state_path = next(vault.rglob('context-*.json')) if client == 'claude' else next(vault.rglob('.state/*.json'))
                 state = sessions.load(state_path)
                 self.assertEqual(state['context_generation'], 5)
-                self.assertEqual(state['user_turns' if client == 'claude' else 'count'], 16)
+                self.assertEqual(state['user_turns' if client == 'claude' else 'count'], 11 if client == 'claude' else 16)
 
     def test_syn_truncated_report_is_retried_both_clients(self):
         import codex_hafiza as codex

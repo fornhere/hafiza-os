@@ -1344,10 +1344,10 @@ class NativeSessions(NativeFixture):
                                      'Reviewed session context', 'Current task context'):
                         self.assertIn(expected, text)
                     repeated, _ = hooks.hook(self.vault, self.client, 'UserPromptSubmit', payload)
-                    self.assertIn('Current task context', repeated['hookSpecificOutput']['additionalContext'])
+                    self.assertEqual(repeated, {})
                     duplicate, _ = hooks.hook(self.vault, self.client, 'UserPromptSubmit', payload)
                     self.assertEqual(duplicate, {})
-            self.assertEqual(opening.call_count, 7)
+            self.assertEqual(opening.call_count, 11)
 
     def test_claude_session_start_keeps_existing_privacy_exclusion(self):
         with self.assertRaisesRegex(SourceError, 'privacy_blocked'):

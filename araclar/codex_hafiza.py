@@ -154,7 +154,7 @@ def record(vault, session, turn, summary, semantic_candidates=None, source_snaps
     return {'saved': str(note), 'candidates': queued}
 
 
-def _session_open_items_block(vault, section, limit):
+def _session_open_items_block(vault, section, limit, *, truncate=None):
     header = 'Özetteki açık maddeler (güncel iş kaydıyla eşleştirme; durum çıkarımı değildir):'
     if len(header) > limit or contains_secret(section):
         return ''
@@ -194,7 +194,8 @@ def _session_open_items_block(vault, section, limit):
                                 for word in words) >= min(2, len(words))), None)
             status = (f'güncel kayıt: {task_id}' if task_id is not None
                       else 'özette var, güncel kayıtta yok')
-            lines.append(f'- {item[:120]} — {status}')
+            excerpt = item[:120] if truncate is None else truncate(item, 120)
+            lines.append(f'- {excerpt} — {status}')
     block = header
     for line in lines:
         if len(block) + 1 + len(line) <= limit and not contains_secret(line):
@@ -202,7 +203,7 @@ def _session_open_items_block(vault, section, limit):
     return block if block != header else ''
 
 
-def latest_session_section(vault, limit=2500, today=None, project_id=None):
+def latest_session_section(vault, limit=2500, today=None, project_id=None, *, truncate=None):
     """Read a fresh journal section, otherwise recent non-canonical receipts."""
     # Serbest günlük/özet proje sahipliğini kanıtlamaz. Kapsamlı makbuzlar
     # hook'un source-validated recall okuyucusundan ayrıca gelir.
@@ -223,13 +224,16 @@ def latest_session_section(vault, limit=2500, today=None, project_id=None):
         if 0 <= age <= 3:
             section = text[matches[index].start():matches[index+1].start() if index+1<len(matches) else len(text)].strip()
             header = f"Tarihli özet ({date_text}); güncel durumu açık işlerden/Git'ten doğrula."
-            block = _session_open_items_block(vault, section, min(600, limit // 3))
+            block = _session_open_items_block(vault, section, min(600, limit // 3), truncate=truncate)
             prefix = header + ('\n' + block if block else '') + '\n'
             available = max(0, limit - len(prefix))
             if len(section) > available:
-                suffix = '\n[Kesildi; yalnız gereken ayrıntı için kaynak bölümü aç.]'
-                section = section[:available-len(suffix)] + suffix if available >= len(suffix) else section[:available]
-            return (prefix + section)[:limit]
+                if truncate is None:
+                    suffix = '\n[Kesildi; yalnız gereken ayrıntı için kaynak bölümü aç.]'
+                    section = section[:available-len(suffix)] + suffix if available >= len(suffix) else section[:available]
+                else:
+                    section = truncate(section, available)
+            return (prefix + section)[:limit] if truncate is None else truncate(prefix + section, limit)
         warning = (f'Son oturum kaydı {date_text} tarihli ({age} gün eski); '
                    'güncel durum kanıtı değil, açık işler özetini kullan.')
 
@@ -286,7 +290,7 @@ def latest_session_section(vault, limit=2500, today=None, project_id=None):
             continue
 
     if not receipts:
-        return warning[:limit]
+        return warning[:limit] if truncate is None else truncate(warning, limit)
     header = 'Son oturum makbuzları (otomatik; kanonik değil, güncel durum kanıtı değil):'
     parts = [header]
     used = len(header)
@@ -295,10 +299,10 @@ def latest_session_section(vault, limit=2500, today=None, project_id=None):
         available = limit - used - len(prefix)
         if available <= 0:
             break
-        excerpt = summary[:min(600, available)]
+        excerpt = summary[:min(600, available)] if truncate is None else truncate(summary, min(600, available))
         parts.append(prefix + excerpt)
         used += len(prefix) + len(excerpt)
-    return ''.join(parts)[:limit]
+    return ''.join(parts)[:limit] if truncate is None else truncate(''.join(parts), limit)
 
 
 def account_context(state, emitted, suppressed=0):

@@ -710,7 +710,7 @@ def receipt_project_matches(vault, receipt, project_id):
                for name in names if isinstance(name, str) and name)
 
 
-def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), delivered_cards=None, project_id=None, query=None):
+def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), delivered_cards=None, project_id=None, query=None, *, truncate=None):
     budget = max(0, min(int(budget), 6500))
     oldest_ns = time.time_ns() - int(max_age_days * 86400 * 1e9)
     if query is not None:
@@ -794,7 +794,10 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), d
                         summary = 'Proje kimliği yok; kapsam gerekçeden eşleşti.\n' + summary + '\n' + report_text
                     else:
                         summary = report_text + '\n' + summary
-                excerpt = summary if len(summary) <= available else summary[:available-20] + ' [summary truncated]'
+                if truncate is None:
+                    excerpt = summary if len(summary) <= available else summary[:available-20] + ' [summary truncated]'
+                else:
+                    excerpt = truncate(summary, available)
                 text = header + excerpt
                 parts.append(text)
                 used += len(text) + (1 if len(parts) > 1 else 0)
@@ -805,7 +808,7 @@ def recall(vault, budget=2500, exclude=None, max_age_days=7, exclude_cards=(), d
                         delivered_cards.append(card)
             except (ValueError, OSError, KeyError, TypeError):
                 continue
-        return '\n'.join(parts)
+        return '\n'.join(parts) if truncate is None else truncate('\n'.join(parts), budget)
 
 
 def main():
