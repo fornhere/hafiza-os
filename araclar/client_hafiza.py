@@ -16,6 +16,10 @@ import time
 from datetime import datetime, timezone
 
 from client_transcripts import CLIENTS, SourceError, parse, private, sha, source_path, strict_json, worker_prompt
+
+# Tur başı enjeksiyon bütçeleri; codex_hafiza ile aynı (önceki: 2000/2000).
+TURN_PACKAGE_BUDGET = 1200
+SHARED_RECALL_BUDGET = 900
 from client_sessions import atomic, enforce_policy, locked, load, recall, register, source_with_policy
 from hafiza import contains_secret
 from capture_source import clean_user, installation_version
@@ -87,7 +91,7 @@ def claude_opening_parts(vault, session, project_id=None, exclude_cards=()):
     brief = opening_brief(vault, **scope)
     return [('brief', brief, sha(brief.encode())),
             section('latest', latest_session_section, limit=LATEST_SESSION_BUDGET),
-            section('recall', recall, budget=2000, exclude=('claude', session),
+            section('recall', recall, budget=SHARED_RECALL_BUDGET, exclude=('claude', session),
                     exclude_cards=exclude_cards)]
 
 
@@ -155,7 +159,7 @@ def local_task_package(vault, query, cwd=None, previous_user=None, session_proje
     import jev_client
     from gorev_baglam import build_task_package
     with jev_client.disabled():
-        return build_task_package(vault, query, cwd=cwd, budget=2000, previous_user=previous_user, session_project_id=session_project_id)
+        return build_task_package(vault, query, cwd=cwd, budget=TURN_PACKAGE_BUDGET, previous_user=previous_user, session_project_id=session_project_id)
 
 
 def claude_task_package(vault, query, cwd=None, previous_user=None, session_project_id=None):
@@ -168,12 +172,12 @@ def claude_task_package(vault, query, cwd=None, previous_user=None, session_proj
     if mode == 'off' or contains_secret(query) or private(query) or (previous_user and (contains_secret(previous_user) or private(previous_user))):
         return local_task_package(vault, query, cwd, previous_user, session_project_id)
     if mode == 'on':
-        return build_task_package(vault, query, cwd=cwd, budget=2000, previous_user=previous_user, session_project_id=session_project_id)
+        return build_task_package(vault, query, cwd=cwd, budget=TURN_PACKAGE_BUDGET, previous_user=previous_user, session_project_id=session_project_id)
     local = local_task_package(vault, query, cwd, previous_user, session_project_id)
     started = time.monotonic()
     try:
         with jev_client.shadow_retrieval(vault):
-            shadow = build_task_package(vault, query, cwd=cwd, budget=2000, previous_user=previous_user, session_project_id=session_project_id)
+            shadow = build_task_package(vault, query, cwd=cwd, budget=TURN_PACKAGE_BUDGET, previous_user=previous_user, session_project_id=session_project_id)
         evaluations = shadow.get('jev') or {}
         row = dict(request_hash=hashlib.sha256(query.encode()).hexdigest(),
                    previous_user_hash=hashlib.sha256(previous_user.encode()).hexdigest() if previous_user else None,

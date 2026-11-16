@@ -139,6 +139,23 @@ def snapshot(vault, now=None):
                     'Denetim 24 saatten eski.' if elapsed > 86400 else 'Son uzak doğrulama güncel.', data['at'])
         except (ValueError, KeyError, TypeError, OSError):
             add('remote_audit', 'failed', 'Denetim makbuzu okunamadı.')
+    evals = sorted(directory.glob('*-eval-*.json'))
+    if evals:  # Arama testi isteğe bağlı katmandır; hiç koşulmamışsa kontrol eklenmez.
+        try:
+            data = json.loads(evals[-1].read_text()); report = data['payload']
+            elapsed = age(data['at'])
+            skipped = int(report.get('unmeasurable_count', 0))
+            summary = (f"Arama {report['passed']}/{report['total']}, bağlam "
+                       f"{report.get('context_passed', '?')}/{report['total']}"
+                       + (f"; ölçülemez (etkin olmayan kaydı bekleyen) {skipped}" if skipped else '')
+                       + f"; eşik {report.get('minimum_accuracy', 0.9)}.")
+            if not report.get('gate_passed', False):
+                add('retrieval_eval', 'failed', 'Arama kapısı geçmedi. ' + summary, data['at'])
+            else:
+                add('retrieval_eval', 'stale' if elapsed > 7 * 86400 else 'healthy',
+                    ('Arama testi 7 günden eski. ' if elapsed > 7 * 86400 else '') + summary, data['at'])
+        except (ValueError, KeyError, TypeError, OSError):
+            add('retrieval_eval', 'failed', 'Arama testi makbuzu okunamadı.')
     catalog, catalog_checks = catalog_health(vault)
     checks.extend(catalog_checks)
     from konsolidasyon import candidate_states
@@ -183,7 +200,8 @@ def notice(vault):
     # Static catalog diagnostics belong in status, not every task's opening.
     # Runtime scan/scheduler/remote audit failures keep their existing notices.
     checks = [c for c in report['checks']
-              if c['name'] not in {'catalog_validation', 'retrieval_eligibility', 'hook_runtime', 'client_registry'}]
+              if c['name'] not in {'catalog_validation', 'retrieval_eligibility', 'hook_runtime', 'client_registry',
+                                     'retrieval_eval'}]
     rank = {'healthy': 0, 'unknown': 1, 'stale': 2, 'failed': 3}
     status = max((c['status'] for c in checks), key=rank.get, default='healthy')
     if status == 'healthy':

@@ -254,8 +254,9 @@ def health(vault):
         lines.append(f"| {check['name']} | {check['status']}: {check['reason']} |")
     if evaluation:
         e = evaluation['payload']
-        lines += [f"| Arama testi | {e['passed']}/{e['total']} |",
-                  f"| Bağlam paketine ulaşan | {e.get('context_passed', 'ölçülmedi')}/{e['total']} |"]
+        lines += [f"| Arama testi | {e['passed']}/{e['total']} — kapı {'geçti' if e.get('gate_passed') else 'geçmedi'} ({evaluation['at'][:10]}) |",
+                  f"| Bağlam paketine ulaşan | {e.get('context_passed', 'ölçülmedi')}/{e['total']} |",
+                  f"| Ölçülemez test (etkin olmayan kayıt) | {e.get('unmeasurable_count', 'ölçülmedi')} |"]
     if audit:
         a = audit['payload']
         lines += [f"| Son denetim | {audit['at']} |", f"| Kayıp / fark / yetim | {len(a['missing_remote'])} / {len(a['drifted'])} / {len(a['orphan_remote_ids'])} |"]

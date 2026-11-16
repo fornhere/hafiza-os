@@ -1190,11 +1190,22 @@ def evaluate_retrieval(
     *,
     user_id: str | None = None,
     threshold: float = 0.1,
+    active_ids: set[str] | None = None,
 ) -> dict[str, Any]:
+    """active_ids verilirse, beklediği kayıt etkin olmayan vaka ölçülemez sayılır.
+
+    Karantinadaki/emekli kaydı bekleyen test arama hatası değil, bayat testtir;
+    doğruluk yalnız ölçülebilir vakalar üzerinden hesaplanır ve ayrıca raporlanır.
+    """
     resolved_user_id = resolve_user_id(user_id)
     details: list[dict[str, Any]] = []
+    unmeasurable: list[dict[str, Any]] = []
     latencies: list[float] = []
     for case in cases:
+        inactive = sorted(set(case.get("expected_memory_ids", [])) - active_ids) if active_ids is not None else []
+        if inactive:
+            unmeasurable.append({"id": case["id"], "reason": "expected_not_active", "inactive_ids": inactive})
+            continue
         started = time.perf_counter()
         results = client.search_memories(
             case["query"],
@@ -1235,6 +1246,8 @@ def evaluate_retrieval(
         "context_passed": sum(1 for item in details if item["context_passed"]),
         "context_accuracy": sum(1 for item in details if item["context_passed"]) / total if total else 0.0,
         "mean_latency_ms": sum(latencies) / len(latencies) if latencies else 0.0,
+        "unmeasurable": unmeasurable,
+        "unmeasurable_count": len(unmeasurable),
         "details": details,
     }
 
@@ -1755,7 +1768,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "eval":
         path = args.file if args.file.is_absolute() else vault / args.file
         cases = json.loads(path.read_text(encoding="utf-8"))
-        result = evaluate_retrieval(client, cases, user_id=client.user_id, threshold=args.threshold)
+        active_ids = {str(row.get("memory_id")) for row in records
+                      if row.get("status") == "active" and retrievable(row)}
+        result = evaluate_retrieval(client, cases, user_id=client.user_id, threshold=args.threshold,
+                                    active_ids=active_ids)
         result["minimum_accuracy"] = args.min_accuracy
         result["gate_passed"] = evaluation_passes(result, minimum_accuracy=args.min_accuracy)
         result["receipt"] = str(write_receipt(vault, "eval", result).relative_to(vault))

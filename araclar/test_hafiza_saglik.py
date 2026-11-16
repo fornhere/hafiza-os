@@ -197,3 +197,24 @@ class CatalogHealthTests(unittest.TestCase):
         self.assertIn('stale',text)
         self.assertIn('iki saatten eski',text)
         self.assertNotIn('source_revision_unreviewed',text)
+
+class RetrievalEvalHealthTests(HealthTests):
+    def eval_receipt(self, days=0, gate=True):
+        self.write(Path('günlük/hafıza-makbuzları/2026-eval-test.json'), dict(
+            at=(self.now-dt.timedelta(days=days)).isoformat(),
+            payload=dict(passed=36, total=36, context_passed=36, gate_passed=gate,
+                         minimum_accuracy=0.9, unmeasurable_count=17)))
+    def check(self):
+        return next(c for c in snapshot(self.v, self.now)['checks'] if c['name'] == 'retrieval_eval')
+    def test_failed_gate_is_not_healthy(self):
+        self.eval_receipt(gate=False)
+        self.assertEqual('failed', self.check()['status'])
+    def test_passed_gate_reports_unmeasurable_and_ages(self):
+        self.eval_receipt(gate=True)
+        self.assertEqual('healthy', self.check()['status'])
+        self.assertIn('ölçülemez', self.check()['reason'])
+        self.eval_receipt(days=8, gate=True)
+        self.assertEqual('stale', self.check()['status'])
+    def test_missing_receipt_adds_no_check(self):
+        self.assertNotIn('retrieval_eval', [c['name'] for c in snapshot(self.v, self.now)['checks']])
+

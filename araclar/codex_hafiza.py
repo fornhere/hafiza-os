@@ -313,11 +313,17 @@ def account_context(state, emitted, suppressed=0):
     usage['token_count_method'] = 'not_measured'
 
 
+# Tur başı enjeksiyon bütçeleri (2026-11-16: ortalama ~5.650 karakter/tur fazlaydı;
+# önceki değerler 2000 ve 1800).
+TURN_PACKAGE_BUDGET = 1200
+SHARED_RECALL_BUDGET = 900
+
+
 def shared_reviewed_context(vault, project_id=None, query=None):
     """Optional source-validated native recall; no model and no startup dependency."""
     try:
         from client_sessions import recall
-        return recall(vault, budget=1800, **(dict(project_id=project_id) if project_id else {}),
+        return recall(vault, budget=SHARED_RECALL_BUDGET, **(dict(project_id=project_id) if project_id else {}),
                       **(dict(query=query) if query is not None and project_id else {}))
     except Exception:
         return ''
@@ -498,7 +504,7 @@ def _hook(vault, data):
         package = dict(text='', selected_ids=[], project_id=state.get('session_project_id'))
         if not no_memory:
             with advisor:
-                package = build_task_package(vault, current_user, cwd=data.get('cwd'), budget=2000,
+                package = build_task_package(vault, current_user, cwd=data.get('cwd'), budget=TURN_PACKAGE_BUDGET,
                                              previous_user=previous_user, session_project_id=state.get('session_project_id'))
         if new_turn:
             if not private_scope:

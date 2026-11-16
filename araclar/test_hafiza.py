@@ -599,6 +599,11 @@ class HafizaDogrulamaTesti(unittest.TestCase):
         self.assertTrue(hafiza.evaluation_passes({"accuracy": 0.94}, minimum_accuracy=0.9))
         self.assertFalse(hafiza.evaluation_passes({"accuracy": 0.89}, minimum_accuracy=0.9))
 
+        stale_case = dict(cases[0], id="karantina-1", expected_memory_ids=["karantinadaki-kayit"])
+        report = hafiza.evaluate_retrieval(client, cases + [stale_case], active_ids={"ornek-pref-language"})
+        self.assertEqual((1, 1, 1.0), (report["total"], report["unmeasurable_count"], report["accuracy"]))
+        self.assertEqual(["karantinadaki-kayit"], report["unmeasurable"][0]["inactive_ids"])
+
     def test_konsolidasyon_ayni_konudaki_farkli_ifadeyi_celiski_sayar(self):
         existing = [{
             "memory_id": "ornek-pref-language",
